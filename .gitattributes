@@ -1,0 +1,2 @@
+prebuilt/** filter=lfs diff=lfs merge=lfs -text
+native/third_party/cef/** filter=lfs diff=lfs merge=lfs -text

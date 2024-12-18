@@ -1,0 +1,28 @@
+stages:
+  - build
+
+build_windows:
+  stage: build
+  tags:
+    - WindowsBuilder
+  only:
+    - master
+  when: manual
+  script:
+    - cd native
+    - cmd.exe /c 'build-windows.bat'
+  artifacts:
+    paths:
+      - native/build/Release/*
+
+build_terraform:
+  stage: build
+  tags:
+    - LinuxBuilder
+  only:
+    - master
+  when: manual
+  script:
+    - cd native
+    - terraform init
+    - terraform apply -auto-approve
