@@ -21,13 +21,16 @@ set_property(GLOBAL PROPERTY OS_FOLDERS ON)
 #
 
 # Specify the CEF distribution version.
-set(CEF_VERSION "131.2.7+g9a14dc9+chromium-131.0.6778.86")
-#set(CEF_VERSION "131.3.1+gcb062df+chromium-131.0.6778.109")
+#set(CEF_VERSION "131.2.7+g9a14dc9+chromium-131.0.6778.86")
+set(CEF_VERSION "131.3.1+gcb062df+chromium-131.0.6778.109")
 
 
 # Sysroot build
 set("CMAKE_VERBOSE_MAKEFILE:BOOL" "ON")
 
+message(STATUS "CMAKE_SYSTEM_PROCESSOR: ${CMAKE_SYSTEM_PROCESSOR}")
+message(STATUS "PROJECT_ARCH: ${PROJECT_ARCH}")
+message(STATUS "CMAKE_SYSTEM_NAME: ${CMAKE_SYSTEM_NAME}")
 message(STATUS "CMAKE_SYSTEM_PROCESSOR: ${CMAKE_SYSTEM_PROCESSOR}")
 
 # Determine the platform.
