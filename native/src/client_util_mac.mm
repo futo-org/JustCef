@@ -55,7 +55,7 @@ namespace shared {
         NSWindow* window = [view window];
         if (!window) return false;
 
-        return (window.isFullScreen || ([window styleMask] & NSWindowStyleMaskFullScreen) != 0);
+        return ([window styleMask] & NSWindowStyleMaskFullScreen) != 0;
     }
 
     void PlatformSetMinimumWindowSize(CefRefPtr<CefBrowser> browser, int minWidth, int minHeight)
@@ -115,7 +115,7 @@ namespace shared {
         NSWindow* window = [view window];
         if (!window) return;
 
-        bool isCurrentlyFullscreen = (window.isFullScreen || ([window styleMask] & NSWindowStyleMaskFullScreen) != 0);
+        bool isCurrentlyFullscreen = ([window styleMask] & NSWindowStyleMaskFullScreen) != 0;
         
         if (fullscreen != isCurrentlyFullscreen) {
             dispatch_async(dispatch_get_main_queue(), ^{
@@ -220,10 +220,10 @@ namespace shared {
     CefSize PlatformGetWindowSize(CefRefPtr<CefBrowser> browser)
     {
         NSView* view = (NSView*)browser->GetHost()->GetWindowHandle();
-        if (!view) return;
+        if (!view) return CefSize(0, 0);
 
         NSWindow* window = [view window];
-        if (!window) return;
+        if (!window) return CefSize(0, 0);
 
         NSRect frame = [window frame];
         return CefSize(frame.size.width, frame.size.height);
@@ -260,10 +260,10 @@ namespace shared {
     CefPoint PlatformGetWindowPosition(CefRefPtr<CefBrowser> browser)
     {
         NSView* view = (NSView*)browser->GetHost()->GetWindowHandle();
-        if (!view) return;
+        if (!view) return CefPoint(0, 0);
 
         NSWindow* window = [view window];
-        if (!window) return;
+        if (!window) return CefPoint(0, 0);
 
         NSRect frame = [window frame];
         return CefPoint(frame.origin.x, frame.origin.y);
