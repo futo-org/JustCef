@@ -214,83 +214,23 @@ namespace DotCef
 
             _started = true;
             
-            var cefDirectory = Path.Combine(Environment.CurrentDirectory, "cef");
-            string workingDirectory = cefDirectory;
-            string nativePath;
-            if (OperatingSystem.IsWindows())
+            string[] searchPaths = GenerateSearchPaths();
+            OutputDataReceived?.Invoke("Searching for dotcefnative, search paths:");
+            foreach (var path in searchPaths)
+                OutputDataReceived?.Invoke(" - " + path);
+
+            string? nativePath = null;
+            foreach (string path in searchPaths)
             {
-                nativePath = Path.Combine(cefDirectory, "dotcefnative.exe");
-
-                string? assemblyDirectory = Path.GetDirectoryName(Assembly.GetEntryAssembly()!.Location)!;
-                if (!File.Exists(nativePath) && assemblyDirectory != null)
-                {
-                    nativePath = Path.Combine(assemblyDirectory, "cef/dotcefnative.exe");
-                    workingDirectory = Path.Combine(assemblyDirectory, "cef");
-                }
-
-                if (!File.Exists(nativePath) && assemblyDirectory != null)
-                {
-                    nativePath = Path.Combine(assemblyDirectory, "dotcefnative.exe");
-                    workingDirectory = assemblyDirectory;
-                }
+                
+                if (File.Exists(path))
+                    nativePath = path;                    
             }
-            else if (OperatingSystem.IsMacOS())
-            {
-                nativePath = Path.Combine(cefDirectory, "dotcefnative");
 
-                if (!File.Exists(nativePath))
-                {
-                    nativePath = Path.Combine(Environment.CurrentDirectory, "dotcefnative.app/Contents/MacOS/dotcefnative");
-                    workingDirectory = Path.Combine(Environment.CurrentDirectory, "dotcefnative.app/Contents/MacOS");
-                }
+            if (nativePath == null)
+                throw new Exception("Failed to find dotcefnative");
 
-                string? assemblyDirectory = Path.GetDirectoryName(Assembly.GetEntryAssembly()!.Location)!;
-                if (!File.Exists(nativePath) && assemblyDirectory != null)
-                {
-                    nativePath = Path.Combine(assemblyDirectory, "cef/dotcefnative");
-                    workingDirectory = Path.Combine(assemblyDirectory, "cef");
-                }
-
-                if (!File.Exists(nativePath) && assemblyDirectory != null)
-                {
-                    nativePath = Path.Combine(assemblyDirectory, "dotcefnative");
-                    workingDirectory = assemblyDirectory;
-                }
-
-                string? executableDirectory = Path.GetDirectoryName(Process.GetCurrentProcess().MainModule?.FileName);
-                if (!File.Exists(nativePath) && executableDirectory != null)
-                {
-                    nativePath = Path.Combine(executableDirectory, "dotcefnative.app/Contents/MacOS/dotcefnative");
-                    workingDirectory = Path.Combine(executableDirectory, "dotcefnative.app/Contents/MacOS");
-                }
-
-                if (!File.Exists(nativePath) && executableDirectory != null)
-                {
-                    nativePath = Path.Combine(executableDirectory, "dotcefnative");
-                    workingDirectory = executableDirectory;
-                }
-            }
-            else if (OperatingSystem.IsLinux())
-            {
-                nativePath = Path.Combine(cefDirectory, "dotcefnative");
-
-                string? assemblyDirectory = Path.GetDirectoryName(Assembly.GetEntryAssembly()!.Location)!;
-                if (!File.Exists(nativePath) && assemblyDirectory != null)
-                {
-                    nativePath = Path.Combine(assemblyDirectory, "cef/dotcefnative");
-                    workingDirectory = Path.Combine(assemblyDirectory, "cef");
-                }
-
-                if (!File.Exists(nativePath) && assemblyDirectory != null)
-                {
-                    nativePath = Path.Combine(assemblyDirectory, "dotcefnative");
-                    workingDirectory = assemblyDirectory;
-                }
-            }
-            else
-                throw new Exception("Unsupported platform.");
-
-            OutputDataReceived?.Invoke($"CEF directory '{cefDirectory}'.");
+            var workingDirectory = GetDirectory(nativePath);
             OutputDataReceived?.Invoke($"Working directory '{workingDirectory}'.");
             OutputDataReceived?.Invoke($"CEF exe path '{nativePath}'.");
 
@@ -1472,6 +1412,72 @@ namespace DotCef
             }
             
             _writeSemaphore.Dispose();
+        }
+
+        private static string GetNativeFileName()
+        {
+            if (OperatingSystem.IsWindows())
+                return "dotcefnative.exe";
+            else if (OperatingSystem.IsMacOS())
+                return "dotcefnative";
+            else if (OperatingSystem.IsLinux())
+                return "dotcefnative";
+            else
+                throw new PlatformNotSupportedException("Unsupported platform.");
+        }
+
+        private static string? GetDirectory(string? path)
+        {
+            return !string.IsNullOrEmpty(path) ? Path.GetDirectoryName(path) : null;
+        }
+
+        private static string[] GenerateSearchPaths()
+        {
+            const string cefDir = "cef";
+
+            string baseDirectory = AppContext.BaseDirectory;
+            string nativeFileName = GetNativeFileName();
+            string? assemblyDirectory = GetDirectory(Assembly.GetEntryAssembly()?.Location);
+            string? executableDirectory = GetDirectory(Process.GetCurrentProcess().MainModule?.FileName);
+            string currentWorkingDirectory = Environment.CurrentDirectory;
+
+            var searchPaths = new List<string>();
+
+            if (OperatingSystem.IsMacOS())
+                searchPaths.Add(Path.Combine(baseDirectory, $"dotcefnative.app/Contents/MacOS/{nativeFileName}"));
+            if (OperatingSystem.IsMacOS())
+                searchPaths.Add(Path.Combine(baseDirectory, $"../Frameworks/dotcefnative.app/Contents/MacOS/{nativeFileName}"));
+            searchPaths.Add(Path.Combine(baseDirectory, cefDir, nativeFileName));
+            searchPaths.Add(Path.Combine(baseDirectory, nativeFileName));
+
+            if (assemblyDirectory != null)
+            {
+                if (OperatingSystem.IsMacOS())
+                    searchPaths.Add(Path.Combine(assemblyDirectory, $"dotcefnative.app/Contents/MacOS/{nativeFileName}"));
+                if (OperatingSystem.IsMacOS())
+                    searchPaths.Add(Path.Combine(assemblyDirectory, $"../Frameworks/dotcefnative.app/Contents/MacOS/{nativeFileName}"));
+                searchPaths.Add(Path.Combine(assemblyDirectory, cefDir, nativeFileName));
+                searchPaths.Add(Path.Combine(assemblyDirectory, nativeFileName));
+            }
+
+            if (executableDirectory != null)
+            {
+                if (OperatingSystem.IsMacOS())
+                    searchPaths.Add(Path.Combine(executableDirectory, $"dotcefnative.app/Contents/MacOS/{nativeFileName}"));
+                if (OperatingSystem.IsMacOS())
+                    searchPaths.Add(Path.Combine(executableDirectory, $"../Frameworks/dotcefnative.app/Contents/MacOS/{nativeFileName}"));
+                searchPaths.Add(Path.Combine(executableDirectory, cefDir, nativeFileName));
+                searchPaths.Add(Path.Combine(executableDirectory, nativeFileName));
+            }
+
+            if (OperatingSystem.IsMacOS())
+                searchPaths.Add(Path.Combine(currentWorkingDirectory, $"dotcefnative.app/Contents/MacOS/{nativeFileName}"));
+            if (OperatingSystem.IsMacOS())
+                searchPaths.Add(Path.Combine(currentWorkingDirectory, $"../Frameworks/dotcefnative.app/Contents/MacOS/{nativeFileName}"));
+            searchPaths.Add(Path.Combine(currentWorkingDirectory, nativeFileName));
+            searchPaths.Add(Path.Combine(currentWorkingDirectory, cefDir, nativeFileName));
+
+            return searchPaths.Distinct().ToArray();
         }
     }
 }
