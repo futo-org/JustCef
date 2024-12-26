@@ -92,12 +92,12 @@ resource "aws_instance" "build_server_dotcefnative_x64" {
     # Clone the CEF project
     cd /root
     ssh-keyscan -H gitlab.futo.org >> ~/.ssh/known_hosts
-    git clone git@gitlab.futo.org:videostreaming/dotcef.git
-    cd dotcef
+    git clone git@gitlab.futo.org:videostreaming/JustCef.git
+    cd JustCef
     git lfs pull
 
     # Navigate to native directory and set up CMake build
-    cd /root/dotcef/native
+    cd /root/JustCef/native
     mkdir -p build && cd build
     cmake -DCMAKE_BUILD_TYPE=Release ..
     cmake --build . --config Release
@@ -180,12 +180,12 @@ resource "aws_instance" "build_server_dotcefnative_arm64" {
     # Clone the CEF project
     cd /root
     ssh-keyscan -H gitlab.futo.org >> ~/.ssh/known_hosts
-    git clone git@gitlab.futo.org:videostreaming/dotcef.git
-    cd dotcef
+    git clone git@gitlab.futo.org:videostreaming/JustCef.git
+    cd JustCef
     git lfs pull
 
     # Navigate to native directory and set up CMake build
-    cd /root/dotcef/native
+    cd /root/JustCef/native
     mkdir -p build && cd build
     cmake -DCMAKE_BUILD_TYPE=Release ..
     cmake --build . --config Release

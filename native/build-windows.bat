@@ -9,4 +9,4 @@ cmake --build . --config Release
 cd Release
 
 powershell Compress-Archive -Path * -DestinationPath "DotCefNative-%PROCESSOR_ARCHITECTURE%.zip"
-REM aws s3 cp "DotCefNative-%PROCESSOR_ARCHITECTURE%.zip" "s3://dotcefnativeartifacts/DotCefNative-%PROCESSOR_ARCHITECTURE%.zip"
+aws s3 cp "DotCefNative-%PROCESSOR_ARCHITECTURE%.zip" "s3://dotcefnativeartifacts/DotCefNative-%PROCESSOR_ARCHITECTURE%.zip"
