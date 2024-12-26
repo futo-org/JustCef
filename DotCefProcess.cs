@@ -111,7 +111,8 @@ namespace DotCef
             WindowFullscreenChanged = 12,
             WindowLoadStart = 13,
             WindowLoadEnd = 14,
-            WindowLoadError = 15
+            WindowLoadError = 15,
+            WindowDevToolsEvent = 16
         }
 
         [StructLayout(LayoutKind.Sequential, Pack = 1)]
@@ -246,15 +247,15 @@ namespace DotCef
             {
 #if HARDCODED_PATHS
                 FileName = OperatingSystem.IsMacOS()
-                    ? "/Users/koen/Projects/dotcef/native/build/Release/dotcefnative.app/Contents/MacOS/dotcefnative"
+                    ? "/Users/koen/Projects/JustCef/native/build/Release/dotcefnative.app/Contents/MacOS/dotcefnative"
                     : OperatingSystem.IsWindows() 
-                        ? "C:\\Users\\koenj\\OneDrive\\Documenten\\Projects\\Grayjay.Desktop\\DotCef\\native\\build\\Release\\dotcefnative.exe"
-                        : "/home/koen/Projects/dotcef/native/build/Debug/dotcefnative",
+                        ? "C:\\Users\\koenj\\OneDrive\\Documenten\\Projects\\Grayjay.Desktop\\JustCef\\native\\build\\Release\\dotcefnative.exe"
+                        : "/home/koen/Projects/JustCef/native/build/Debug/dotcefnative",
                 WorkingDirectory = OperatingSystem.IsMacOS()
-                    ? "/Users/koen/Projects/dotcef/native/build/Release/"
+                    ? "/Users/koen/Projects/JustCef/native/build/Release/"
                     : OperatingSystem.IsWindows() 
-                        ? "C:\\Users\\koenj\\OneDrive\\Documenten\\Projects\\Grayjay.Desktop\\DotCef\\native\\build\\Release\\"
-                        : "/home/koen/Projects/dotcef/native/build/Debug/",
+                        ? "C:\\Users\\koenj\\OneDrive\\Documenten\\Projects\\Grayjay.Desktop\\JustCef\\native\\build\\Release\\"
+                        : "/home/koen/Projects/JustCef/native/build/Debug/",
 #else
                 FileName = nativePath,
                 WorkingDirectory = workingDirectory,
@@ -781,6 +782,15 @@ namespace DotCef
                     string? errorText = reader.ReadSizePrefixedString();
                     string? failedUrl = reader.ReadSizePrefixedString();
                     GetWindow(identifier)?.InvokeOnLoadError(errorCode, errorText, failedUrl);
+                    break;
+                }
+                case OpcodeClientNotification.WindowDevToolsEvent:
+                {
+                    int identifier = reader.Read<int>();
+                    string? method = reader.ReadSizePrefixedString();
+                    int paramsSize = reader.Read<int>();
+                    var parameters = reader.ReadBytes(paramsSize);
+                    GetWindow(identifier)?.InvokeOnDevToolsEvent(method, parameters);
                     break;
                 }
                 default:

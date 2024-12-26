@@ -1042,6 +1042,16 @@ void IPC::NotifyWindowLoadEnd(CefRefPtr<CefBrowser> browser, const CefString& ur
     Notify(OpcodeClientNotification::WindowLoadEnd, writer);
 }
 
+void IPC::NotifyWindowDevToolsEvent(CefRefPtr<CefBrowser> browser, const CefString& method, const uint8_t* result, size_t result_size)
+{
+    PacketWriter writer;
+    writer.write(browser->GetIdentifier());
+    writer.writeSizePrefixedString(method);
+    writer.write((int)result_size);
+    writer.writeBytes(result, result_size);
+    Notify(OpcodeClientNotification::WindowDevToolsEvent, writer);
+}
+
 void IPC::NotifyWindowLoadError(CefRefPtr<CefBrowser> browser, cef_errorcode_t errorCode, const CefString& errorText, const CefString& url)
 {
     PacketWriter writer;

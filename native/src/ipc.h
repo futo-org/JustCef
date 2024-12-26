@@ -115,7 +115,8 @@ enum class OpcodeClientNotification : uint8_t {
     WindowFullscreenChanged = 12,
     WindowLoadStart = 13,
     WindowLoadEnd = 14,
-    WindowLoadError = 15
+    WindowLoadError = 15,
+    WindowDevToolsEvent = 16
 };
 
 typedef struct _IPCPendingRequest {
@@ -225,6 +226,7 @@ public:
     void NotifyWindowLoadStart(CefRefPtr<CefBrowser> browser, const CefString& url);
     void NotifyWindowLoadEnd(CefRefPtr<CefBrowser> browser, const CefString& url);
     void NotifyWindowLoadError(CefRefPtr<CefBrowser> browser, cef_errorcode_t errorCode, const CefString& errorText, const CefString& url);
+    void NotifyWindowDevToolsEvent(CefRefPtr<CefBrowser> browser, const CefString& method, const uint8_t* result, size_t result_size);
 
     void QueueWork(std::function<void()> work) 
     { 
