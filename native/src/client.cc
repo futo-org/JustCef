@@ -429,6 +429,19 @@ void Client::OnDevToolsMethodResult(CefRefPtr<CefBrowser> browser, int message_i
     pPromise->set_value(r);
 }
 
+void Client::OnDevToolsEvent(CefRefPtr<CefBrowser> browser, const CefString& method, const void* params, size_t params_size)
+{
+    LOG(INFO) << "OnDevToolsEvent (identifier = " << browser->GetIdentifier() << ", method = " << method << ")";
+
+    IPC::Singleton.QueueWork([
+        p = std::vector<uint8_t>(static_cast<const uint8_t*>(params), static_cast<const uint8_t*>(params) + params_size), 
+        m = CefString(method), 
+        browser]() 
+    {
+        IPC::Singleton.NotifyWindowDevToolsEvent(browser, m, p.data(), p.size());
+    });
+}
+
 class ProxyResourceHandler : public CefResourceHandler {
 public:
     ProxyResourceHandler(int32_t identifier, CefRefPtr<CefRequest> request)

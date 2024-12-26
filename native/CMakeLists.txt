@@ -21,8 +21,8 @@ set_property(GLOBAL PROPERTY OS_FOLDERS ON)
 #
 
 # Specify the CEF distribution version.
-#set(CEF_VERSION "131.2.7+g9a14dc9+chromium-131.0.6778.86")
-set(CEF_VERSION "131.3.1+gcb062df+chromium-131.0.6778.109")
+set(CEF_VERSION "131.2.7+g9a14dc9+chromium-131.0.6778.86")
+#set(CEF_VERSION "131.3.1+gcb062df+chromium-131.0.6778.109")
 
 
 # Sysroot build
@@ -89,6 +89,8 @@ find_package(CEF REQUIRED)
 #
 # Python configuration.
 #
+
+message(STATUS "PYTHON_EXECUTABLE: ${PYTHON_EXECUTABLE}")
 
 # Support specification of the Python executable path via the command-line.
 if(DEFINED ENV{PYTHON_EXECUTABLE})

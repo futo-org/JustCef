@@ -14,6 +14,7 @@ namespace DotCef
         public event Action<string?>? OnLoadStart;
         public event Action<string?>? OnLoadEnd;
         public event Action<int, string?, string?>? OnLoadError;
+        public event Action<string?, byte[]> OnDevToolsEvent;
 
         private Func<DotCefWindow, IPCRequest, IPCRequest?>? _requestModifier;
         private Func<DotCefWindow, IPCRequest, Task<IPCResponse?>>? _requestProxy;
@@ -48,7 +49,7 @@ namespace DotCef
             => await _process.WindowSetDevelopmentToolsEnabledAsync(Identifier, developmentToolsEnabled, cancellationToken);
         public async Task SetDevelopmentToolsVisibleAsync(bool developmentToolsVisible, CancellationToken cancellationToken = default)
             => await _process.WindowSetDevelopmentToolsVisibleAsync(Identifier, developmentToolsVisible, cancellationToken);
-        public async Task<(bool Succes, byte[] Data)> ExecuteDevToolsMethodAsync(string methodName, string? json = null,  CancellationToken cancellationToken = default)
+        public async Task<(bool Success, byte[] Data)> ExecuteDevToolsMethodAsync(string methodName, string? json = null,  CancellationToken cancellationToken = default)
             => await _process.WindowExecuteDevToolsMethodAsync(Identifier, methodName, json, cancellationToken);
         public async Task SetTitleAsync(string title, CancellationToken cancellationToken = default)
             => await _process.WindowSetTitleAsync(Identifier, title, cancellationToken);
@@ -97,6 +98,7 @@ namespace DotCef
         public void InvokeOnLoadStart(string? url) => OnLoadStart?.Invoke(url);
         public void InvokeOnLoadEnd(string? url) => OnLoadEnd?.Invoke(url);
         public void InvokeOnLoadError(int errorCode, string? errorText, string? failedUrl) => OnLoadError?.Invoke(errorCode, errorText, failedUrl);
+        public void InvokeOnDevToolsEvent(string? method, byte[] parameters) => OnDevToolsEvent?.Invoke(method, parameters);
 
         public void WaitForExit() => _closeCompletionSource.Task.Wait();
         public async Task WaitForExitAsync(CancellationToken cancellationToken = default) 
