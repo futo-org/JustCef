@@ -76,7 +76,9 @@ namespace DotCef
             WindowAddUrlToModify = 47,
             WindowRemoveUrlToModify = 48,
             WindowGetSize = 49,
-            WindowSetSize = 50
+            WindowSetSize = 50,
+            WindowAddDevToolsEventMethod = 51,
+            WindowRemoveDevToolsEventMethod = 52
         }
 
         public enum OpcodeControllerNotification : byte
@@ -1387,6 +1389,20 @@ namespace DotCef
             await CallAsync(OpcodeController.WindowRemoveUrlToModify, new PacketWriter()
                 .Write(identifier)
                 .WriteSizePrefixedString(url), cancellationToken);
+        }
+
+        public async Task WindowAddDevToolsEventMethod(int identifier, string method, CancellationToken cancellationToken = default)
+        {
+            await CallAsync(OpcodeController.WindowAddDevToolsEventMethod, new PacketWriter()
+                .Write(identifier)
+                .WriteSizePrefixedString(method), cancellationToken);
+        }
+
+        public async Task WindowRemoveDevToolsEventMethod(int identifier, string method, CancellationToken cancellationToken = default)
+        {
+            await CallAsync(OpcodeController.WindowRemoveDevToolsEventMethod, new PacketWriter()
+                .Write(identifier)
+                .WriteSizePrefixedString(method), cancellationToken);
         }
 
         public void Dispose()

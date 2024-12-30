@@ -66,10 +66,13 @@ class Client : public CefClient,
     void RemoveUrlToProxy(const std::string& url);
     void AddUrlToModify(const std::string& url);
     void RemoveUrlToModify(const std::string& url);
+    void AddDevToolsEventMethod(CefRefPtr<CefBrowser> browser, const std::string& method);
+    void RemoveDevToolsEventMethod(CefRefPtr<CefBrowser> browser, const std::string& method);
 
     IPCWindowCreate settings;
  private:
     void SetTitle(CefRefPtr<CefBrowser> browser, const std::string& title);
+    bool EnsureDevToolsRegistration(CefRefPtr<CefBrowser> browser);
 
     std::map<int32_t, std::shared_ptr<std::promise<std::optional<IPCDevToolsMethodResult>>>> _devToolsMethodResults; 
     CefRefPtr<CefRegistration> _devToolsRegistration = nullptr;
@@ -82,6 +85,8 @@ class Client : public CefClient,
     std::unordered_set<std::string> _proxyRequestsSet;
     std::mutex _modifyRequestsSetMutex;
     std::unordered_set<std::string> _modifyRequestsSet;
+    std::mutex _devToolsEventMethodsSetMutex;
+    std::unordered_set<std::string> _devToolsEventMethodsSet;
     IMPLEMENT_REFCOUNTING(Client);
     DISALLOW_COPY_AND_ASSIGN(Client);
 };

@@ -63,6 +63,10 @@ namespace DotCef
             => await _process.WindowAddUrlToModifyAsync(Identifier, url, cancellationToken);
         public async Task RemoveUrlToModifyAsync(string url, CancellationToken cancellationToken = default)
             => await _process.WindowRemoveUrlToModifyAsync(Identifier, url, cancellationToken);
+        public async Task AddDevToolsEventMethod(string method, CancellationToken cancellationToken = default)
+            => await _process.WindowAddDevToolsEventMethod(Identifier, method, cancellationToken);
+        public async Task RemoveDevToolsEventMethod(string method, CancellationToken cancellationToken = default)
+            => await _process.WindowRemoveDevToolsEventMethod(Identifier, method, cancellationToken);
 
         public async Task CenterSelfAsync(CancellationToken cancellationToken = default) => await _process.WindowCenterSelfAsync(Identifier, cancellationToken);
 

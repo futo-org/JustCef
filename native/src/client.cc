@@ -373,7 +373,7 @@ bool Client::OnKeyEvent(CefRefPtr<CefBrowser> browser, const CefKeyEvent& event,
     return false;
 }
 
-std::optional<std::future<std::optional<IPCDevToolsMethodResult>>> Client::ExecuteDevToolsMethod(CefRefPtr<CefBrowser> browser, std::string& method, CefRefPtr<CefDictionaryValue> params)
+bool Client::EnsureDevToolsRegistration(CefRefPtr<CefBrowser> browser)
 {
     CEF_REQUIRE_UI_THREAD();
 
@@ -383,10 +383,20 @@ std::optional<std::future<std::optional<IPCDevToolsMethodResult>>> Client::Execu
         if (!_devToolsRegistration)
         {
             LOG(ERROR) << "Failed to attach DevToolsMessageObserver";
-            return std::nullopt;
+            return false;
         }
         LOG(INFO) << "EnsureDevToolsRegistration new registration added (identifier = " << browser->GetIdentifier() << ", _devToolsRegistration = " << (size_t)_devToolsRegistration.get() << ")";
     }
+
+    return true;
+}
+
+std::optional<std::future<std::optional<IPCDevToolsMethodResult>>> Client::ExecuteDevToolsMethod(CefRefPtr<CefBrowser> browser, std::string& method, CefRefPtr<CefDictionaryValue> params)
+{
+    CEF_REQUIRE_UI_THREAD();
+
+    if (!EnsureDevToolsRegistration(browser))
+        return std::nullopt;
 
     int messageId = ++_messageIdGenerator;
     std::shared_ptr<std::promise<std::optional<IPCDevToolsMethodResult>>> promise = std::make_shared<std::promise<std::optional<IPCDevToolsMethodResult>>>();
@@ -432,6 +442,13 @@ void Client::OnDevToolsMethodResult(CefRefPtr<CefBrowser> browser, int message_i
 void Client::OnDevToolsEvent(CefRefPtr<CefBrowser> browser, const CefString& method, const void* params, size_t params_size)
 {
     LOG(INFO) << "OnDevToolsEvent (identifier = " << browser->GetIdentifier() << ", method = " << method << ")";
+
+    {
+        std::lock_guard<std::mutex> lk(_devToolsEventMethodsSetMutex);
+        if (_devToolsEventMethodsSet.find(method) == _devToolsEventMethodsSet.end()) {
+            return;
+        }
+    }
 
     IPC::Singleton.QueueWork([
         p = std::vector<uint8_t>(static_cast<const uint8_t*>(params), static_cast<const uint8_t*>(params) + params_size), 
@@ -657,6 +674,26 @@ void Client::RemoveUrlToModify(const std::string& url)
 {
     std::lock_guard<std::mutex> lk(_modifyRequestsSetMutex);
     _modifyRequestsSet.erase(url);
+}
+
+void Client::AddDevToolsEventMethod(CefRefPtr<CefBrowser> browser, const std::string& method)
+{
+    EnsureDevToolsRegistration(browser);
+
+    {
+        std::lock_guard<std::mutex> lk(_devToolsEventMethodsSetMutex);
+        _devToolsEventMethodsSet.insert(method);
+    }
+}
+
+void Client::RemoveDevToolsEventMethod(CefRefPtr<CefBrowser> browser, const std::string& method)
+{
+    EnsureDevToolsRegistration(browser);
+
+    {
+        std::lock_guard<std::mutex> lk(_devToolsEventMethodsSetMutex);
+        _devToolsEventMethodsSet.erase(method);
+    }
 }
 
 bool Client::OnConsoleMessage(CefRefPtr<CefBrowser> browser, cef_log_severity_t level, const CefString& message, const CefString& source, int line)
