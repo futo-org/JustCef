@@ -80,7 +80,9 @@ enum class OpcodeController : uint8_t {
     WindowAddUrlToModify = 47,
     WindowRemoveUrlToModify = 48,
     WindowGetSize = 49,
-    WindowSetSize = 50
+    WindowSetSize = 50,
+    WindowAddDevToolsEventMethod = 51,
+    WindowRemoveDevToolsEventMethod = 52
 };
 
 //Notifications from controller
@@ -309,5 +311,7 @@ void HandleAddUrlToModify(PacketReader& reader, PacketWriter& writer);
 void HandleRemoveUrlToModify(PacketReader& reader, PacketWriter& writer);
 void HandleWindowGetSize(PacketReader& reader, PacketWriter& writer);
 void HandleWindowSetSize(PacketReader& reader, PacketWriter& writer);
+void HandleAddDevToolsEventMethod(PacketReader& reader, PacketWriter& writer);
+void HandleRemoveDevToolsEventMethod(PacketReader& reader, PacketWriter& writer);
 
 #endif //IPC_H

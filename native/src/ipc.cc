@@ -561,6 +561,12 @@ void IPC::HandleRequest(OpcodeController opcode, PacketReader& reader, PacketWri
         case OpcodeController::WindowSetSize:
             HandleWindowSetSize(reader, writer);
             break;
+        case OpcodeController::WindowAddDevToolsEventMethod:
+            HandleAddDevToolsEventMethod(reader, writer);
+            break;
+        case OpcodeController::WindowRemoveDevToolsEventMethod:
+            HandleRemoveDevToolsEventMethod(reader, writer);
+            break;
         default:
             LOG(ERROR) << "Unknown opcode " << (uint32_t)opcode << ".";
             break;
@@ -2448,3 +2454,86 @@ void HandleWindowSetSize(PacketReader& reader, PacketWriter& writer)
     }
 }
 
+void HandleAddDevToolsEventMethod(PacketReader& reader, PacketWriter& writer)
+{
+    if (!CefCurrentlyOn(TID_UI)) 
+    {
+        std::promise<void> promise;
+        std::future<void> future = promise.get_future();
+
+        CefPostTask(TID_UI, base::BindOnce([](std::promise<void> promise, PacketReader& reader, PacketWriter& writer) {
+            HandleAddDevToolsEventMethod(reader, writer);
+            promise.set_value();
+        }, std::move(promise), std::ref(reader), std::ref(writer)));
+
+        future.wait();
+        return;
+    }
+
+    std::optional<int32_t> identifier = reader.read<int32_t>();
+    std::optional<std::string> method = reader.readSizePrefixedString();
+    if (!identifier || !method)
+    {
+        LOG(ERROR) << "HandleAddDevToolsEventMethod called without valid data. Ignored.";
+        return;
+    }
+    CefRefPtr<CefBrowser> browser = shared::ClientManager::GetInstance()->AcquirePointer(*identifier);
+    if (!browser)
+    {
+        LOG(ERROR) << "HandleAddDevToolsEventMethod called while CefBrowser is already closed. Ignored.";
+        return;
+    }
+
+    CefRefPtr<CefClient> client = browser->GetHost()->GetClient();
+    Client* pClient = (Client*)client.get();
+    if (!pClient) 
+    {
+        LOG(ERROR) << "HandleAddDevToolsEventMethod client is null. Ignored.";
+        return;
+    }
+
+    pClient->AddDevToolsEventMethod(browser, *method);
+    LOG(INFO) << "Added DevTools event method: " + *method;
+}
+
+void HandleRemoveDevToolsEventMethod(PacketReader& reader, PacketWriter& writer)
+{
+    if (!CefCurrentlyOn(TID_UI)) 
+    {
+        std::promise<void> promise;
+        std::future<void> future = promise.get_future();
+
+        CefPostTask(TID_UI, base::BindOnce([](std::promise<void> promise, PacketReader& reader, PacketWriter& writer) {
+            HandleRemoveDevToolsEventMethod(reader, writer);
+            promise.set_value();
+        }, std::move(promise), std::ref(reader), std::ref(writer)));
+
+        future.wait();
+        return;
+    }
+
+    std::optional<int32_t> identifier = reader.read<int32_t>();
+    std::optional<std::string> method = reader.readSizePrefixedString();
+    if (!identifier || !method)
+    {
+        LOG(ERROR) << "HandleRemoveDevToolsEventMethod called without valid data. Ignored.";
+        return;
+    }
+    CefRefPtr<CefBrowser> browser = shared::ClientManager::GetInstance()->AcquirePointer(*identifier);
+    if (!browser)
+    {
+        LOG(ERROR) << "HandleRemoveDevToolsEventMethod called while CefBrowser is already closed. Ignored.";
+        return;
+    }
+
+    CefRefPtr<CefClient> client = browser->GetHost()->GetClient();
+    Client* pClient = (Client*)client.get();
+    if (!pClient) 
+    {
+        LOG(ERROR) << "HandleRemoveDevToolsEventMethod client is null. Ignored.";
+        return;
+    }
+
+    pClient->RemoveDevToolsEventMethod(browser, *method);
+    LOG(INFO) << "Removed DevTools event method: " + *method;
+}
