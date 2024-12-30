@@ -14,7 +14,7 @@ namespace DotCef
         public event Action<string?>? OnLoadStart;
         public event Action<string?>? OnLoadEnd;
         public event Action<int, string?, string?>? OnLoadError;
-        public event Action<string?, byte[]> OnDevToolsEvent;
+        public event Action<string?, byte[]>? OnDevToolsEvent;
 
         private Func<DotCefWindow, IPCRequest, IPCRequest?>? _requestModifier;
         private Func<DotCefWindow, IPCRequest, Task<IPCResponse?>>? _requestProxy;
