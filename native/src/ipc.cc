@@ -474,8 +474,12 @@ void IPC::HandleRequest(OpcodeController opcode, PacketReader& reader, PacketWri
             std::optional<uint32_t> identifier = reader.read<uint32_t>();
             if (identifier)
             {
-                LOG(INFO) << "Stream opened with identifier " << *identifier;
-                _dataStreams[*identifier] = std::make_shared<DataStream>(*identifier);
+                LOG(INFO) << "Stream opened with identifier (via open packet) " << *identifier;
+                auto itr = _dataStreams.find(*identifier);
+                if (itr == _dataStreams.end())
+                    _dataStreams[*identifier] = std::make_shared<DataStream>(*identifier);
+                else
+                    LOG(INFO) << "Stream not opened, was already open (via open packet) " << *identifier;
             }
             break;
         }
@@ -767,7 +771,10 @@ std::unique_ptr<IPCProxyResponse> IPC::WindowProxyRequest(int32_t identifier, Ce
             if (itr != _dataStreams.end())
                 bodyStream = (*itr).second;
             else
-                LOG(ERROR) << "Stream not opened yet. This should not happen!!";
+            {
+                LOG(INFO) << "Stream opened with identifier (was not opened via open packet)" << *streamId;
+                _dataStreams[*streamId] = std::make_shared<DataStream>(*streamId);
+            }
         }
 
         result = std::unique_ptr<IPCProxyResponse>(new IPCProxyResponse());
