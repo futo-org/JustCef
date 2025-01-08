@@ -252,12 +252,12 @@ namespace DotCef
                     ? "/Users/koen/Projects/JustCef/native/build/Release/dotcefnative.app/Contents/MacOS/dotcefnative"
                     : OperatingSystem.IsWindows() 
                         ? "C:\\Users\\koenj\\OneDrive\\Documenten\\Projects\\Grayjay.Desktop\\JustCef\\native\\build\\Release\\dotcefnative.exe"
-                        : "/home/koen/Projects/JustCef/native/build/Debug/dotcefnative",
+                        : "/home/koen/Projects/umpspy/JustCef/native/build/Debug/dotcefnative",
                 WorkingDirectory = OperatingSystem.IsMacOS()
                     ? "/Users/koen/Projects/JustCef/native/build/Release/"
                     : OperatingSystem.IsWindows() 
                         ? "C:\\Users\\koenj\\OneDrive\\Documenten\\Projects\\Grayjay.Desktop\\JustCef\\native\\build\\Release\\"
-                        : "/home/koen/Projects/JustCef/native/build/Debug/",
+                        : "/home/koen/Projects/umpspy/JustCef/native/build/Debug/",
 #else
                 FileName = nativePath,
                 WorkingDirectory = workingDirectory,
@@ -423,7 +423,7 @@ namespace DotCef
                         uint identifier = reader.Read<uint>();
                         lock (_streamCancellationTokens)
                         {
-                            Console.WriteLine($"Stream closed {identifier}.");
+                            //Console.WriteLine($"Stream closed {identifier}.");
                             if (_streamCancellationTokens.TryGetValue(identifier, out var token))
                             {
                                 token.Cancel();
@@ -556,7 +556,7 @@ namespace DotCef
                         try
                         {
                             response.BodyStream.Read(buffer, 0, contentLength.Value);
-                            writer.WriteBytes(buffer);
+                            writer.WriteBytes(buffer, 0, contentLength.Value);
                         }
                         finally
                         {
@@ -585,7 +585,7 @@ namespace DotCef
             CancellationTokenSource cancellationTokenSource = new CancellationTokenSource();
             lock (_streamCancellationTokens)
             {
-                Console.WriteLine($"Stream opened {streamIdentifier}.");
+                //Console.WriteLine($"Stream opened {streamIdentifier}.");
                 _streamCancellationTokens[streamIdentifier] = cancellationTokenSource;
             }
 
@@ -625,7 +625,7 @@ namespace DotCef
 
                     lock (_streamCancellationTokens)
                     {
-                        Console.WriteLine($"Stream closed in finally {streamIdentifier}.");
+                        //Console.WriteLine($"Stream closed in finally {streamIdentifier}.");
                         _streamCancellationTokens.Remove(streamIdentifier);
                     }
                 }
