@@ -768,12 +768,12 @@ std::unique_ptr<IPCProxyResponse> IPC::WindowProxyRequest(int32_t identifier, Ce
 
             std::lock_guard<std::mutex> lk(_dataStreamsMutex);
             auto itr = _dataStreams.find(*streamId);
-            if (itr != _dataStreams.end())
+            if (itr != _dataStreams.end()) {
                 bodyStream = (*itr).second;
-            else
-            {
+            } else {
                 LOG(INFO) << "Stream opened with identifier (was not opened via open packet)" << *streamId;
-                _dataStreams[*streamId] = std::make_shared<DataStream>(*streamId);
+                bodyStream = std::make_shared<DataStream>(*streamId);
+                _dataStreams[*streamId] = bodyStream;
             }
         }
 
