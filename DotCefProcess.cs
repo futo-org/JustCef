@@ -329,13 +329,17 @@ namespace DotCef
                             {
                                 if (packetType == PacketType.Response)
                                 {
+                                    bool foundPendingRequest;
+                                    PendingRequest? pendingRequest;
                                     lock (_pendingRequests)
                                     {
-                                        if (_pendingRequests.TryGetValue(requestId, out var pendingRequest))
-                                            pendingRequest.ResponseBodyTaskCompletionSource.SetResult(rentedBodyBuffer != null ? rentedBodyBuffer.Value.Buffer.AsSpan().Slice(0, rentedBodyBuffer.Value.Length).ToArray() : Array.Empty<byte>());
-                                        else
-                                            ErrorDataReceived?.Invoke($"Received a packet response for a request that no longer has an awaiter (request id = {requestId}).");
+                                        foundPendingRequest = _pendingRequests.TryGetValue(requestId, out pendingRequest);
                                     }
+
+                                    if (foundPendingRequest && pendingRequest != null)
+                                        pendingRequest.ResponseBodyTaskCompletionSource.SetResult(rentedBodyBuffer != null ? rentedBodyBuffer.Value.Buffer.AsSpan().Slice(0, rentedBodyBuffer.Value.Length).ToArray() : Array.Empty<byte>());
+                                    else
+                                        ErrorDataReceived?.Invoke($"Received a packet response for a request that no longer has an awaiter (request id = {requestId}).");
                                 }
                                 else if (packetType == PacketType.Request)
                                 {
@@ -543,7 +547,7 @@ namespace DotCef
                         byte[] buffer = ArrayPool<byte>.Shared.Rent(contentLength.Value);
                         try
                         {
-                            response.BodyStream.Read(buffer, 0, contentLength.Value);
+                            await response.BodyStream.ReadExactlyAsync(buffer, 0, contentLength.Value);
                             writer.WriteBytes(buffer, 0, contentLength.Value);
                         }
                         finally
@@ -1403,6 +1407,7 @@ namespace DotCef
 
             _readyTaskCompletionSource.TrySetCanceled();
 
+            //TODO: Can this deadlock due to invoked originating from TrySetCanceled? seems unlikely
             lock (_pendingRequests)
             {
                 foreach (var pendingRequest in _pendingRequests)
