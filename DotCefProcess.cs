@@ -443,13 +443,6 @@ namespace DotCef
             }
         }
 
-        private static HashSet<string> ContentHeaderNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            "Content-Type",
-            "Content-Disposition",
-            "Content-Length"
-        };
-
         private async Task HandleWindowProxyRequestAsync(PacketReader reader, PacketWriter writer)
         {
             int identifier = reader.Read<int>();
@@ -463,17 +456,12 @@ namespace DotCef
             // Deserialize headers
             int headerCount = reader.Read<int>();
             var headers = new Dictionary<string, string>(StringComparer.InvariantCultureIgnoreCase);
-            var contentHeaders = new Dictionary<string, string>(StringComparer.InvariantCultureIgnoreCase);
 
             for (int i = 0; i < headerCount; i++)
             {
                 string key = reader.ReadSizePrefixedString()!;
                 string value = reader.ReadSizePrefixedString()!;
-
-                if (ContentHeaderNames.Contains(key))
-                    contentHeaders[key] = value;
-                else
-                    headers[key] = value;
+                headers[key] = value;
             }
 
             // Deserialize elements
