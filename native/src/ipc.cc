@@ -608,7 +608,7 @@ void IPC::Print(const char* message, size_t size)
 
 void IPC::Print(const std::string& message)
 {
-    Call(OpcodeClient::Print, (uint8_t*)message.data(), message.length());
+    Call(OpcodeClient::Print, (uint8_t*)message.data(), message.size());
 }
 
 void IPC::CloseStream(uint32_t identifier)
