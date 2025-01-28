@@ -60,11 +60,4 @@ namespace shared {
 
     return ss.str();
   }
-
-bool IsViewsEnabled() {
-  static bool enabled = []() {
-    return CefCommandLine::GetGlobalCommandLine()->HasSwitch("use-views");
-  }();
-  return enabled;
-}
 }

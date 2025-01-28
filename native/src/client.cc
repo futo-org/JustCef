@@ -150,7 +150,8 @@ void Client::OnTitleChange(CefRefPtr<CefBrowser> browser, const CefString& title
 
 void Client::OnFullscreenModeChange(CefRefPtr<CefBrowser> browser, bool fullscreen)
 {
-    if (!shared::IsViewsEnabled())
+    bool isViewsEnabled = CefBrowserView::GetForBrowser(browser) ? true : false;
+    if (!isViewsEnabled)
         shared::PlatformSetFullscreen(browser, fullscreen);
 
     IPC::Singleton.QueueWork([browser, fullscreen] () {

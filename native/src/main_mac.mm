@@ -146,15 +146,17 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    if (readFd == -1 || writeFd == -1) {
+    if (readFd != -1 && writeFd != -1) {
+        IPC::Singleton.SetHandles(readFd, writeFd);
+        printf("Set handles.\r\n");
+    } else {
         printf("Missing handles.\r\n");
-        return 1;
     }
 
-    // Set the IPC handles.
-    // Assuming IPC::Singleton is a singleton accessible in this context.
-    // This might need adjustments based on how your IPC is set up in Objective-C++.
-    IPC::Singleton.SetHandles(readFd, writeFd);
+    if (!command_line->HasSwitch("url") && !IPC::Singleton.HasValidHandles()) {
+        std::cerr << "Either URL or IPC handles should be set.";
+        return 1;
+    }
 
     // Create a CefApp for the browser process. Other processes are handled by
     // process_helper_mac.cc.

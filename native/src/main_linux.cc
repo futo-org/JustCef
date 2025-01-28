@@ -1,6 +1,9 @@
 #include "main.h"
 
+#if defined(CEF_X11)
 #include <X11/Xlib.h>
+#endif
+
 #include <chrono>
 #include <filesystem>
 #include <sstream>
@@ -15,7 +18,7 @@
 #include "ipc.h"
 
 namespace shared {
-
+#if defined(CEF_X11)
   int XErrorHandlerImpl(Display* display, XErrorEvent* event) {
     LOG(WARNING) << "X error received: "
                 << "type " << event->type << ", "
@@ -30,6 +33,7 @@ namespace shared {
   int XIOErrorHandlerImpl(Display* display) {
     return 0;
   }
+#endif  // defined(CEF_X11)
 
   std::filesystem::path GetExecutablePath() {
     char result[PATH_MAX];
@@ -91,13 +95,19 @@ namespace shared {
         }
       }
 
-      if (readFd == -1 || writeFd == -1) {
-        printf("Missing handles.\r\n");
+      if (readFd != -1 && writeFd != -1) {
+        IPC::Singleton.SetHandles(readFd, writeFd);
+        LOG(INFO) << "Set handles.";
+      } else {
+        LOG(INFO) << "Missing handles.";
+      }
+
+      if (!command_line->HasSwitch("url") && !IPC::Singleton.HasValidHandles()) {
+        std::cerr << "Either URL or IPC handles should be set.";
         return 1;
       }
-      IPC::Singleton.SetHandles(readFd, writeFd);
     }
-
+    
     printf("main with processType = %i.\r\n", processType);
     for (int i = 0; i < argc; i++) {
       printf("Argument %i: '%s'.\r\n", i, argv[i]);
@@ -126,16 +136,26 @@ namespace shared {
       return exit_code;
     }
 
+#if defined(CEF_X11)
     // Install xlib error handlers so that the application won't be terminated
     // on non-fatal errors.
     XSetErrorHandler(XErrorHandlerImpl);
     XSetIOErrorHandler(XIOErrorHandlerImpl);
+#endif
 
     // Create the singleton manager instance.
     ClientManager manager;
 
     // Specify CEF global settings here.
     CefSettings settings;
+
+// When generating projects with CMake the CEF_USE_SANDBOX value will be defined
+// automatically. Pass -DUSE_SANDBOX=OFF to the CMake command-line to disable
+// use of the sandbox.
+#if !defined(CEF_USE_SANDBOX)
+    settings.no_sandbox = true;
+#endif
+
     //settings.log_severity = LOGSEVERITY_WARNING;
     //settings.single_process = true;
 

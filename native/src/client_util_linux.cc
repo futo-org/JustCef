@@ -1,8 +1,11 @@
 #include "client_util.h"
 
+#if defined(CEF_X11)
 #include <X11/Xatom.h>
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
+#endif
+
 #include <string>
 #include <gtk/gtk.h>
 #include <gdk/gdkx.h>
@@ -18,6 +21,8 @@ namespace shared {
     void PlatformTitleChange(CefRefPtr<CefBrowser> browser, const std::string& title) 
     {
         std::string titleStr(title);
+
+#if defined(CEF_X11)
         ::Display* display = cef_get_xdisplay();
         DCHECK(display);
 
@@ -37,6 +42,7 @@ namespace shared {
         XFree(textProperty.value);
 
         XFlush(display);
+#endif // defined(CEF_X11)
     }
 
     void PlatformIconChange(CefRefPtr<CefBrowser> browser, const std::string& iconPath) 
@@ -48,6 +54,7 @@ namespace shared {
             return;
         }
 
+#if defined(CEF_X11)
         Display* display = XOpenDisplay(NULL);
         if (!display) {
             LOG(ERROR) << "Failed to open X display.";
@@ -104,13 +111,15 @@ namespace shared {
         XChangeProperty(display, window, _NET_WM_ICON, cardinal, 32, PropModeReplace, (const unsigned char*)iconData, asz);
         XFlush(display);
         XCloseDisplay(display);
-
         free(iconData);
+#endif // defined(CEF_X11)
+
         stbi_image_free(image);
     }
 
     bool PlatformGetFullscreen(CefRefPtr<CefBrowser> browser)
     {
+#if defined(CEF_X11)
         ::Display* display = cef_get_xdisplay();
         DCHECK(display);
 
@@ -146,10 +155,12 @@ namespace shared {
 
         XFree(prop);
         return isFullscreen;
+#endif // defined(CEF_X11)
     }
 
     void PlatformSetMinimumWindowSize(CefRefPtr<CefBrowser> browser, int minWidth, int minHeight)
     {
+#if defined(CEF_X11)
         ::Display* display = cef_get_xdisplay();
         DCHECK(display);
 
@@ -164,10 +175,12 @@ namespace shared {
         XSetWMNormalHints(display, window, sizeHints);
         XFree(sizeHints);
         XFlush(display);
+#endif // defined(CEF_X11)
     }
 
     void PlatformSetFrameless(CefRefPtr<CefBrowser> browser, bool frameless)
     {
+#if defined(CEF_X11)
         ::Display* display = cef_get_xdisplay();
         DCHECK(display);
 
@@ -192,10 +205,12 @@ namespace shared {
         }
 
         XFlush(display);
+#endif // defined(CEF_X11)
     }
 
     void PlatformSetResizable(CefRefPtr<CefBrowser> browser, bool resizable)
     {
+#if defined(CEF_X11)
         ::Display* display = cef_get_xdisplay();
         DCHECK(display);
 
@@ -215,10 +230,12 @@ namespace shared {
         XSetWMNormalHints(display, window, sizeHints);
         XFree(sizeHints);
         XFlush(display);
+#endif // defined(CEF_X11)
     }
 
     void PlatformSetFullscreen(CefRefPtr<CefBrowser> browser, bool fullscreen)
     {
+#if defined(CEF_X11)
         ::Display* display = cef_get_xdisplay();
         DCHECK(display);
 
@@ -243,10 +260,12 @@ namespace shared {
                 SubstructureRedirectMask | SubstructureNotifyMask, &xev);
 
         XFlush(display);
+#endif // defined(CEF_X11)
     }
 
     void PlatformMaximize(CefRefPtr<CefBrowser> browser)
     {
+#if defined(CEF_X11)
         ::Display* display = cef_get_xdisplay();
         DCHECK(display);
 
@@ -273,10 +292,12 @@ namespace shared {
                 SubstructureRedirectMask | SubstructureNotifyMask, &xev);
 
         XFlush(display);
+#endif // defined(CEF_X11)
     }
 
     void PlatformMinimize(CefRefPtr<CefBrowser> browser)
     {
+#if defined(CEF_X11)
         ::Display* display = cef_get_xdisplay();
         DCHECK(display);
 
@@ -285,10 +306,12 @@ namespace shared {
 
         XIconifyWindow(display, window, DefaultScreen(display));
         XFlush(display);
+#endif // defined(CEF_X11)
     }
 
     void PlatformRestore(CefRefPtr<CefBrowser> browser)
     {
+#if defined(CEF_X11)
         ::Display* display = cef_get_xdisplay();
         DCHECK(display);
 
@@ -297,10 +320,12 @@ namespace shared {
 
         XMapWindow(display, window);
         XFlush(display);
+#endif // defined(CEF_X11)
     }
 
     void PlatformShow(CefRefPtr<CefBrowser> browser)
     {
+#if defined(CEF_X11)
         ::Display* display = cef_get_xdisplay();
         DCHECK(display);
 
@@ -309,10 +334,12 @@ namespace shared {
 
         XMapRaised(display, window);
         XFlush(display);
+#endif // defined(CEF_X11)
     }
 
     void PlatformHide(CefRefPtr<CefBrowser> browser)
     {
+#if defined(CEF_X11)
         ::Display* display = cef_get_xdisplay();
         DCHECK(display);
 
@@ -321,10 +348,12 @@ namespace shared {
 
         XUnmapWindow(display, window);
         XFlush(display);
+#endif // defined(CEF_X11)
     }
 
     void PlatformActivate(CefRefPtr<CefBrowser> browser)
     {
+#if defined(CEF_X11)
         ::Display* display = cef_get_xdisplay();
         DCHECK(display);
 
@@ -349,10 +378,12 @@ namespace shared {
                 SubstructureRedirectMask | SubstructureNotifyMask, &xev);
 
         XFlush(display);
+#endif // defined(CEF_X11)
     }
 
     void PlatformBringToTop(CefRefPtr<CefBrowser> browser)
     {
+#if defined(CEF_X11)
         ::Display* display = cef_get_xdisplay();
         DCHECK(display);
 
@@ -361,10 +392,12 @@ namespace shared {
 
         XRaiseWindow(display, window);
         XFlush(display);
+#endif // defined(CEF_X11)
     }
 
     void PlatformSetAlwaysOnTop(CefRefPtr<CefBrowser> browser, bool alwaysOnTop)
     {
+#if defined(CEF_X11)
         ::Display* display = cef_get_xdisplay();
         DCHECK(display);
 
@@ -390,10 +423,12 @@ namespace shared {
                 SubstructureRedirectMask | SubstructureNotifyMask, &xev);
 
         XFlush(display);
+#endif // defined(CEF_X11)
     }
 
     CefSize PlatformGetWindowSize(CefRefPtr<CefBrowser> browser)
     {
+#if defined(CEF_X11)
         ::Display* display = cef_get_xdisplay();
         DCHECK(display);
 
@@ -404,10 +439,12 @@ namespace shared {
         XGetWindowAttributes(display, window, &attrs);
 
         return CefSize(attrs.width, attrs.height);
+#endif // defined(CEF_X11)
     }
 
     void PlatformCenterWindow(CefRefPtr<CefBrowser> browser, const CefSize& size)
     {
+#if defined(CEF_X11)
         ::Display* display = cef_get_xdisplay();
         DCHECK(display);
 
@@ -423,10 +460,12 @@ namespace shared {
 
         XMoveResizeWindow(display, window, x, y, size.width, size.height);
         XFlush(display);
+#endif // defined(CEF_X11)
     }
 
     void PlatformSetWindowSize(CefRefPtr<CefBrowser> browser, const CefSize& size)
     {
+#if defined(CEF_X11)
         ::Display* display = cef_get_xdisplay();
         DCHECK(display);
 
@@ -435,10 +474,12 @@ namespace shared {
 
         XResizeWindow(display, window, size.width, size.height);
         XFlush(display);
+#endif // defined(CEF_X11)
     }
 
     CefPoint PlatformGetWindowPosition(CefRefPtr<CefBrowser> browser)
     {
+#if defined(CEF_X11)
         ::Display* display = cef_get_xdisplay();
         DCHECK(display);
 
@@ -458,10 +499,12 @@ namespace shared {
         }
 
         return CefPoint(0, 0);
+#endif // defined(CEF_X11)
     }
 
     void PlatformSetWindowPosition(CefRefPtr<CefBrowser> browser, const CefPoint& position)
     {
+#if defined(CEF_X11)
         ::Display* display = cef_get_xdisplay();
         DCHECK(display);
 
@@ -470,10 +513,12 @@ namespace shared {
 
         XMoveWindow(display, window, position.x, position.y);
         XFlush(display);
+#endif // defined(CEF_X11)
     }
 
     void PlatformWindowRequestFocus(CefRefPtr<CefBrowser> browser)
     {
+#if defined(CEF_X11)
         ::Display* display = cef_get_xdisplay();
         DCHECK(display);
 
@@ -482,6 +527,7 @@ namespace shared {
 
         XSetInputFocus(display, window, RevertToParent, CurrentTime);
         XFlush(display);
+#endif // defined(CEF_X11)
     }
 
     std::future<std::vector<std::string>> PlatformPickFiles(bool multiple, const std::vector<std::pair<std::string /* name [Text Files (*.txt)] */, std::string /* *.txt */>>& filters)

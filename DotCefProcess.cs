@@ -217,12 +217,14 @@ namespace DotCef
 
             _started = true;
             
+            string? nativePath = null;
+
+#if !HARDCODED_PATHS
             string[] searchPaths = GenerateSearchPaths();
             OutputDataReceived?.Invoke("Searching for dotcefnative, search paths:");
             foreach (var path in searchPaths)
                 OutputDataReceived?.Invoke(" - " + path);
 
-            string? nativePath = null;
             foreach (string path in searchPaths)
             {
                 
@@ -237,12 +239,13 @@ namespace DotCef
             OutputDataReceived?.Invoke($"Working directory '{workingDirectory}'.");
             OutputDataReceived?.Invoke($"CEF exe path '{nativePath}'.");
 
-#if !HARDCODED_PATHS
             if (!File.Exists(nativePath))
             {
                 ErrorDataReceived?.Invoke($"File not found at native path '{nativePath}'.");
                 throw new Exception("Native executable not found.");
             }
+#else
+            OutputDataReceived?.Invoke($"USING HARDCODED PATHS.");
 #endif
 
             ProcessStartInfo psi = new ProcessStartInfo
@@ -252,17 +255,17 @@ namespace DotCef
                     ? "/Users/koen/Projects/Grayjay.Desktop/JustCef/native/build/Debug/dotcefnative.app/Contents/MacOS/dotcefnative"
                     : OperatingSystem.IsWindows() 
                         ? "C:\\Users\\koenj\\OneDrive\\Documenten\\Projects\\Grayjay.Desktop\\JustCef\\native\\build\\Release\\dotcefnative.exe"
-                        : "/home/koen/Projects/umpspy/JustCef/native/build/Debug/dotcefnative",
+                        : "/home/koen/Projects/JustCef/native/build/Debug/dotcefnative",
                 WorkingDirectory = OperatingSystem.IsMacOS()
                     ? "/Users/koen/Projects/Grayjay.Desktop/JustCef/native/build/Debug/"
                     : OperatingSystem.IsWindows() 
                         ? "C:\\Users\\koenj\\OneDrive\\Documenten\\Projects\\Grayjay.Desktop\\JustCef\\native\\build\\Release\\"
-                        : "/home/koen/Projects/umpspy/JustCef/native/build/Debug/",
+                        : "/home/koen/Projects/JustCef/native/build/Debug/",
 #else
                 FileName = nativePath,
                 WorkingDirectory = workingDirectory,
 #endif   
-                Arguments = $"--change-stack-guard-on-fork=disable --disable-chrome-runtime --parent-to-child {_writer.GetClientHandleAsString()} --child-to-parent {_reader.GetClientHandleAsString()}" + ((string.IsNullOrEmpty(args)) ? "" : " " + args),
+                Arguments = $"--change-stack-guard-on-fork=disable --parent-to-child {_writer.GetClientHandleAsString()} --child-to-parent {_reader.GetClientHandleAsString()}" + ((string.IsNullOrEmpty(args)) ? "" : " " + args),
                 UseShellExecute = false,
                 RedirectStandardError = true,
                 RedirectStandardOutput = true
@@ -1022,7 +1025,7 @@ namespace DotCef
         public async Task<DotCefWindow> CreateWindowAsync(string url, int minimumWidth, int minimumHeight, int preferredWidth = 0, int preferredHeight = 0,
             bool fullscreen = false, bool contextMenuEnable = false, bool shown = true, bool developerToolsEnabled = false, bool resizable = true, bool frameless = false,
             bool centered = true, bool proxyRequests = false, bool logConsole = false, Func<DotCefWindow, IPCRequest, Task<IPCResponse?>>? requestProxy = null, bool modifyRequests = false, Func<DotCefWindow, IPCRequest, IPCRequest?>? requestModifier = null, bool modifyRequestBody = false,
-            string? title = null, string? iconPath = null, CancellationToken cancellationToken = default)
+            string? title = null, string? iconPath = null, string? appId = null, CancellationToken cancellationToken = default)
         {
             EnsureStarted();
 
@@ -1049,6 +1052,7 @@ namespace DotCef
             writer.WriteSizePrefixedString(url);
             writer.WriteSizePrefixedString(title);
             writer.WriteSizePrefixedString(iconPath);
+            writer.WriteSizePrefixedString(appId);
 
             var reader = await CallAsync(OpcodeController.WindowCreate, writer.Data, 0, writer.Size, cancellationToken);
             var window = new DotCefWindow(this, reader.Read<int>(), requestModifier, requestProxy);

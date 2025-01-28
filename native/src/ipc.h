@@ -20,6 +20,8 @@
 #include <optional>
 #include <stdint.h>
 
+class Client;
+
 #define MAXIMUM_IPC_SIZE 10 * 1024 * 1024
 
 enum class PacketType : uint8_t {
@@ -185,6 +187,7 @@ typedef struct _IPCWindowCreate
     std::string url = "";
     std::optional<std::string> title = std::nullopt;
     std::optional<std::string> iconPath = std::nullopt;
+    std::optional<std::string> appId = std::nullopt;
 } IPCWindowCreate;
 
 class IPC {
@@ -199,6 +202,9 @@ public:
     #else
     void SetHandles(int readFd, int writeFd);
     #endif
+
+    bool HasValidHandles();
+    bool IsAvailable();
 
     void Start();
     void Stop();
@@ -231,8 +237,8 @@ public:
     void NotifyWindowDevToolsEvent(CefRefPtr<CefBrowser> browser, const CefString& method, const uint8_t* result, size_t result_size);
 
     void QueueWork(std::function<void()> work) 
-    { 
-        if (_stopped)
+    {
+        if (!IsAvailable())
             return;
             
         _worker.EnqueueWork(work); 
@@ -242,7 +248,7 @@ public:
 private:
     void QueueStreamWork(std::function<void()> work) 
     { 
-        if (_stopped)
+        if (!IsAvailable())
             return;
             
         _streamWorker.EnqueueWork(work); 
@@ -313,5 +319,6 @@ void HandleWindowGetSize(PacketReader& reader, PacketWriter& writer);
 void HandleWindowSetSize(PacketReader& reader, PacketWriter& writer);
 void HandleAddDevToolsEventMethod(PacketReader& reader, PacketWriter& writer);
 void HandleRemoveDevToolsEventMethod(PacketReader& reader, PacketWriter& writer);
+CefRefPtr<Client> CreateWindow(const IPCWindowCreate& windowCreate);
 
 #endif //IPC_H

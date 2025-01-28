@@ -154,13 +154,23 @@ void IPC::Stop()
     LOG(INFO) << "Stopped IPC.";
 }
 
+bool IPC::HasValidHandles()
+{
+    return _pipe.HasValidHandles();
+}
+
+bool IPC::IsAvailable()
+{
+    return HasValidHandles() && !_stopped && _startCalled;
+}
+
 void IPC::Run() 
 {
     LOG(INFO) << "IPC running.";
 
     IPCPacketHeader header;
 
-    while (!_stopped)
+    while (IsAvailable())
     {
         size_t headerBytesRead = _pipe.Read(&header, sizeof(IPCPacketHeader), true);
         if (headerBytesRead == 0) 
@@ -302,7 +312,7 @@ void IPC::Run()
 
 std::vector<uint8_t> IPC::Call(OpcodeClient opcode, const uint8_t* body, size_t size)
 {
-    if (_stopped)
+    if (!IsAvailable())
         return std::vector<uint8_t>();
 
     if (CefCurrentlyOn(TID_UI)) {
@@ -364,7 +374,7 @@ void IPC::Notify(OpcodeClientNotification opcode, const PacketWriter& writer)
 
 void IPC::Notify(OpcodeClientNotification opcode, const uint8_t* body, size_t size)
 {
-    if (_stopped)
+    if (!IsAvailable())
         return;
 
     if (CefCurrentlyOn(TID_UI)) {
@@ -622,12 +632,20 @@ void IPC::CloseStream(uint32_t identifier)
         (*itr).second->Close();
         _dataStreams.erase(itr);
     }
+    
+    if (!IsAvailable()) {
+        return;
+    }
 
     StreamClose(identifier);
 }
 
 std::unique_ptr<IPCProxyResponse> IPC::WindowProxyRequest(int32_t identifier, CefRefPtr<CefRequest> request)
 {
+    if (!IsAvailable()) {
+        return nullptr;
+    }
+
     PacketWriter writer;
     writer.write<int32_t>(identifier);
     writer.writeSizePrefixedString(request->GetMethod());
@@ -793,6 +811,10 @@ std::unique_ptr<IPCProxyResponse> IPC::WindowProxyRequest(int32_t identifier, Ce
 
 void IPC::WindowModifyRequest(int32_t identifier, CefRefPtr<CefRequest> request, bool modifyRequestBody)
 {
+    if (!IsAvailable()) {
+        return;
+    }
+
     std::vector<uint8_t> response;
     {
         PacketWriter writer;
@@ -1089,8 +1111,8 @@ void IPC::SetHandles(int readFd, int writeFd)
 
 class WindowDelegate : public CefWindowDelegate {
 public:
-    explicit WindowDelegate(CefRefPtr<CefBrowserView> browser_view, const IPCWindowCreate& settings)
-        : browser_view_(browser_view), _settings(settings) {}
+    explicit WindowDelegate(CefRefPtr<CefBrowserView> browser_view, const IPCWindowCreate& settings, cef_runtime_style_t runtime_style)
+        : browser_view_(browser_view), _settings(settings), runtime_style_(runtime_style) {}
 
     void OnWindowCreated(CefRefPtr<CefWindow> window) override {
         window->AddChildView(browser_view_);
@@ -1108,6 +1130,17 @@ public:
         return true;
     }
 
+    cef_runtime_style_t GetWindowRuntimeStyle() override {
+        return runtime_style_;
+    }
+
+#if defined(OS_LINUX)
+    bool GetLinuxWindowProperties(CefRefPtr<CefWindow> window, CefLinuxWindowProperties& properties) override {
+        CefString(&properties.wayland_app_id) = CefString(&properties.wm_class_class) = CefString(&properties.wm_class_name) = CefString(&properties.wm_role_name) = _settings.appId ? *_settings.appId : "cef";
+        return true;
+    }
+#endif
+
     bool IsFrameless(CefRefPtr<CefWindow> window) override { return _settings.frameless == 1; }
     bool CanResize(CefRefPtr<CefWindow> window) override { return _settings.resizable == 1; }
 
@@ -1122,10 +1155,111 @@ public:
 private:
     CefRefPtr<CefBrowserView> browser_view_;
     const IPCWindowCreate& _settings;
+    const cef_runtime_style_t runtime_style_;
 
     IMPLEMENT_REFCOUNTING(WindowDelegate);
     DISALLOW_COPY_AND_ASSIGN(WindowDelegate);
 };
+
+
+class BrowserViewDelegate : public CefBrowserViewDelegate {
+ public:
+  explicit BrowserViewDelegate(const IPCWindowCreate& settings, cef_runtime_style_t runtime_style)
+      : _settings(settings), runtime_style_(runtime_style) {}
+
+    bool OnPopupBrowserViewCreated(CefRefPtr<CefBrowserView> browser_view, CefRefPtr<CefBrowserView> popup_browser_view, bool is_devtools) override {
+        CefWindow::CreateTopLevelWindow(new WindowDelegate(popup_browser_view, _settings, runtime_style_));
+        return true;
+    }
+
+    cef_runtime_style_t GetBrowserRuntimeStyle() override {
+        return runtime_style_;
+    }
+
+ private:
+    const IPCWindowCreate& _settings;
+    const cef_runtime_style_t runtime_style_;
+
+    IMPLEMENT_REFCOUNTING(BrowserViewDelegate);
+    DISALLOW_COPY_AND_ASSIGN(BrowserViewDelegate);
+};
+
+CefRefPtr<Client> CreateWindow(const IPCWindowCreate& windowCreate)
+{
+    CEF_REQUIRE_UI_THREAD();
+
+    LOG(INFO) << "Window create (URL = '" << windowCreate.url << "')";
+
+    CefRefPtr<CefCommandLine> command_line = CefCommandLine::GetGlobalCommandLine();
+
+    // Check if Alloy style will be used.
+    cef_runtime_style_t runtime_style = CEF_RUNTIME_STYLE_DEFAULT;
+    bool use_alloy_style = command_line->HasSwitch("use-alloy-style");
+    if (use_alloy_style) {
+        runtime_style = CEF_RUNTIME_STYLE_ALLOY;
+    }
+    bool use_chrome_style = command_line->HasSwitch("use-chrome-style");
+    if (use_chrome_style) {
+        runtime_style = CEF_RUNTIME_STYLE_CHROME;
+    }
+
+    LOG(INFO) << "Runtime style = " << runtime_style;
+
+    CefRefPtr<Client> client = new Client(windowCreate);
+    CefBrowserSettings settings;
+
+    const bool use_views = !command_line->HasSwitch("use-native");
+    LOG(INFO) << "Use views = " << (use_views ? "true" : "false");
+
+    if (use_views)
+    {
+        CefRefPtr<CefBrowserView> browser_view = CefBrowserView::CreateBrowserView(client, windowCreate.url, settings, nullptr, nullptr, new BrowserViewDelegate(windowCreate, runtime_style));
+        CefWindow::CreateTopLevelWindow(new WindowDelegate(browser_view, windowCreate, runtime_style));
+    } 
+    else 
+    {
+        CefWindowInfo window_info;
+        window_info.bounds.width = windowCreate.preferredWidth;
+        window_info.bounds.height = windowCreate.preferredHeight;
+        window_info.runtime_style = runtime_style;
+
+
+#if defined(OS_WIN)
+        window_info.style = WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN | WS_CLIPSIBLINGS | WS_VISIBLE;
+        window_info.parent_window = nullptr;
+        window_info.bounds.x = CW_USEDEFAULT;
+        window_info.bounds.y = CW_USEDEFAULT;
+
+        HMODULE shcore = LoadLibraryW(L"Shcore.dll");
+        if (shcore) {
+            typedef HRESULT(WINAPI* GetDpiForMonitorPtr)(HMONITOR, int, UINT*, UINT*);
+            GetDpiForMonitorPtr GetDpiForMonitor = reinterpret_cast<GetDpiForMonitorPtr>(GetProcAddress(shcore, "GetDpiForMonitor"));
+            if (GetDpiForMonitor) {
+                POINT placementPoint = {
+                    (window_info.bounds.x == CW_USEDEFAULT) ? 0 : window_info.bounds.x, 
+                    (window_info.bounds.y == CW_USEDEFAULT) ? 0 : window_info.bounds.y 
+                };
+
+                HMONITOR monitor = MonitorFromPoint(placementPoint, MONITOR_DEFAULTTONEAREST);
+                
+                UINT dpiX = 96, dpiY = 96; // Default DPI (96 DPI = 100% scaling)
+                if (SUCCEEDED(GetDpiForMonitor(monitor, 0 /* MDT_EFFECTIVE_DPI */, &dpiX, &dpiY))) {
+                    float scaleFactor = dpiX / 96.0f;
+                    window_info.bounds.width = scaleFactor * window_info.bounds.width;
+                    window_info.bounds.height = scaleFactor * window_info.bounds.height;
+                }
+            }
+        }
+#endif
+
+        // TODO: Copy over window name
+        // cef_string_copy(windowName.c_str(), windowName.length(), &window_name);
+
+        CefBrowserHost::CreateBrowserSync(window_info, client, windowCreate.url, settings, nullptr, nullptr);
+    }
+
+    return client;
+}
 
 CefRefPtr<Client> HandleWindowCreateInternal(PacketReader& reader, PacketWriter& writer)
 {
@@ -1184,60 +1318,7 @@ CefRefPtr<Client> HandleWindowCreateInternal(PacketReader& reader, PacketWriter&
     windowCreate.url = *url;
     windowCreate.title = title;
     windowCreate.iconPath = iconPath;
-
-    LOG(INFO) << "Window create (URL = '" << *url << "')";
-
-    CefRefPtr<Client> client = new Client(windowCreate);
-    CefBrowserSettings settings;
-    //TODO: Handle user agent
-
-    if (shared::IsViewsEnabled())
-    {
-        CefRefPtr<CefBrowserView> browser_view = CefBrowserView::CreateBrowserView(client, *url, settings, nullptr, nullptr, nullptr);
-        CefWindow::CreateTopLevelWindow(new WindowDelegate(browser_view, windowCreate));
-    } 
-    else 
-    {
-        CefWindowInfo window_info;
-        window_info.bounds.width = *preferredWidth;
-        window_info.bounds.height = *preferredHeight;
-        window_info.runtime_style = CEF_RUNTIME_STYLE_ALLOY;
-
-#if defined(OS_WIN)
-        window_info.style = WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN | WS_CLIPSIBLINGS | WS_VISIBLE;
-        window_info.parent_window = nullptr;
-        window_info.bounds.x = CW_USEDEFAULT;
-        window_info.bounds.y = CW_USEDEFAULT;
-
-        HMODULE shcore = LoadLibraryW(L"Shcore.dll");
-        if (shcore) {
-            typedef HRESULT(WINAPI* GetDpiForMonitorPtr)(HMONITOR, int, UINT*, UINT*);
-            GetDpiForMonitorPtr GetDpiForMonitor = reinterpret_cast<GetDpiForMonitorPtr>(GetProcAddress(shcore, "GetDpiForMonitor"));
-            if (GetDpiForMonitor) {
-                POINT placementPoint = {
-                    (window_info.bounds.x == CW_USEDEFAULT) ? 0 : window_info.bounds.x, 
-                    (window_info.bounds.y == CW_USEDEFAULT) ? 0 : window_info.bounds.y 
-                };
-
-                HMONITOR monitor = MonitorFromPoint(placementPoint, MONITOR_DEFAULTTONEAREST);
-                
-                UINT dpiX = 96, dpiY = 96; // Default DPI (96 DPI = 100% scaling)
-                if (SUCCEEDED(GetDpiForMonitor(monitor, 0 /* MDT_EFFECTIVE_DPI */, &dpiX, &dpiY))) {
-                    float scaleFactor = dpiX / 96.0f;
-                    window_info.bounds.width = scaleFactor * window_info.bounds.width;
-                    window_info.bounds.height = scaleFactor * window_info.bounds.height;
-                }
-            }
-        }
-#endif
-
-        // TODO: Copy over window name
-        // cef_string_copy(windowName.c_str(), windowName.length(), &window_name);
-
-        CefBrowserHost::CreateBrowserSync(window_info, client, *url, settings, nullptr, nullptr);
-    }
-
-    return client;
+    return CreateWindow(windowCreate);
 }
 
 void HandleWindowCreate(PacketReader& reader, PacketWriter& writer)

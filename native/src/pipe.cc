@@ -37,6 +37,14 @@ bool Pipe::Create() {
 #endif
 }
 
+bool Pipe::HasValidHandles() {
+#ifdef _WIN32
+    return _readHandle != INVALID_HANDLE_VALUE && _writeHandle != INVALID_HANDLE_VALUE;
+#else
+    return _readFd != -1 && _writeFd != -1;
+#endif
+}
+
 size_t Pipe::Read(void* buffer, size_t size, bool readFully) {
 #ifdef _WIN32
     DWORD totalBytesRead = 0;

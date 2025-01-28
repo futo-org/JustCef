@@ -93,13 +93,19 @@ namespace shared {
             }
 
             LocalFree(argv);
-            if (readHandle == INVALID_HANDLE_VALUE || writeHandle == INVALID_HANDLE_VALUE) {
+            if (readHandle != INVALID_HANDLE_VALUE && writeHandle != INVALID_HANDLE_VALUE) {
+                IPC::Singleton.SetHandles(readHandle, writeHandle);
+                LOG(INFO) << "Set handles.";
+            } else {
                 LOG(INFO) << "Missing handles.";
+            }
+
+            if (!command_line->HasSwitch("url") && !IPC::Singleton.HasValidHandles()) {
+                std::cerr << "Either URL or IPC handles should be set.";
                 return 1;
             }
-            IPC::Singleton.SetHandles(readHandle, writeHandle);
-            LOG(INFO) << "Set handles.";
         }
+
 
         // Create a CefApp of the correct process type.
         CefRefPtr<CefApp> app;
