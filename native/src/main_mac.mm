@@ -154,7 +154,7 @@ int main(int argc, char* argv[]) {
     }
 
     if (!command_line->HasSwitch("url") && !IPC::Singleton.HasValidHandles()) {
-        std::cerr << "Either URL or IPC handles should be set.";
+        printf("Either URL or IPC handles should be set.");
         return 1;
     }
 
