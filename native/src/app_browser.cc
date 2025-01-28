@@ -79,7 +79,7 @@ class BrowserApp : public CefApp, public CefBrowserProcessHandler {
       windowCreate.shown = true;
       windowCreate.title = title;
       windowCreate.url = url;
-      CreateWindow(windowCreate);
+      CreateBrowserWindow(windowCreate);
     } else {
       LOG(INFO) << "No URL specified, skipping launching URL.";
     }

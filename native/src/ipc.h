@@ -319,6 +319,6 @@ void HandleWindowGetSize(PacketReader& reader, PacketWriter& writer);
 void HandleWindowSetSize(PacketReader& reader, PacketWriter& writer);
 void HandleAddDevToolsEventMethod(PacketReader& reader, PacketWriter& writer);
 void HandleRemoveDevToolsEventMethod(PacketReader& reader, PacketWriter& writer);
-CefRefPtr<Client> CreateWindow(const IPCWindowCreate& windowCreate);
+CefRefPtr<Client> CreateBrowserWindow(const IPCWindowCreate& windowCreate);
 
 #endif //IPC_H

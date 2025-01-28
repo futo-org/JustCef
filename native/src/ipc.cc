@@ -1184,7 +1184,7 @@ class BrowserViewDelegate : public CefBrowserViewDelegate {
     DISALLOW_COPY_AND_ASSIGN(BrowserViewDelegate);
 };
 
-CefRefPtr<Client> CreateWindow(const IPCWindowCreate& windowCreate)
+CefRefPtr<Client> CreateBrowserWindow(const IPCWindowCreate& windowCreate)
 {
     CEF_REQUIRE_UI_THREAD();
 
@@ -1318,7 +1318,7 @@ CefRefPtr<Client> HandleWindowCreateInternal(PacketReader& reader, PacketWriter&
     windowCreate.url = *url;
     windowCreate.title = title;
     windowCreate.iconPath = iconPath;
-    return CreateWindow(windowCreate);
+    return CreateBrowserWindow(windowCreate);
 }
 
 void HandleWindowCreate(PacketReader& reader, PacketWriter& writer)
