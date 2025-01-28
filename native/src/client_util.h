@@ -9,9 +9,6 @@ namespace shared {
     // Returns the contents of |request| as a string.
     std::string DumpRequestContents(CefRefPtr<CefRequest> request);
 
-    // Returns true if use of the Views framework is enabled.
-    bool IsViewsEnabled();
-
     // Platform-specific implementations.
     void PlatformTitleChange(CefRefPtr<CefBrowser> browser, const std::string& title);
     void PlatformIconChange(CefRefPtr<CefBrowser> browser, const std::string& iconPath);

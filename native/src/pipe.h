@@ -36,7 +36,9 @@ public:
     void SetHandles(int readFd, int writeFd);
     #endif
 
+
     bool Create();
+    bool HasValidHandles();
     size_t Read(void* buffer, size_t size, bool readFully = false);
     size_t Write(const void* buffer, size_t size, bool writeFully = false);
     void Close();
