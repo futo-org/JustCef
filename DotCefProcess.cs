@@ -1476,11 +1476,6 @@ namespace DotCef
                 searchPaths.Add(Path.Combine(baseDirectory, $"../Frameworks/dotcefnative.app/Contents/MacOS/{nativeFileName}"));
                 searchPaths.Add(Path.Combine(baseDirectory, $"../Frameworks/JustCef.app/Contents/MacOS/{nativeFileName}"));
             }
-            if (OperatingSystem.IsMacOS())
-            {
-                searchPaths.Add(Path.Combine(baseDirectory, $"../Helpers/dotcefnative.app/Contents/MacOS/{nativeFileName}"));
-                searchPaths.Add(Path.Combine(baseDirectory, $"../Helpers/JustCef.app/Contents/MacOS/{nativeFileName}"));
-            }
             searchPaths.Add(Path.Combine(baseDirectory, cefDir, nativeFileName));
             searchPaths.Add(Path.Combine(baseDirectory, nativeFileName));
 
@@ -1495,11 +1490,6 @@ namespace DotCef
                 {
                     searchPaths.Add(Path.Combine(assemblyDirectory, $"../Frameworks/dotcefnative.app/Contents/MacOS/{nativeFileName}"));
                     searchPaths.Add(Path.Combine(assemblyDirectory, $"../Frameworks/JustCef.app/Contents/MacOS/{nativeFileName}"));
-                }
-                if (OperatingSystem.IsMacOS())
-                {
-                    searchPaths.Add(Path.Combine(assemblyDirectory, $"../Helpers/dotcefnative.app/Contents/MacOS/{nativeFileName}"));
-                    searchPaths.Add(Path.Combine(assemblyDirectory, $"../Helpers/JustCef.app/Contents/MacOS/{nativeFileName}"));
                 }
                 searchPaths.Add(Path.Combine(assemblyDirectory, cefDir, nativeFileName));
                 searchPaths.Add(Path.Combine(assemblyDirectory, nativeFileName));
@@ -1517,11 +1507,6 @@ namespace DotCef
                     searchPaths.Add(Path.Combine(executableDirectory, $"../Frameworks/dotcefnative.app/Contents/MacOS/{nativeFileName}"));
                     searchPaths.Add(Path.Combine(executableDirectory, $"../Frameworks/JustCef.app/Contents/MacOS/{nativeFileName}"));
                 }
-                if (OperatingSystem.IsMacOS())
-                {
-                    searchPaths.Add(Path.Combine(executableDirectory, $"../Helpers/dotcefnative.app/Contents/MacOS/{nativeFileName}"));
-                    searchPaths.Add(Path.Combine(executableDirectory, $"../Helpers/JustCef.app/Contents/MacOS/{nativeFileName}"));
-                }
                 searchPaths.Add(Path.Combine(executableDirectory, cefDir, nativeFileName));
                 searchPaths.Add(Path.Combine(executableDirectory, nativeFileName));
             }
@@ -1535,11 +1520,6 @@ namespace DotCef
             {
                 searchPaths.Add(Path.Combine(currentWorkingDirectory, $"../Frameworks/dotcefnative.app/Contents/MacOS/{nativeFileName}"));
                 searchPaths.Add(Path.Combine(currentWorkingDirectory, $"../Frameworks/JustCef.app/Contents/MacOS/{nativeFileName}"));
-            }
-            if (OperatingSystem.IsMacOS())
-            {
-                searchPaths.Add(Path.Combine(currentWorkingDirectory, $"../Helpers/dotcefnative.app/Contents/MacOS/{nativeFileName}"));
-                searchPaths.Add(Path.Combine(currentWorkingDirectory, $"../Helpers/JustCef.app/Contents/MacOS/{nativeFileName}"));
             }
             searchPaths.Add(Path.Combine(currentWorkingDirectory, nativeFileName));
             searchPaths.Add(Path.Combine(currentWorkingDirectory, cefDir, nativeFileName));
