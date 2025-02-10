@@ -201,6 +201,19 @@ int main(int argc, char* argv[]) {
     // Shut down CEF.
     CefShutdown();
 
+    NSError *error = nil;
+    NSFileManager *fileManager = [NSFileManager defaultManager];
+    if ([fileManager fileExistsAtPath:cachePath]) {
+        BOOL removed = [fileManager removeItemAtPath:cachePath error:&error];
+        if (!removed) {
+            NSLog(@"Error deleting cache directory at path %@: %@", cachePath, error);
+        } else {
+            NSLog(@"Successfully deleted cache directory at path %@", cachePath);
+        }
+    } else {
+        NSLog(@"Cache directory does not exist: %@", cachePath);
+    }
+
     // Release the delegate.
     [delegate release];
 
