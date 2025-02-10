@@ -21,8 +21,9 @@ set_property(GLOBAL PROPERTY OS_FOLDERS ON)
 #
 
 # Specify the CEF distribution version.
-set(CEF_VERSION "131.2.7+g9a14dc9+chromium-131.0.6778.86")
+#set(CEF_VERSION "131.2.7+g9a14dc9+chromium-131.0.6778.86")
 #set(CEF_VERSION "131.3.1+gcb062df+chromium-131.0.6778.109")
+set(CEF_VERSION "132.3.2+g4997b2f+chromium-132.0.6834.161")
 
 
 # Sysroot build
