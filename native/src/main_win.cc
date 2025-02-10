@@ -166,6 +166,14 @@ namespace shared {
         // Shut down CEF.
         CefShutdown();
 
+        std::error_code ec;
+        auto removedCount = std::filesystem::remove_all(cachePath, ec);
+        if (ec) {
+          LOG(ERROR) << "Failed to delete cache path: " << cachePath.u8string() << ". Error: " << ec.message();
+        } else {
+          LOG(INFO) << "Deleted " << removedCount << " items from cache path: " << cachePath.u8string();
+        }
+
         return 0;
     }
 
