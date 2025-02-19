@@ -172,13 +172,24 @@ int main(int argc, char* argv[]) {
     CefSettings settings;
     //settings.log_severity = LOGSEVERITY_WARNING;
     
-    NSDate *now = [NSDate date];
-    NSTimeInterval s = [now timeIntervalSince1970];
-    NSString *uniqueIdentifier = [NSString stringWithFormat:@"%lld", (long long)s];
-    NSString *cacheDirectoryName = [@"dotcef_" stringByAppendingString:uniqueIdentifier];
-    NSString *cachePath = [NSTemporaryDirectory() stringByAppendingPathComponent:cacheDirectoryName];
-    CefString(&settings.cache_path) = CefString([cachePath UTF8String]);
-    CefString(&settings.root_cache_path) = CefString([cachePath UTF8String]);
+    // Support a command-line switch to specify a cache path.
+    // If --cache-path is provided, its value is used and not removed on exit.
+    // Otherwise, generate a temporary cache directory.
+    bool autoRemoveCachePath = true;
+    std::string cachePathStd;
+    if (command_line->HasSwitch("cache-path")) {
+        cachePathStd = command_line->GetSwitchValue("cache-path");
+        autoRemoveCachePath = false;
+    } else {
+        NSDate *now = [NSDate date];
+        NSTimeInterval s = [now timeIntervalSince1970];
+        NSString *uniqueIdentifier = [NSString stringWithFormat:@"%lld", (long long)s];
+        NSString *cacheDirectoryName = [@"dotcef_" stringByAppendingString:uniqueIdentifier];
+        NSString *tempCachePath = [NSTemporaryDirectory() stringByAppendingPathComponent:cacheDirectoryName];
+        cachePathStd = std::string([tempCachePath UTF8String]);
+    }
+    CefString(&settings.cache_path) = cachePathStd;
+    CefString(&settings.root_cache_path) = cachePathStd;
 
     // Initialize the CEF browser process. The first browser instance will be
     // created in CefBrowserProcessHandler::OnContextInitialized() after CEF has
@@ -201,17 +212,23 @@ int main(int argc, char* argv[]) {
     // Shut down CEF.
     CefShutdown();
 
-    NSError *error = nil;
-    NSFileManager *fileManager = [NSFileManager defaultManager];
-    if ([fileManager fileExistsAtPath:cachePath]) {
-        BOOL removed = [fileManager removeItemAtPath:cachePath error:&error];
-        if (!removed) {
-            NSLog(@"Error deleting cache directory at path %@: %@", cachePath, error);
+    // Remove the cache directory only if it was auto-generated.
+    if (autoRemoveCachePath) {
+        NSError *error = nil;
+        NSFileManager *fileManager = [NSFileManager defaultManager];
+        NSString *cachePathStr = [NSString stringWithUTF8String:cachePathStd.c_str()];
+        if ([fileManager fileExistsAtPath:cachePathStr]) {
+            BOOL removed = [fileManager removeItemAtPath:cachePathStr error:&error];
+            if (!removed) {
+                NSLog(@"Error deleting cache directory at path %@: %@", cachePathStr, error);
+            } else {
+                NSLog(@"Successfully deleted cache directory at path %@", cachePathStr);
+            }
         } else {
-            NSLog(@"Successfully deleted cache directory at path %@", cachePath);
+            NSLog(@"Cache directory does not exist: %@", cachePathStr);
         }
     } else {
-        NSLog(@"Cache directory does not exist: %@", cachePath);
+        NSLog(@"User-specified cache path preserved: %s", cachePathStd.c_str());
     }
 
     // Release the delegate.

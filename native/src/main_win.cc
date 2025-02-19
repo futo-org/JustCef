@@ -137,13 +137,25 @@ namespace shared {
         CefSettings settings;
         //settings.log_severity = LOGSEVERITY_WARNING;
 
-        auto now = std::chrono::system_clock::now();
-        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
-        std::stringstream ss;
-        ss << ms;
-        std::string uniqueIdentifier = ss.str();
+        // Support the command-line switch to specify a cache path.
+        // If --cache-path is provided, use that path and do not remove it on exit.
+        // Otherwise, create a temporary directory that will be removed after shutdown.
+        std::filesystem::path cachePath;
+        bool autoRemoveCachePath = true;
+        if (command_line->HasSwitch("cache-path")) {
+            std::string userCachePath = command_line->GetSwitchValue("cache-path");
+            cachePath = std::filesystem::u8path(userCachePath);
+            autoRemoveCachePath = false;
+        } else {
+            auto now = std::chrono::system_clock::now();
+            auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+            std::stringstream ss;
+            ss << ms;
+            std::string uniqueIdentifier = ss.str();
+            cachePath = std::filesystem::temp_directory_path() / ("dotcef_" + uniqueIdentifier);
+        }
 
-        std::filesystem::path cachePath = std::filesystem::temp_directory_path() / ("dotcef_" + uniqueIdentifier);
+        // Set the cache paths for CEF.
         CefString(&settings.cache_path) = cachePath.u8string();
         CefString(&settings.root_cache_path) = cachePath.u8string();
 
@@ -166,12 +178,15 @@ namespace shared {
         // Shut down CEF.
         CefShutdown();
 
-        std::error_code ec;
-        auto removedCount = std::filesystem::remove_all(cachePath, ec);
-        if (ec) {
-          LOG(ERROR) << "Failed to delete cache path: " << cachePath.u8string() << ". Error: " << ec.message();
-        } else {
-          LOG(INFO) << "Deleted " << removedCount << " items from cache path: " << cachePath.u8string();
+        // Remove the cache directory only if it was auto-generated.
+        if (autoRemoveCachePath) {
+            std::error_code ec;
+            auto removedCount = std::filesystem::remove_all(cachePath, ec);
+            if (ec) {
+                LOG(ERROR) << "Failed to delete cache path: " << cachePath.u8string() << ". Error: " << ec.message();
+            } else {
+                LOG(INFO) << "Deleted " << removedCount << " items from cache path: " << cachePath.u8string();
+            }
         }
 
         return 0;
