@@ -1168,7 +1168,7 @@ class BrowserViewDelegate : public CefBrowserViewDelegate {
       : _settings(settings), runtime_style_(runtime_style) {}
 
     bool OnPopupBrowserViewCreated(CefRefPtr<CefBrowserView> browser_view, CefRefPtr<CefBrowserView> popup_browser_view, bool is_devtools) override {
-        CefWindow::CreateTopLevelWindow(new WindowDelegate(popup_browser_view, _settings, runtime_style_));
+        CefWindow::CreateTopLevelWindow(new WindowDelegate(popup_browser_view, _settings, is_devtools ? CEF_RUNTIME_STYLE_CHROME : runtime_style_));
         return true;
     }
 
