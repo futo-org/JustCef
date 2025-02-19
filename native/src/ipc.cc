@@ -1161,6 +1161,15 @@ private:
     DISALLOW_COPY_AND_ASSIGN(WindowDelegate);
 };
 
+class DevToolsWindowDelegate : public WindowDelegate {
+public:
+    DevToolsWindowDelegate(CefRefPtr<CefBrowserView> browser_view, const IPCWindowCreate& settings)
+        : WindowDelegate(browser_view, settings, CEF_RUNTIME_STYLE_CHROME) {}
+
+    bool IsFrameless(CefRefPtr<CefWindow> window) override {
+        return false;
+    }
+};
 
 class BrowserViewDelegate : public CefBrowserViewDelegate {
  public:
@@ -1168,7 +1177,11 @@ class BrowserViewDelegate : public CefBrowserViewDelegate {
       : _settings(settings), runtime_style_(runtime_style) {}
 
     bool OnPopupBrowserViewCreated(CefRefPtr<CefBrowserView> browser_view, CefRefPtr<CefBrowserView> popup_browser_view, bool is_devtools) override {
-        CefWindow::CreateTopLevelWindow(new WindowDelegate(popup_browser_view, _settings, is_devtools ? CEF_RUNTIME_STYLE_CHROME : runtime_style_));
+        if (is_devtools) {
+            CefWindow::CreateTopLevelWindow(new DevToolsWindowDelegate(popup_browser_view, _settings));
+        } else {
+            CefWindow::CreateTopLevelWindow(new WindowDelegate(popup_browser_view, _settings, runtime_style_));
+        }
         return true;
     }
 
