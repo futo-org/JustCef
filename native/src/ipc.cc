@@ -1161,19 +1161,33 @@ private:
     DISALLOW_COPY_AND_ASSIGN(WindowDelegate);
 };
 
-class DevToolsWindowDelegate : public WindowDelegate {
-public:
-    DevToolsWindowDelegate(CefRefPtr<CefBrowserView> browser_view, const IPCWindowCreate& settings)
-        : WindowDelegate(browser_view, settings, CEF_RUNTIME_STYLE_CHROME) {}
+class DevToolsWindowDelegate : public CefWindowDelegate {
+    public:
+        explicit DevToolsWindowDelegate(CefRefPtr<CefBrowserView> browser_view)
+            : browser_view_(browser_view) {}
+    
+        void OnWindowCreated(CefRefPtr<CefWindow> window) override {
+            window->AddChildView(browser_view_);
+        }
+    
+        void OnWindowDestroyed(CefRefPtr<CefWindow> window) override {
+            browser_view_ = nullptr;
+        }
+    
+        bool CanClose(CefRefPtr<CefWindow> window) override {
+            CefRefPtr<CefBrowser> browser = browser_view_->GetBrowser();
+            if (browser) {
+                return browser->GetHost()->TryCloseBrowser();
+            }
+            return true;
+        }
 
-    bool IsFrameless(CefRefPtr<CefWindow> window) override {
-        return false;
-    }
-
-    bool CanResize(CefRefPtr<CefWindow> window) override {
-        return true;
-    }
-};
+    private:
+        CefRefPtr<CefBrowserView> browser_view_;
+    
+        IMPLEMENT_REFCOUNTING(DevToolsWindowDelegate);
+        DISALLOW_COPY_AND_ASSIGN(DevToolsWindowDelegate);
+    };
 
 class BrowserViewDelegate : public CefBrowserViewDelegate {
  public:
@@ -1182,7 +1196,7 @@ class BrowserViewDelegate : public CefBrowserViewDelegate {
 
     bool OnPopupBrowserViewCreated(CefRefPtr<CefBrowserView> browser_view, CefRefPtr<CefBrowserView> popup_browser_view, bool is_devtools) override {
         if (is_devtools) {
-            CefWindow::CreateTopLevelWindow(new DevToolsWindowDelegate(popup_browser_view, _settings));
+            CefWindow::CreateTopLevelWindow(new DevToolsWindowDelegate(popup_browser_view));
         } else {
             CefWindow::CreateTopLevelWindow(new WindowDelegate(popup_browser_view, _settings, runtime_style_));
         }
