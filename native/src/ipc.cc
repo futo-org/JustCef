@@ -1169,6 +1169,10 @@ public:
     bool IsFrameless(CefRefPtr<CefWindow> window) override {
         return false;
     }
+
+    bool CanResize(CefRefPtr<CefWindow> window) override {
+        return true;
+    }
 };
 
 class BrowserViewDelegate : public CefBrowserViewDelegate {
