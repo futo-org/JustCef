@@ -100,9 +100,25 @@ namespace shared {
     bool PlatformGetFullscreen(CefRefPtr<CefBrowser> browser)
     {
         CefWindowHandle hwnd = browser->GetHost()->GetWindowHandle();
-        WINDOWPLACEMENT wp = {};
-        GetWindowPlacement(hwnd, &wp);
-        return (wp.showCmd == SW_SHOWMAXIMIZED);
+        LONG_PTR style = GetWindowLongPtr(hwnd, GWL_STYLE);
+        if ((style & WS_POPUP) != WS_POPUP || (style & WS_OVERLAPPEDWINDOW) != 0) {
+            return false;
+        }
+
+        /* TODO if it is too matching enable this
+        RECT windowRect;
+        GetWindowRect(hwnd, &windowRect);
+        HMONITOR hMonitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        MONITORINFO monitorInfo = { sizeof(MONITORINFO) };
+        if (GetMonitorInfo(hMonitor, &monitorInfo)) {
+            RECT monitorRect = monitorInfo.rcMonitor;
+            return (windowRect.left == monitorRect.left &&
+                    windowRect.top == monitorRect.top &&
+                    windowRect.right == monitorRect.right &&
+                    windowRect.bottom == monitorRect.bottom);
+        }*/
+
+        return true;
     }
 
     void PlatformSetMinimumWindowSize(CefRefPtr<CefBrowser> browser, int minWidth, int minHeight)
