@@ -139,9 +139,6 @@ namespace DotCef
             }
         }
 
-        public event Action<string?>? OutputDataReceived;
-        public event Action<string?>? ErrorDataReceived;
-
         private static ArrayPool<byte> BufferPool = ArrayPool<byte>.Create();
         private readonly TaskCompletionSource _readyTaskCompletionSource = new TaskCompletionSource();
 
@@ -221,9 +218,9 @@ namespace DotCef
 
 #if !HARDCODED_PATHS
             string[] searchPaths = GenerateSearchPaths();
-            OutputDataReceived?.Invoke("Searching for dotcefnative, search paths:");
+            Logger.Info<DotCefProcess>("Searching for dotcefnative, search paths:");
             foreach (var path in searchPaths)
-                OutputDataReceived?.Invoke(" - " + path);
+                Logger.Info<DotCefProcess>(" - " + path);
 
             foreach (string path in searchPaths)
             {
@@ -236,12 +233,12 @@ namespace DotCef
                 throw new Exception("Failed to find dotcefnative");
 
             var workingDirectory = GetDirectory(nativePath);
-            OutputDataReceived?.Invoke($"Working directory '{workingDirectory}'.");
-            OutputDataReceived?.Invoke($"CEF exe path '{nativePath}'.");
+            Logger.Info<DotCefProcess>($"Working directory '{workingDirectory}'.");
+            Logger.Info<DotCefProcess>($"CEF exe path '{nativePath}'.");
 
             if (!File.Exists(nativePath))
             {
-                ErrorDataReceived?.Invoke($"File not found at native path '{nativePath}'.");
+                Logger.Error<DotCefProcess>($"File not found at native path '{nativePath}'.");
                 throw new Exception("Native executable not found.");
             }
 #else
@@ -271,12 +268,22 @@ namespace DotCef
                 RedirectStandardOutput = true
             };
 
-            Console.WriteLine(psi.Arguments);
+            Logger.Info<DotCefProcess>(psi.Arguments);
 
             var process = new Process();
             process.StartInfo = psi;
-            process.ErrorDataReceived += (_, args) => ErrorDataReceived?.Invoke(args?.Data);
-            process.OutputDataReceived += (_, args) => OutputDataReceived?.Invoke(args?.Data);
+            process.ErrorDataReceived += (_, args) =>
+            {
+                var d = args?.Data;
+                if (d != null)
+                    Logger.Info<DotCefProcess>(d);
+            };
+            process.OutputDataReceived += (_, args) =>
+            {
+                var d = args?.Data;
+                if (d != null)
+                    Logger.Info<DotCefProcess>(d);
+            };
 
             if (!process.Start())
                 throw new Exception("Failed to start process.");
@@ -297,7 +304,7 @@ namespace DotCef
             {
                 try
                 {
-                    Console.WriteLine("Receive loop started.");
+                    Logger.Info<DotCefProcess>("Receive loop started.");
 
                     byte[] headerBuffer = new byte[HeaderSize];
 
@@ -313,7 +320,7 @@ namespace DotCef
                         int bodySize = (int)size + 4 - HeaderSize;
                         if (bodySize > MaxIPCSize)
                         {
-                            Console.WriteLine("Invalid packet size. Shutting down.");
+                            Logger.Error<DotCefProcess>("Invalid packet size. Shutting down.");
                             Dispose();
                             return;
                         }
@@ -342,7 +349,7 @@ namespace DotCef
                                     if (foundPendingRequest && pendingRequest != null)
                                         pendingRequest.ResponseBodyTaskCompletionSource.SetResult(rentedBodyBuffer != null ? rentedBodyBuffer.Value.Buffer.AsSpan().Slice(0, rentedBodyBuffer.Value.Length).ToArray() : Array.Empty<byte>());
                                     else
-                                        ErrorDataReceived?.Invoke($"Received a packet response for a request that no longer has an awaiter (request id = {requestId}).");
+                                        Logger.Error<DotCefProcess>($"Received a packet response for a request that no longer has an awaiter (request id = {requestId}).");
                                 }
                                 else if (packetType == PacketType.Request)
                                 {
@@ -382,7 +389,7 @@ namespace DotCef
                             }
                             catch (Exception e)
                             {
-                                Console.WriteLine($"An exception occurred in the IPC while handling a packet: {e.Message} {e.StackTrace}");
+                                Logger.Error<DotCefProcess>($"An exception occurred in the IPC while handling a packet", e);
                                 //TODO: If packetType == PacketType.Request, write back an error?
                             }
                             finally
@@ -394,11 +401,11 @@ namespace DotCef
                 }
                 catch (Exception e)
                 {
-                    Console.WriteLine($"An exception occurred in the IPC: {e.Message} {e.StackTrace}");
+                    Logger.Error<DotCefProcess>($"An exception occurred in the IPC", e);
                 }
                 finally
                 {
-                    Console.WriteLine("Receive loop stopped.");
+                    Logger.Info<DotCefProcess>("Receive loop stopped.");
                     Dispose();
                 }
 
@@ -415,7 +422,7 @@ namespace DotCef
                     case OpcodeClient.Ping:
                         break;
                     case OpcodeClient.Print:
-                        Console.WriteLine(reader.ReadString(reader.RemainingSize));
+                        Logger.Info<DotCefProcess>(reader.ReadString(reader.RemainingSize));
                         break;
                     case OpcodeClient.Echo:
                         writer.WriteBytes(reader.ReadBytes(reader.RemainingSize));
@@ -439,13 +446,13 @@ namespace DotCef
                         }
                         break;
                     default:
-                        Console.WriteLine($"Received unhandled opcode {opcode}.");
+                        Logger.Warning<DotCefProcess>($"Received unhandled opcode {opcode}.");
                         break;
                 }
             }
             catch (Exception e)
             {
-                Console.WriteLine($"Exception occurred while processing call '{e.Message}':\n{e.StackTrace}");
+                Logger.Error<DotCefProcess>($"Exception occurred while processing call", e);
                 Debugger.Break();
             }
         }
@@ -610,7 +617,7 @@ namespace DotCef
                 }
                 catch (Exception e)
                 {
-                    Console.WriteLine($"Failed to stream body '{e.Message}': {e.StackTrace}");
+                    Logger.Error<DotCefProcess>($"Failed to stream body", e);
                 }
                 finally
                 {
@@ -713,20 +720,20 @@ namespace DotCef
 
         private void HandleNotification(OpcodeClientNotification opcode, PacketReader reader)
         {
-            Console.WriteLine($"Received notification {opcode}");
+            Logger.Info<DotCefProcess>($"Received notification {opcode}");
 
             switch (opcode)
             {
                 case OpcodeClientNotification.Exit:
-                    Console.WriteLine("CEF process is exiting.");
+                    Logger.Info<DotCefProcess>("CEF process is exiting.");
                     Dispose();
                     break;
                 case OpcodeClientNotification.Ready:
-                    Console.WriteLine("Client is ready.");
+                    Logger.Info<DotCefProcess>("Client is ready.");
                     _readyTaskCompletionSource.SetResult();
                     break;
                 case OpcodeClientNotification.WindowOpened:
-                    Console.WriteLine($"Window opened: {reader.Read<int>()}");
+                    Logger.Info<DotCefProcess>($"Window opened: {reader.Read<int>()}");
                     break;
                 case OpcodeClientNotification.WindowClosed:
                     {
@@ -741,7 +748,7 @@ namespace DotCef
                             }
                         }
 
-                        Console.WriteLine($"Window closed: {window}");
+                        Logger.Info<DotCefProcess>($"Window closed: {window}");
                         window?.InvokeOnClose();
                         break;
                     }
@@ -791,7 +798,7 @@ namespace DotCef
                     break;
                 }
                 default:
-                    Console.WriteLine($"Received unhandled notification opcode {opcode}.");
+                    Logger.Info<DotCefProcess>($"Received unhandled notification opcode {opcode}.");
                     break;
             }
         }
