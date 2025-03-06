@@ -118,7 +118,7 @@ namespace DotCef
             }
             catch (Exception e)
             {
-                Console.WriteLine($"Exception occurred while processing request proxy '{e.Message}':\n{e.StackTrace}");
+                Logger.Error<DotCefWindow>($"Exception occurred while processing request proxy", e);
                 Debugger.Break();
 
                 _ = Task.Run(async () =>
@@ -127,9 +127,9 @@ namespace DotCef
                     {
                         await CloseAsync(true);
                     }
-                    catch
+                    catch (Exception ex)
                     {
-                        Console.WriteLine($"Exception occurred while trying to close window after request proxy exception.");
+                        Logger.Error<DotCefWindow>($"Exception occurred while trying to close window after request proxy exception.", ex);
                     }
                 });
 
@@ -153,7 +153,7 @@ namespace DotCef
             }
             catch (Exception e)
             {
-                Console.WriteLine($"Exception occurred while processing modify request '{e.Message}':\n{e.StackTrace}");
+                Logger.Error<DotCefWindow>($"Exception occurred while processing modify request", e);
                 Debugger.Break();
 
                 _ = Task.Run(async () =>
@@ -162,9 +162,9 @@ namespace DotCef
                     {
                         await CloseAsync(true);
                     }
-                    catch
+                    catch (Exception ex)
                     {
-                        Console.WriteLine($"Exception occurred while trying to close window after modify request exception.");
+                        Logger.Error<DotCefWindow>($"Exception occurred while trying to close window after modify request exception.", ex);
                     }
                 });
                 return request;
