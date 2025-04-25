@@ -563,6 +563,12 @@ void IPC::HandleRequest(OpcodeController opcode, PacketReader& reader, PacketWri
         case OpcodeController::WindowRemoveUrlToProxy:
             HandleRemoveUrlToProxy(reader, writer);
             break;
+        case OpcodeController::WindowAddDomainToProxy:
+            HandleAddDomainToProxy(reader, writer);
+            break;
+        case OpcodeController::WindowRemoveDomainToProxy:
+            HandleRemoveDomainToProxy(reader, writer);
+            break;
         case OpcodeController::WindowAddUrlToModify:
             HandleAddUrlToModify(reader, writer);
             break;
@@ -718,7 +724,7 @@ std::unique_ptr<IPCProxyResponse> IPC::WindowProxyRequest(int32_t identifier, Ce
         }
 
         std::optional<std::string> mediaType = std::nullopt;
-        std::map<std::string, std::string> responseHeaders;
+        std::multimap<std::string, std::string> responseHeaders;
         for (uint32_t i = 0; i < *responseHeaderCount; ++i) 
         {
             std::optional<std::string> key = reader.readSizePrefixedString();
@@ -744,7 +750,7 @@ std::unique_ptr<IPCProxyResponse> IPC::WindowProxyRequest(int32_t identifier, Ce
                 mediaType = semicolonPos != std::string::npos ? (*value).substr(0, semicolonPos) : *value;
             }
 
-            responseHeaders.insert(std::make_pair(*key, *value));
+            responseHeaders.insert({ *key, *value });
         }
 
         // Deserialize elements
@@ -2384,13 +2390,13 @@ void HandleRemoveUrlToProxy(PacketReader& reader, PacketWriter& writer)
     std::optional<std::string> url = reader.readSizePrefixedString();
     if (!identifier || !url)
     {
-        LOG(ERROR) << "HandleAddUrlToProxy called without valid data. Ignored.";
+        LOG(ERROR) << "HandleRemoveUrlToProxy called without valid data. Ignored.";
         return;
     }
     CefRefPtr<CefBrowser> browser = shared::ClientManager::GetInstance()->AcquirePointer(*identifier);
     if (!browser)
     {
-        LOG(ERROR) << "HandleAddUrlToProxy called while CefBrowser is already closed. Ignored.";
+        LOG(ERROR) << "HandleRemoveUrlToProxy called while CefBrowser is already closed. Ignored.";
         return;
     }
 
@@ -2398,12 +2404,96 @@ void HandleRemoveUrlToProxy(PacketReader& reader, PacketWriter& writer)
     Client* pClient = (Client*)client.get();
     if (!pClient) 
     {
-        LOG(ERROR) << "HandleAddUrlToProxy client is null. Ignored.";
+        LOG(ERROR) << "HandleRemoveUrlToProxy client is null. Ignored.";
         return;
     }
 
     pClient->RemoveUrlToProxy(*url);
     LOG(INFO) << "Removed URL to proxy: " + *url;
+}
+
+void HandleAddDomainToProxy(PacketReader& reader, PacketWriter& writer)
+{
+    if (!CefCurrentlyOn(TID_UI)) 
+    {
+        std::promise<void> promise;
+        std::future<void> future = promise.get_future();
+
+        CefPostTask(TID_UI, base::BindOnce([](std::promise<void> promise, PacketReader& reader, PacketWriter& writer) {
+            HandleAddDomainToProxy(reader, writer);
+            promise.set_value();
+        }, std::move(promise), std::ref(reader), std::ref(writer)));
+
+        future.wait();
+        return;
+    }
+
+    std::optional<int32_t> identifier = reader.read<int32_t>();
+    std::optional<std::string> domain = reader.readSizePrefixedString();
+    if (!identifier || !domain)
+    {
+        LOG(ERROR) << "HandleAddDomainToProxy called without valid data. Ignored.";
+        return;
+    }
+    CefRefPtr<CefBrowser> browser = shared::ClientManager::GetInstance()->AcquirePointer(*identifier);
+    if (!browser)
+    {
+        LOG(ERROR) << "HandleAddDomainToProxy called while CefBrowser is already closed. Ignored.";
+        return;
+    }
+
+    CefRefPtr<CefClient> client = browser->GetHost()->GetClient();
+    Client* pClient = (Client*)client.get();
+    if (!pClient) 
+    {
+        LOG(ERROR) << "HandleAddDomainToProxy client is null. Ignored.";
+        return;
+    }
+
+    pClient->AddDomainToProxy(*domain);
+    LOG(INFO) << "Added domain to proxy: " + *domain;
+}
+
+void HandleRemoveDomainToProxy(PacketReader& reader, PacketWriter& writer)
+{
+    if (!CefCurrentlyOn(TID_UI)) 
+    {
+        std::promise<void> promise;
+        std::future<void> future = promise.get_future();
+
+        CefPostTask(TID_UI, base::BindOnce([](std::promise<void> promise, PacketReader& reader, PacketWriter& writer) {
+            HandleRemoveDomainToProxy(reader, writer);
+            promise.set_value();
+        }, std::move(promise), std::ref(reader), std::ref(writer)));
+
+        future.wait();
+        return;
+    }
+
+    std::optional<int32_t> identifier = reader.read<int32_t>();
+    std::optional<std::string> url = reader.readSizePrefixedString();
+    if (!identifier || !url)
+    {
+        LOG(ERROR) << "HandleRemoveDomainToProxy called without valid data. Ignored.";
+        return;
+    }
+    CefRefPtr<CefBrowser> browser = shared::ClientManager::GetInstance()->AcquirePointer(*identifier);
+    if (!browser)
+    {
+        LOG(ERROR) << "HandleRemoveDomainToProxy called while CefBrowser is already closed. Ignored.";
+        return;
+    }
+
+    CefRefPtr<CefClient> client = browser->GetHost()->GetClient();
+    Client* pClient = (Client*)client.get();
+    if (!pClient) 
+    {
+        LOG(ERROR) << "HandleRemoveDomainToProxy client is null. Ignored.";
+        return;
+    }
+
+    pClient->RemoveDomainToProxy(*url);
+    LOG(INFO) << "Removed domain to proxy: " + *url;
 }
 
 void HandleAddUrlToModify(PacketReader& reader, PacketWriter& writer)

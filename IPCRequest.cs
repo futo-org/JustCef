@@ -26,6 +26,6 @@ public class IPCRequest
 {
     public required string Method { get; set; }
     public required string Url { get; set; }
-    public required Dictionary<string, string> Headers { get; set; }
+    public required Dictionary<string, List<string>> Headers { get; set; }
     public required List<IPCProxyBodyElement> Elements { get; set; }
 }

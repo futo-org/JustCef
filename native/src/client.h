@@ -64,6 +64,8 @@ class Client : public CefClient,
     void OverrideIcon(CefRefPtr<CefBrowser> browser, const std::string& iconPath);
     void AddUrlToProxy(const std::string& url);
     void RemoveUrlToProxy(const std::string& url);
+    void AddDomainToProxy(const std::string& domain);
+    void RemoveDomainToProxy(const std::string& domain);
     void AddUrlToModify(const std::string& url);
     void RemoveUrlToModify(const std::string& url);
     void AddDevToolsEventMethod(CefRefPtr<CefBrowser> browser, const std::string& method);
@@ -83,6 +85,12 @@ class Client : public CefClient,
     std::string _titleOverride;
     std::mutex _proxyRequestsSetMutex;
     std::unordered_set<std::string> _proxyRequestsSet;
+    std::mutex _proxyDomainsMutex;
+    std::unordered_set<std::string> _exactProxyDomains;
+    std::unordered_set<std::string> _leadingDotProxyDomains;
+    std::mutex _proxyCacheMutex;
+    std::unordered_set<std::string> _proxyCache;
+    std::unordered_set<std::string> _negativeProxyCache;
     std::mutex _modifyRequestsSetMutex;
     std::unordered_set<std::string> _modifyRequestsSet;
     std::mutex _devToolsEventMethodsSetMutex;
