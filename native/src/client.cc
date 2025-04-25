@@ -136,6 +136,74 @@ static LRESULT CALLBACK WindowProcHook(HWND hwnd, UINT uMsg, WPARAM wParam, LPAR
 
 #endif
 
+inline bool StartsWith(const std::string& str, const std::string& prefix) {
+    return str.size() >= prefix.size() && str.compare(0, prefix.size(), prefix) == 0;
+}
+
+inline bool EndsWith(const std::string& str, const std::string& suffix) {
+    return str.size() >= suffix.size() && str.compare(str.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
+std::string ExtractHostFromURL(const std::string& url) 
+{
+    // Find scheme
+    size_t scheme_pos = url.find("://");
+    if (scheme_pos == std::string::npos) {
+        LOG(ERROR) << "URL without scheme: " << url;
+        return CefString();
+    }
+    size_t after_scheme = scheme_pos + 3;
+
+    // Find end of authority
+    size_t authority_end = url.find_first_of("/?#", after_scheme);
+    if (authority_end == std::string::npos) {
+        authority_end = url.length();
+    }
+
+    // Extract authority and find last '@' to handle userinfo
+    std::string authority = url.substr(after_scheme, authority_end - after_scheme);
+    size_t at_pos = authority.rfind('@');
+    size_t host_start = (at_pos != std::string::npos) ? (after_scheme + at_pos + 1) : after_scheme;
+
+    // Extract host
+    size_t end;
+    if (url[host_start] == '[') {  // IPv6
+        end = url.find(']', host_start + 1);
+        if (end == std::string::npos || end > authority_end) {
+            LOG(ERROR) << "Invalid IPv6 URL: " << url;
+            return CefString();
+        }
+        end++;  // Include ']'
+    } else {
+        end = url.find_first_of(":/?#", host_start);
+        if (end == std::string::npos || end > authority_end) {
+            end = authority_end;
+        }
+    }
+
+    return url.substr(host_start, end - host_start);
+}
+
+bool MatchesDomain(const std::string& request_host, const std::string& cookie_domain) {
+    if (cookie_domain.size() < 2 || cookie_domain[0] != '.') {
+        return false; // Invalid cookie domain
+    }
+    size_t norm_size = cookie_domain.size() - 1; // Length without the leading dot
+
+    // Exact match: request_host equals cookie_domain without the leading dot
+    if (request_host.size() == norm_size && request_host.compare(0, norm_size, cookie_domain, 1, norm_size) == 0) {
+        return true;
+    }
+
+    // Subdomain match: request_host ends with '.' + cookie_domain without leading dot
+    if (request_host.size() > norm_size + 1 &&
+        request_host[request_host.size() - norm_size - 1] == '.' &&
+        request_host.compare(request_host.size() - norm_size, norm_size, cookie_domain, 1, norm_size) == 0) {
+        return true;
+    }
+    return false;
+}
+
 Client::Client(const IPCWindowCreate& settings) : settings(settings) {}
 
 void Client::OnTitleChange(CefRefPtr<CefBrowser> browser, const CefString& title) 
@@ -493,7 +561,7 @@ public:
 
         CefResponse::HeaderMap headerMap;
         for (auto& header : _response->headers) {
-            headerMap.insert(std::make_pair(header.first, header.second));
+            headerMap.insert({ header.first, header.second });
         }
 
         response->SetHeaderMap(headerMap);
@@ -561,12 +629,63 @@ CefRefPtr<CefResourceHandler> Client::GetResourceHandler(CefRefPtr<CefBrowser> b
             return new ProxyResourceHandler(browser->GetIdentifier(), request);
     }
 
-    return nullptr;
+    {
+        std::lock_guard<std::mutex> lk(_proxyDomainsMutex);
+        bool hasProxyDomains = _exactProxyDomains.size() > 0 || _leadingDotProxyDomains.size() > 0;
+        if (!hasProxyDomains)
+            return nullptr;
+    }
+
+    std::string req_host = ExtractHostFromURL(request->GetURL());
+    if (req_host.size() < 1)
+        return nullptr;
+
+    // Check caches first
+    {
+        std::lock_guard<std::mutex> lk(_proxyCacheMutex);
+        if (_proxyCache.find(req_host) != _proxyCache.end())
+            return new ProxyResourceHandler(browser->GetIdentifier(), request);
+        if (_negativeProxyCache.find(req_host) != _negativeProxyCache.end())
+            return nullptr; // Known non-matching host
+    }
+
+    // Check exact matches and leading-dot domains
+    bool matchedDomain = false;
+    {
+        std::lock_guard<std::mutex> lk(_proxyDomainsMutex);
+        // Check exact matches
+        if (_exactProxyDomains.find(req_host) != _exactProxyDomains.end()) 
+            matchedDomain = true;
+        else 
+        {
+            // Check leading-dot domains for cookie domain matches
+            for (const auto& domain : _leadingDotProxyDomains) 
+            {
+                if (MatchesDomain(req_host, domain)) 
+                {
+                    matchedDomain = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    // Cache the result
+    {
+        std::lock_guard<std::mutex> lk(_proxyCacheMutex);
+        if (matchedDomain) {
+            _proxyCache.insert(req_host);
+        } else {
+            _negativeProxyCache.insert(req_host);
+        }
+    }
+    
+    return matchedDomain ? new ProxyResourceHandler(browser->GetIdentifier(), request) : nullptr;
 }
 
 cef_return_value_t Client::OnBeforeResourceLoad(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefRefPtr<CefRequest> request, CefRefPtr<CefCallback> callback) {
     int requestIdentifier = (int)request->GetIdentifier();
-    auto modifyRequestIfNeeded = [&](const std::string& url) 
+    auto modifyRequestIfNeeded = [&](const std::string& url)
     {
         bool isModified = false;
         {
@@ -663,6 +782,74 @@ void Client::RemoveUrlToProxy(const std::string& url)
 {
     std::lock_guard<std::mutex> lk(_proxyRequestsSetMutex);
     _proxyRequestsSet.erase(url);
+}
+
+void Client::AddDomainToProxy(const std::string& domain) 
+{
+    // Normalize for consistency
+    bool is_leading_dot = StartsWith(domain, ".");
+    std::string normalized_domain = is_leading_dot ? domain.substr(1) : domain;
+
+    {
+        std::lock_guard<std::mutex> lk(_proxyDomainsMutex);
+        if (is_leading_dot) 
+        {
+            _leadingDotProxyDomains.insert(domain);
+            _exactProxyDomains.erase(normalized_domain); // Avoid duplication
+        } 
+        else 
+        {
+            _exactProxyDomains.insert(domain);
+            _leadingDotProxyDomains.erase("." + domain); // Avoid duplication
+        }
+    }
+
+    // Invalidate negative cache for this domain and its subdomains
+    {
+        std::lock_guard<std::mutex> cache_lk(_proxyCacheMutex);
+        std::vector<std::string> to_remove;
+        for (const auto& cached_host : _negativeProxyCache) 
+        {
+            if (cached_host == normalized_domain || // Exact match
+                (is_leading_dot && EndsWith(cached_host, "." + normalized_domain))) { // Subdomain match
+                to_remove.push_back(cached_host);
+            }
+        }
+        for (const auto& host : to_remove) {
+            _negativeProxyCache.erase(host);
+        }
+    }
+}
+
+void Client::RemoveDomainToProxy(const std::string& domain) 
+{
+    // Normalize for consistency
+    bool is_leading_dot = StartsWith(domain, ".");
+    std::string normalized_domain = is_leading_dot ? domain.substr(1) : domain;
+
+    {
+        std::lock_guard<std::mutex> lk(_proxyDomainsMutex);
+        if (is_leading_dot) {
+            _leadingDotProxyDomains.erase(domain);
+        } else {
+            _exactProxyDomains.erase(domain);
+        }
+    }
+
+    // Invalidate positive cache for this domain and its subdomains
+    {
+        std::lock_guard<std::mutex> cache_lk(_proxyCacheMutex);
+        std::vector<std::string> to_remove;
+        for (const auto& cached_host : _proxyCache) {
+            if (cached_host == normalized_domain || // Exact match
+                (is_leading_dot && EndsWith(cached_host, "." + normalized_domain))) { // Subdomain match
+                to_remove.push_back(cached_host);
+            }
+        }
+        for (const auto& host : to_remove) {
+            _proxyCache.erase(host);
+        }
+    }
 }
 
 void Client::AddUrlToModify(const std::string& url)

@@ -84,7 +84,9 @@ enum class OpcodeController : uint8_t {
     WindowGetSize = 49,
     WindowSetSize = 50,
     WindowAddDevToolsEventMethod = 51,
-    WindowRemoveDevToolsEventMethod = 52
+    WindowRemoveDevToolsEventMethod = 52,
+    WindowAddDomainToProxy = 53,
+    WindowRemoveDomainToProxy = 54
 };
 
 //Notifications from controller
@@ -162,7 +164,7 @@ typedef struct _IPCProxyResponse
     int32_t status_code = 0;
     std::string status_text = "";
     std::optional<std::string> media_type = std::nullopt;
-    std::map<std::string, std::string> headers = {};
+    std::multimap<std::string, std::string> headers = {};
     std::optional<std::vector<uint8_t>> body = std::nullopt;
     std::shared_ptr<DataStream> bodyStream = nullptr;
 } IPCProxyResponse;
@@ -313,6 +315,8 @@ void HandleWindowSetTitle(PacketReader& reader, PacketWriter& writer);
 void HandleWindowSetIcon(PacketReader& reader, PacketWriter& writer);
 void HandleAddUrlToProxy(PacketReader& reader, PacketWriter& writer);
 void HandleRemoveUrlToProxy(PacketReader& reader, PacketWriter& writer);
+void HandleAddDomainToProxy(PacketReader& reader, PacketWriter& writer);
+void HandleRemoveDomainToProxy(PacketReader& reader, PacketWriter& writer);
 void HandleAddUrlToModify(PacketReader& reader, PacketWriter& writer);
 void HandleRemoveUrlToModify(PacketReader& reader, PacketWriter& writer);
 void HandleWindowGetSize(PacketReader& reader, PacketWriter& writer);

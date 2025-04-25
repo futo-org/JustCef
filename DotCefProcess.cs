@@ -78,7 +78,9 @@ namespace DotCef
             WindowGetSize = 49,
             WindowSetSize = 50,
             WindowAddDevToolsEventMethod = 51,
-            WindowRemoveDevToolsEventMethod = 52
+            WindowRemoveDevToolsEventMethod = 52,
+            WindowAddDomainToProxy = 53,
+            WindowRemoveDomainToProxy = 54
         }
 
         public enum OpcodeControllerNotification : byte
@@ -242,7 +244,7 @@ namespace DotCef
                 throw new Exception("Native executable not found.");
             }
 #else
-            OutputDataReceived?.Invoke($"USING HARDCODED PATHS.");
+            Logger.Info<DotCefProcess>($"USING HARDCODED PATHS.");
 #endif
 
             ProcessStartInfo psi = new ProcessStartInfo
@@ -251,12 +253,12 @@ namespace DotCef
                 FileName = OperatingSystem.IsMacOS()
                     ? "/Users/koen/Projects/Grayjay.Desktop/JustCef/native/build/Debug/dotcefnative.app/Contents/MacOS/dotcefnative"
                     : OperatingSystem.IsWindows() 
-                        ? "C:\\Users\\koenj\\OneDrive\\Documenten\\Projects\\Grayjay.Desktop\\JustCef\\native\\build\\Release\\dotcefnative.exe"
+                        ? """C:\Users\Koen\Projects\Grayjay.Desktop\JustCef\native\build\Release\dotcefnative.exe"""
                         : "/home/koen/Projects/JustCef/native/build/Debug/dotcefnative",
                 WorkingDirectory = OperatingSystem.IsMacOS()
                     ? "/Users/koen/Projects/Grayjay.Desktop/JustCef/native/build/Debug/"
                     : OperatingSystem.IsWindows() 
-                        ? "C:\\Users\\koenj\\OneDrive\\Documenten\\Projects\\Grayjay.Desktop\\JustCef\\native\\build\\Release\\"
+                        ? """C:\Users\Koen\Projects\Grayjay.Desktop\JustCef\native\build\Release\"""
                         : "/home/koen/Projects/JustCef/native/build/Debug/",
 #else
                 FileName = nativePath,
@@ -469,13 +471,16 @@ namespace DotCef
 
             // Deserialize headers
             int headerCount = reader.Read<int>();
-            var headers = new Dictionary<string, string>(StringComparer.InvariantCultureIgnoreCase);
+            var headers = new Dictionary<string, List<string>>(StringComparer.InvariantCultureIgnoreCase);
 
             for (int i = 0; i < headerCount; i++)
             {
                 string key = reader.ReadSizePrefixedString()!;
                 string value = reader.ReadSizePrefixedString()!;
-                headers[key] = value;
+                if (headers.TryGetValue(key, out var v))
+                    v.Add(value);
+                else
+                    headers[key] = new List<string>([ value ]);
             }
 
             // Deserialize elements
@@ -516,9 +521,9 @@ namespace DotCef
             if (response == null)
                 return;
 
-            var responseHeaders = new Dictionary<string, string>(response.Headers.Where(header =>
+            var responseHeaders = new Dictionary<string, List<string>>(response.Headers.Where(header =>
             {
-                if (string.Equals(header.Key, "transfer-encoding", StringComparison.InvariantCultureIgnoreCase) && string.Equals(header.Value, "chunked", StringComparison.InvariantCultureIgnoreCase))
+                if (string.Equals(header.Key, "transfer-encoding", StringComparison.InvariantCultureIgnoreCase) && header.Value.Any(v => string.Equals(v, "chunked", StringComparison.InvariantCultureIgnoreCase)))
                 {
                     return false;
                 }
@@ -534,7 +539,7 @@ namespace DotCef
             foreach (var header in responseHeaders)
             {
                 //Do not add transfer-encoding header
-                if (string.Equals(header.Key, "transfer-encoding", StringComparison.InvariantCultureIgnoreCase) && string.Equals(header.Value, "chunked", StringComparison.InvariantCultureIgnoreCase))
+                if (string.Equals(header.Key, "transfer-encoding", StringComparison.InvariantCultureIgnoreCase) && header.Value.Any(v => string.Equals(v, "chunked", StringComparison.InvariantCultureIgnoreCase)))
                     continue;
 
                 writer.WriteSizePrefixedString(header.Key);
@@ -543,7 +548,7 @@ namespace DotCef
 
             bool hasContentType = responseHeaders.ContainsKey("content-type");
             bool isHead = string.Compare(method, "head", true) == 0;
-            int? contentLength = response.Headers.TryGetValue("content-length", out var contentLengthString) ? int.Parse(contentLengthString) : null;
+            int? contentLength = response.Headers.TryGetValue("content-length", out var contentLengths) && contentLengths.Count > 0 ? int.Parse(contentLengths[0]) : null;
 
             if (response.BodyStream != null)
             {
@@ -646,12 +651,15 @@ namespace DotCef
 
             // Deserialize headers
             int headerCount = reader.Read<int>();
-            var headers = new Dictionary<string, string>(StringComparer.InvariantCultureIgnoreCase);
+            var headers = new Dictionary<string, List<string>>(StringComparer.InvariantCultureIgnoreCase);
             for (int i = 0; i < headerCount; i++)
             {
                 string key = reader.ReadSizePrefixedString()!;
                 string value = reader.ReadSizePrefixedString()!;
-                headers[key] = value;
+                if (headers.TryGetValue(key, out var v))
+                    v.Add(value);
+                else
+                    headers[key] = new List<string>([ value ]);
             }
 
             // Deserialize elements
@@ -699,8 +707,11 @@ namespace DotCef
             writer.Write(modifiedRequest.Headers.Count);
             foreach (var header in modifiedRequest.Headers)
             {
-                writer.WriteSizePrefixedString(header.Key);
-                writer.WriteSizePrefixedString(header.Value);
+                foreach (var v in header.Value)
+                {
+                    writer.WriteSizePrefixedString(header.Key);
+                    writer.WriteSizePrefixedString(v);
+                }
             }
 
             // Serialize elements
@@ -1376,6 +1387,20 @@ namespace DotCef
         public async Task WindowRemoveUrlToProxyAsync(int identifier, string url, CancellationToken cancellationToken = default)
         {
             await CallAsync(OpcodeController.WindowRemoveUrlToProxy, new PacketWriter()
+                .Write(identifier)
+                .WriteSizePrefixedString(url), cancellationToken);
+        }
+
+        public async Task WindowAddDomainToProxyAsync(int identifier, string url, CancellationToken cancellationToken = default)
+        {
+            await CallAsync(OpcodeController.WindowAddDomainToProxy, new PacketWriter()
+                .Write(identifier)
+                .WriteSizePrefixedString(url), cancellationToken);
+        }
+
+        public async Task WindowRemoveDomainToProxyAsync(int identifier, string url, CancellationToken cancellationToken = default)
+        {
+            await CallAsync(OpcodeController.WindowRemoveDomainToProxy, new PacketWriter()
                 .Write(identifier)
                 .WriteSizePrefixedString(url), cancellationToken);
         }

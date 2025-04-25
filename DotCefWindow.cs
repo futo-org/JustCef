@@ -59,6 +59,10 @@ namespace DotCef
             => await _process.WindowAddUrlToProxyAsync(Identifier, url, cancellationToken);
         public async Task RemoveUrlToProxyAsync(string url, CancellationToken cancellationToken = default)
             => await _process.WindowRemoveUrlToProxyAsync(Identifier, url, cancellationToken);
+        public async Task AddDomainToProxyAsync(string url, CancellationToken cancellationToken = default)
+            => await _process.WindowAddDomainToProxyAsync(Identifier, url, cancellationToken);
+        public async Task RemoveDomainToProxyAsync(string url, CancellationToken cancellationToken = default)
+            => await _process.WindowRemoveDomainToProxyAsync(Identifier, url, cancellationToken);
         public async Task AddUrlToModifyAsync(string url, CancellationToken cancellationToken = default)
             => await _process.WindowAddUrlToModifyAsync(Identifier, url, cancellationToken);
         public async Task RemoveUrlToModifyAsync(string url, CancellationToken cancellationToken = default)
