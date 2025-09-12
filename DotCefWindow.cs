@@ -42,6 +42,8 @@ namespace DotCef
         public async Task<(int X, int Y)> GetPositionAsync(CancellationToken cancellationToken = default) => await _process.WindowGetPositionAsync(Identifier, cancellationToken);
         public async Task SetSizeAsync(int width, int height, CancellationToken cancellationToken = default) => await _process.WindowSetSizeAsync(Identifier, width, height, cancellationToken);
         public async Task<(int Width, int Height)> GetSizeAsync(CancellationToken cancellationToken = default) => await _process.WindowGetSizeAsync(Identifier, cancellationToken);
+        public async Task SetZoomAsync(double zoom, CancellationToken cancellationToken = default) => await _process.WindowSetZoomAsync(Identifier, zoom, cancellationToken);
+        public async Task<double> GetZoomAsync(CancellationToken cancellationToken = default) => await _process.WindowGetZoomAsync(Identifier, cancellationToken);
         public async Task CloseAsync(bool forceClose = false, CancellationToken cancellationToken = default) => await _process.WindowCloseAsync(Identifier, forceClose, cancellationToken);
         public async Task SetFullscreenAsync(bool fullscreen, CancellationToken cancellationToken = default) => await _process.WindowSetFullscreenAsync(Identifier, fullscreen, cancellationToken);
         public async Task RequestFocusAsync(CancellationToken cancellationToken = default) => await _process.RequestFocusAsync(Identifier, cancellationToken);

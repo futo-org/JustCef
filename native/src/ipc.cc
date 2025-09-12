@@ -472,6 +472,12 @@ void IPC::HandleRequest(OpcodeController opcode, PacketReader& reader, PacketWri
         case OpcodeController::WindowLoadUrl:
             HandleWindowLoadUrl(reader, writer);
             break;
+        case OpcodeController::WindowSetZoom:
+            HandleWindowSetZoom(reader, writer);
+            break;
+        case OpcodeController::WindowGetZoom:
+            HandleWindowGetZoom(reader, writer);
+            break;
         case OpcodeController::WindowRequestFocus:
             HandleWindowRequestFocus(reader, writer);
             break;
@@ -2009,6 +2015,71 @@ void HandleWindowLoadUrl(PacketReader& reader, PacketWriter& writer)
     }
     
     browser->GetMainFrame()->LoadURL(*url);
+}
+
+void HandleWindowSetZoom(PacketReader& reader, PacketWriter& writer)
+{
+    if (!CefCurrentlyOn(TID_UI)) 
+    {
+        std::promise<void> promise;
+        std::future<void> future = promise.get_future();
+
+        CefPostTask(TID_UI, base::BindOnce([](std::promise<void> promise, PacketReader& reader, PacketWriter& writer) {
+            HandleWindowSetZoom(reader, writer);
+            promise.set_value();
+        }, std::move(promise), std::ref(reader), std::ref(writer)));
+
+        future.wait();
+        return;
+    }
+
+    std::optional<int32_t> identifier = reader.read<int32_t>();
+    std::optional<double> zoom = reader.read<double>();
+    if (!identifier || !zoom)
+    {
+        LOG(ERROR) << "HandleWindowSetZoom called without valid data. Ignored.";
+        return;
+    }
+    CefRefPtr<CefBrowser> browser = shared::ClientManager::GetInstance()->AcquirePointer(*identifier);
+    if (!browser)
+    {
+        LOG(ERROR) << "HandleWindowSetZoom called while CefBrowser is already closed. Ignored.";
+        return;
+    }
+    
+    browser->GetHost()->SetZoomLevel(*zoom);
+}
+
+void HandleWindowGetZoom(PacketReader& reader, PacketWriter& writer)
+{
+    if (!CefCurrentlyOn(TID_UI)) 
+    {
+        std::promise<void> promise;
+        std::future<void> future = promise.get_future();
+
+        CefPostTask(TID_UI, base::BindOnce([](std::promise<void> promise, PacketReader& reader, PacketWriter& writer) {
+            HandleWindowGetZoom(reader, writer);
+            promise.set_value();
+        }, std::move(promise), std::ref(reader), std::ref(writer)));
+
+        future.wait();
+        return;
+    }
+
+    std::optional<int32_t> identifier = reader.read<int32_t>();
+    if (!identifier)
+    {
+        LOG(ERROR) << "HandleWindowGetZoom called without valid data. Ignored.";
+        return;
+    }
+    CefRefPtr<CefBrowser> browser = shared::ClientManager::GetInstance()->AcquirePointer(*identifier);
+    if (!browser)
+    {
+        LOG(ERROR) << "HandleWindowGetZoom called while CefBrowser is already closed. Ignored.";
+        return;
+    }
+    
+    writer.write<double>(browser->GetHost()->GetZoomLevel());
 }
 
 void HandleWindowRequestFocus(PacketReader& reader, PacketWriter& writer)

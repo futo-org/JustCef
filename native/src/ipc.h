@@ -41,7 +41,7 @@ enum class OpcodeController : uint8_t {
     WindowLoadUrl = 6,
     //WindowLoadHtml = 7,
     //WindowExecuteJavascript = 8, //string js
-    //WindowSetZoom = 9, //double zoom
+    WindowSetZoom = 9, //double zoom
     //WindowSetResizable = 10, //bool value
     //WindowSetWindowless = 11, //bool value
     //WindowGetWindowSize = 12,
@@ -86,7 +86,8 @@ enum class OpcodeController : uint8_t {
     WindowAddDevToolsEventMethod = 51,
     WindowRemoveDevToolsEventMethod = 52,
     WindowAddDomainToProxy = 53,
-    WindowRemoveDomainToProxy = 54
+    WindowRemoveDomainToProxy = 54,
+    WindowGetZoom = 55
 };
 
 //Notifications from controller
@@ -323,6 +324,8 @@ void HandleWindowGetSize(PacketReader& reader, PacketWriter& writer);
 void HandleWindowSetSize(PacketReader& reader, PacketWriter& writer);
 void HandleAddDevToolsEventMethod(PacketReader& reader, PacketWriter& writer);
 void HandleRemoveDevToolsEventMethod(PacketReader& reader, PacketWriter& writer);
+void HandleWindowSetZoom(PacketReader& reader, PacketWriter& writer);
+void HandleWindowGetZoom(PacketReader& reader, PacketWriter& writer);
 CefRefPtr<Client> CreateBrowserWindow(const IPCWindowCreate& windowCreate);
 
 #endif //IPC_H
