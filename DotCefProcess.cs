@@ -35,7 +35,7 @@ namespace DotCef
             WindowLoadUrl = 6,
             //WindowLoadHtml = 7,
             //WindowExecuteJavascript = 8,
-            //WindowSetZoom = 9,
+            WindowSetZoom = 9,
             //WindowSetResizable = 10,
             //WindowSetWindowless = 11,
             //WindowGetWindowSize = 12,
@@ -80,7 +80,8 @@ namespace DotCef
             WindowAddDevToolsEventMethod = 51,
             WindowRemoveDevToolsEventMethod = 52,
             WindowAddDomainToProxy = 53,
-            WindowRemoveDomainToProxy = 54
+            WindowRemoveDomainToProxy = 54,
+            WindowGetZoom = 55
         }
 
         public enum OpcodeControllerNotification : byte
@@ -1280,6 +1281,19 @@ namespace DotCef
             var width = reader.Read<int>();
             var height = reader.Read<int>();
             return (width, height);
+        }
+
+        public async Task WindowSetZoomAsync(int identifier, double zoom, CancellationToken cancellationToken = default)
+        {
+            await CallAsync(OpcodeController.WindowSetZoom, new PacketWriter()
+                .Write(identifier)
+                .Write(zoom), cancellationToken);
+        }
+
+        public async Task<double> WindowGetZoomAsync(int identifier, CancellationToken cancellationToken = default)
+        {
+            var reader = await CallAsync(OpcodeController.WindowGetZoom, new PacketWriter().Write(identifier), cancellationToken);
+            return reader.Read<double>();
         }
 
         public async Task WindowSetDevelopmentToolsEnabledAsync(int identifier, bool developmentToolsEnabled, CancellationToken cancellationToken = default)
