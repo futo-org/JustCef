@@ -9,6 +9,7 @@
 #include "include/cef_stream.h"
 #include "include/views/cef_browser_view.h"
 #include "include/views/cef_window.h"
+#include "include/views/cef_fill_layout.h"
 #include "include/wrapper/cef_closure_task.h"
 #include "include/wrapper/cef_stream_resource_handler.h"
 #include "devtoolsclient.h"
@@ -1127,6 +1128,7 @@ public:
         : browser_view_(browser_view), _settings(settings), runtime_style_(runtime_style) {}
 
     void OnWindowCreated(CefRefPtr<CefWindow> window) override {
+        window->SetToFillLayout();
         window->AddChildView(browser_view_);
     }
 
@@ -1156,6 +1158,13 @@ public:
     bool IsFrameless(CefRefPtr<CefWindow> window) override { return _settings.frameless == 1; }
     bool CanResize(CefRefPtr<CefWindow> window) override { return _settings.resizable == 1; }
 
+    CefRect GetInitialBounds(CefRefPtr<CefWindow> window) override {
+        if (_settings.preferredWidth > 0 && _settings.preferredHeight > 0) {
+            return CefRect(0, 0, _settings.preferredWidth, _settings.preferredHeight);
+        }
+        return CefRect();
+    }
+
     CefSize GetPreferredSize(CefRefPtr<CefView> view) override {
         return CefSize(_settings.preferredWidth, _settings.preferredHeight);
     }
@@ -1179,6 +1188,7 @@ class DevToolsWindowDelegate : public CefWindowDelegate {
             : browser_view_(browser_view) {}
     
         void OnWindowCreated(CefRefPtr<CefWindow> window) override {
+            window->SetToFillLayout();
             window->AddChildView(browser_view_);
         }
     
@@ -1247,6 +1257,17 @@ CefRefPtr<Client> CreateBrowserWindow(const IPCWindowCreate& windowCreate)
     }
 
     LOG(INFO) << "Runtime style = " << runtime_style;
+    CefRefPtr<CefDictionaryValue> prefs = CefRequestContext::GetGlobalContext()->GetAllPreferences(true);
+    if (prefs->HasKey("gpu_info")) {
+        auto gpu_info = prefs->GetDictionary("gpu_info");
+        if (gpu_info->HasKey("ozone_platform")) {
+            LOG(INFO) << "Ozone platform (actual) = " << gpu_info->GetString("ozone_platform").ToString();
+        }
+    }
+    CefRefPtr<CefValue> value = CefValue::Create();
+    value->SetDictionary(prefs);
+    std::string json = value->GetString();
+    LOG(INFO) << "prefs = " << json;
 
     CefRefPtr<Client> client = new Client(windowCreate);
     CefBrowserSettings settings;

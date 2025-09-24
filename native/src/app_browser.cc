@@ -4,9 +4,9 @@
 
 #include "include/base/cef_logging.h"
 
-#if defined(OS_LINUX)
+/*#if defined(OS_LINUX)
 #include <gtk/gtk.h>
-#endif
+#endif*/
 
 class BrowserApp : public CefApp, public CefBrowserProcessHandler {
  public:
@@ -30,14 +30,14 @@ class BrowserApp : public CefApp, public CefBrowserProcessHandler {
 
   // CefBrowserProcessHandler methods:
   void OnContextInitialized() override {
-#if defined(OS_LINUX)
+/*#if defined(OS_LINUX)
     if (!gtk_init_check(nullptr, nullptr)) 
     {
         LOG(ERROR) << "Failed to initialized GTK.";
         return;
     }
     LOG(INFO) << "Initialized GTK.";
-#endif
+#endif*/
 
     LOG(INFO) << "OnContextInitialized";
 

@@ -7,8 +7,8 @@
 #endif
 
 #include <string>
-#include <gtk/gtk.h>
-#include <gdk/gdkx.h>
+/*#include <gtk/gtk.h>
+#include <gdk/gdkx.h>*/
 #include <fstream>
 
 #include "include/base/cef_logging.h"
@@ -532,7 +532,7 @@ namespace shared {
 
     std::future<std::vector<std::string>> PlatformPickFiles(bool multiple, const std::vector<std::pair<std::string /* name [Text Files (*.txt)] */, std::string /* *.txt */>>& filters)
     {
-        typedef struct _Parameters {
+        /*typedef struct _Parameters {
             std::promise<std::vector<std::string>> promise;
             bool multiple;
              std::vector<std::pair<std::string, std::string>> filters;
@@ -597,12 +597,16 @@ namespace shared {
             delete parameters;
             return FALSE;
         }, parameters);
-        return parameters->promise.get_future();
+        return parameters->promise.get_future();*/
+
+        return std::async(std::launch::deferred, [] {
+            return std::vector<std::string>{};
+        });
     }
 
     std::future<std::string> PlatformPickDirectory()
     {
-        std::promise<std::string>* promise = new std::promise<std::string>();
+        /*std::promise<std::string>* promise = new std::promise<std::string>();
 
         //TODO: Remove when crash TODO below is solved
         sleep(1);
@@ -628,12 +632,16 @@ namespace shared {
             return FALSE;
         }, promise);
 
-        return promise->get_future();
+        return promise->get_future();*/
+
+        return std::async(std::launch::deferred, [] {
+            return std::string(); 
+        });
     }
 
     std::future<std::string> PlatformSaveFile(const std::string& default_name, const std::vector<std::pair<std::string /* name [Text Files (*.txt)] */, std::string /* pattern */>>& filters)
     {
-        typedef struct _Parameters {
+        /*typedef struct _Parameters {
             std::promise<std::string> promise;
             std::string defaultName;
              std::vector<std::pair<std::string, std::string>> filters;
@@ -677,6 +685,10 @@ namespace shared {
             delete parameters;
             return FALSE;
         }, parameters);
-        return parameters->promise.get_future();
+        return parameters->promise.get_future();*/
+
+        return std::async(std::launch::deferred, [] {
+            return std::string();
+        });
     }
 }
