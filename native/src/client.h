@@ -95,6 +95,9 @@ class Client : public CefClient,
     std::unordered_set<std::string> _modifyRequestsSet;
     std::mutex _devToolsEventMethodsSetMutex;
     std::unordered_set<std::string> _devToolsEventMethodsSet;
+
+    bool _dedupeInput = false;
+
     IMPLEMENT_REFCOUNTING(Client);
     DISALLOW_COPY_AND_ASSIGN(Client);
 };

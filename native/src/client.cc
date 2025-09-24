@@ -204,7 +204,10 @@ bool MatchesDomain(const std::string& request_host, const std::string& cookie_do
     return false;
 }
 
-Client::Client(const IPCWindowCreate& settings) : settings(settings) {}
+Client::Client(const IPCWindowCreate& settings) : settings(settings) {
+    CefRefPtr<CefCommandLine> cmd = CefCommandLine::GetGlobalCommandLine();
+    _dedupeInput = (cmd && cmd->HasSwitch("dedupe-input"));
+}
 
 void Client::OnTitleChange(CefRefPtr<CefBrowser> browser, const CefString& title) 
 {
@@ -352,6 +355,30 @@ void Client::OnLoadEnd(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame,
     IPC::Singleton.QueueWork([browser, frame]() {
         IPC::Singleton.NotifyWindowLoadEnd(browser, frame->GetURL());
     });
+
+    if (_dedupeInput) {
+        const char* kDedupeJS = R"JS(
+            (function(){
+                const WINDOW_MS = 8;
+                const last = new WeakMap();
+                document.addEventListener('beforeinput', function(e){
+                    if (e.inputType !== 'insertText' || typeof e.data !== 'string' || e.data.length !== 1) return;
+                    const now = performance.now();
+                    const t = e.target;
+                    let s = last.get(t);
+                    if (!s) s = {ch:'', t:0};
+                    if (e.data === s.ch && (now - s.t) <= WINDOW_MS) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        return;
+                    }
+                    s.ch = e.data; s.t = now;
+                    last.set(t, s);
+                }, {capture:true});
+                })();
+            )JS";
+        frame->ExecuteJavaScript(kDedupeJS, frame->GetURL(), 0);
+    }
 }
 
 void Client::OnLoadStart(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, TransitionType transition_type) 
