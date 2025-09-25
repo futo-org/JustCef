@@ -9,6 +9,8 @@
 #include <future>
 #include <unordered_set>
 
+#define DEFAULT_DEDEUPE_INPUT_MS 120
+
 class Client : public CefClient,
     public CefDisplayHandler,
     public CefLifeSpanHandler,
@@ -97,6 +99,7 @@ class Client : public CefClient,
     std::unordered_set<std::string> _devToolsEventMethodsSet;
 
     bool _dedupeInput = false;
+    int _dedupeInputMs = DEFAULT_DEDEUPE_INPUT_MS;
 
     IMPLEMENT_REFCOUNTING(Client);
     DISALLOW_COPY_AND_ASSIGN(Client);
