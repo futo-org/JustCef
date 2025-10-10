@@ -132,19 +132,6 @@ class BrowserApp : public CefApp, public CefBrowserProcessHandler {
           runtime_style = CEF_RUNTIME_STYLE_CHROME;
       }
 
-      LOG(INFO) << "Runtime style = " << runtime_style;
-      CefRefPtr<CefDictionaryValue> prefs = CefRequestContext::GetGlobalContext()->GetAllPreferences(true);
-      if (prefs->HasKey("gpu_info")) {
-          auto gpu_info = prefs->GetDictionary("gpu_info");
-          if (gpu_info->HasKey("ozone_platform")) {
-              LOG(INFO) << "Ozone platform (actual) = " << gpu_info->GetString("ozone_platform").ToString();
-          }
-      }
-      CefRefPtr<CefValue> value = CefValue::Create();
-      value->SetDictionary(prefs);
-      std::string json = value->GetString();
-      LOG(INFO) << "prefs = " << json;
-
       CefRefPtr<SimpleHandler> handler(new SimpleHandler(use_alloy_style));
       CefBrowserSettings settings;
 
