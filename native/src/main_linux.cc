@@ -45,6 +45,7 @@ namespace shared {
   }
 
   // Entry point function for all processes.
+  NO_STACK_PROTECTOR
   int main(int argc, char* argv[]) {
     if (argc == 1) {
       auto executableDir = GetExecutablePath();
@@ -186,7 +187,7 @@ namespace shared {
     // been initialized. May return false if initialization fails or if early exit
     // is desired (for example, due to process singleton relaunch behavior).
     if (!CefInitialize(main_args, settings, app, nullptr)) {
-      return 1;
+      return CefGetExitCode();
     }
 
     // Run the CEF message loop. This will block until CefQuitMessageLoop() is
