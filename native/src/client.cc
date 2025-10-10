@@ -105,7 +105,7 @@ static LRESULT CALLBACK WindowProcHook(HWND hwnd, UINT uMsg, WPARAM wParam, LPAR
             return CallWindowProc(it->second.originalWndProc, hwnd, uMsg, wParam, lParam);
         }
 
-        CefRefPtr<CefBrowser> browser = shared::ClientManager::GetInstance()->AcquirePointer(it->second.identifier);
+        CefRefPtr<CefBrowser> browser = ClientManager::GetInstance()->AcquirePointer(it->second.identifier);
         if (!browser) {
             LOG(ERROR) << "WindowProcHook called while CefBrowser is already closed. Ignored.";
             return CallWindowProc(it->second.originalWndProc, hwnd, uMsg, wParam, lParam);
@@ -253,7 +253,7 @@ void Client::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
     _identifier = browser->GetIdentifier();
 
     // Add to the list of existing browsers.
-    shared::ClientManager::GetInstance()->OnAfterCreated(browser);
+    ClientManager::GetInstance()->OnAfterCreated(browser);
     LOG(INFO) << "Browser opened " << browser->GetIdentifier();
 
     CefRefPtr<CefBrowserView> browser_view = CefBrowserView::GetForBrowser(browser);
@@ -326,7 +326,7 @@ bool Client::DoClose(CefRefPtr<CefBrowser> browser) {
     // Closing the main window requires special handling. See the DoClose()
     // documentation in the CEF header for a detailed destription of this
     // process.
-    shared::ClientManager::GetInstance()->DoClose(browser);
+    ClientManager::GetInstance()->DoClose(browser);
 
     // Allow the close. For windowed browsers this will result in the OS close
     // event being sent.
@@ -356,7 +356,7 @@ void Client::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
     _identifier = 0;
 
     // Remove from the list of existing browsers.
-    shared::ClientManager::GetInstance()->OnBeforeClose(browser);
+    ClientManager::GetInstance()->OnBeforeClose(browser);
 
     LOG(INFO) << "Browser closed " << browser->GetIdentifier();
 

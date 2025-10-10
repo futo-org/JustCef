@@ -1124,12 +1124,14 @@ void IPC::SetHandles(int readFd, int writeFd)
 
 class WindowDelegate : public CefWindowDelegate {
 public:
-    explicit WindowDelegate(CefRefPtr<CefBrowserView> browser_view, const IPCWindowCreate& settings, cef_runtime_style_t runtime_style)
-        : browser_view_(browser_view), _settings(settings), runtime_style_(runtime_style) {}
+    explicit WindowDelegate(CefRefPtr<CefBrowserView> browser_view, cef_runtime_style_t runtime_style, cef_show_state_t initial_show_state, const IPCWindowCreate& settings)
+        : browser_view_(browser_view), _settings(settings), runtime_style_(runtime_style), initial_show_state_(initial_show_state) {}
 
     void OnWindowCreated(CefRefPtr<CefWindow> window) override {
-        window->SetToFillLayout();
         window->AddChildView(browser_view_);
+        if (initial_show_state_ != CEF_SHOW_STATE_HIDDEN) {
+            window->Show();
+        }
     }
 
     void OnWindowDestroyed(CefRefPtr<CefWindow> window) override {
@@ -1142,6 +1144,10 @@ public:
             return browser->GetHost()->TryCloseBrowser();
         }
         return true;
+    }
+
+    cef_show_state_t GetInitialShowState(CefRefPtr<CefWindow> window) override {
+        return initial_show_state_;
     }
 
     cef_runtime_style_t GetWindowRuntimeStyle() override {
@@ -1158,25 +1164,23 @@ public:
     bool IsFrameless(CefRefPtr<CefWindow> window) override { return _settings.frameless == 1; }
     bool CanResize(CefRefPtr<CefWindow> window) override { return _settings.resizable == 1; }
 
-    CefRect GetInitialBounds(CefRefPtr<CefWindow> window) override {
-        if (_settings.preferredWidth > 0 && _settings.preferredHeight > 0) {
-            return CefRect(0, 0, _settings.preferredWidth, _settings.preferredHeight);
-        }
-        return CefRect();
-    }
-
     CefSize GetPreferredSize(CefRefPtr<CefView> view) override {
         return CefSize(_settings.preferredWidth, _settings.preferredHeight);
     }
 
-    CefSize GetMinimumSize(CefRefPtr<CefView> view) override {
+    /*CefSize GetPreferredSize(CefRefPtr<CefView> view) override {
+        return CefSize(800, 600);
+    }*/
+
+    /*CefSize GetMinimumSize(CefRefPtr<CefView> view) override {
         return CefSize(_settings.minimumWidth, _settings.minimumHeight);
-    }
+    }*/
 
 private:
     CefRefPtr<CefBrowserView> browser_view_;
     const IPCWindowCreate& _settings;
     const cef_runtime_style_t runtime_style_;
+    const cef_show_state_t initial_show_state_;
 
     IMPLEMENT_REFCOUNTING(WindowDelegate);
     DISALLOW_COPY_AND_ASSIGN(WindowDelegate);
@@ -1220,7 +1224,7 @@ class BrowserViewDelegate : public CefBrowserViewDelegate {
         if (is_devtools) {
             CefWindow::CreateTopLevelWindow(new DevToolsWindowDelegate(popup_browser_view));
         } else {
-            CefWindow::CreateTopLevelWindow(new WindowDelegate(popup_browser_view, _settings, runtime_style_));
+            CefWindow::CreateTopLevelWindow(new WindowDelegate(popup_browser_view, runtime_style_, CEF_SHOW_STATE_NORMAL, _settings));
         }
         return true;
     }
@@ -1256,29 +1260,23 @@ CefRefPtr<Client> CreateBrowserWindow(const IPCWindowCreate& windowCreate)
         runtime_style = CEF_RUNTIME_STYLE_CHROME;
     }
 
-    LOG(INFO) << "Runtime style = " << runtime_style;
-    CefRefPtr<CefDictionaryValue> prefs = CefRequestContext::GetGlobalContext()->GetAllPreferences(true);
-    if (prefs->HasKey("gpu_info")) {
-        auto gpu_info = prefs->GetDictionary("gpu_info");
-        if (gpu_info->HasKey("ozone_platform")) {
-            LOG(INFO) << "Ozone platform (actual) = " << gpu_info->GetString("ozone_platform").ToString();
-        }
-    }
-    CefRefPtr<CefValue> value = CefValue::Create();
-    value->SetDictionary(prefs);
-    std::string json = value->GetString();
-    LOG(INFO) << "prefs = " << json;
-
     CefRefPtr<Client> client = new Client(windowCreate);
     CefBrowserSettings settings;
 
     const bool use_views = !command_line->HasSwitch("use-native");
     LOG(INFO) << "Use views = " << (use_views ? "true" : "false");
 
+    cef_show_state_t showState = CEF_SHOW_STATE_NORMAL;
+    if (windowCreate.fullscreen) {
+        showState = CEF_SHOW_STATE_FULLSCREEN;
+    } else if (windowCreate.shown) {
+        showState = CEF_SHOW_STATE_NORMAL;
+    }
+
     if (use_views)
     {
         CefRefPtr<CefBrowserView> browser_view = CefBrowserView::CreateBrowserView(client, windowCreate.url, settings, nullptr, nullptr, new BrowserViewDelegate(windowCreate, runtime_style));
-        CefWindow::CreateTopLevelWindow(new WindowDelegate(browser_view, windowCreate, runtime_style));
+        CefWindow::CreateTopLevelWindow(new WindowDelegate(browser_view, runtime_style, showState, windowCreate));
     } 
     else 
     {
@@ -1286,7 +1284,6 @@ CefRefPtr<Client> CreateBrowserWindow(const IPCWindowCreate& windowCreate)
         window_info.bounds.width = windowCreate.preferredWidth;
         window_info.bounds.height = windowCreate.preferredHeight;
         window_info.runtime_style = runtime_style;
-
 
 #if defined(OS_WIN)
         window_info.style = WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN | WS_CLIPSIBLINGS | WS_VISIBLE;
@@ -1413,7 +1410,7 @@ void HandleWindowMaximize(PacketReader& reader, PacketWriter& writer)
         LOG(ERROR) << "HandleWindowMaximize called without CefBrowser. Ignored.";
         return;
     }
-    CefRefPtr<CefBrowser> browser = shared::ClientManager::GetInstance()->AcquirePointer(*identifier);
+    CefRefPtr<CefBrowser> browser = ClientManager::GetInstance()->AcquirePointer(*identifier);
     if (!browser)
     {
         LOG(ERROR) << "HandleWindowMaximize called while CefBrowser " << *identifier << " is already closed. Ignored.";
@@ -1450,7 +1447,7 @@ void HandleWindowMinimize(PacketReader& reader, PacketWriter& writer)
         LOG(ERROR) << "HandleWindowMinimize called without CefBrowser. Ignored.";
         return;
     }
-    CefRefPtr<CefBrowser> browser = shared::ClientManager::GetInstance()->AcquirePointer(*identifier);
+    CefRefPtr<CefBrowser> browser = ClientManager::GetInstance()->AcquirePointer(*identifier);
     if (!browser)
     {
         LOG(ERROR) << "HandleWindowMinimize called while CefBrowser is already closed. Ignored.";
@@ -1489,7 +1486,7 @@ void HandleWindowRestore(PacketReader& reader, PacketWriter& writer)
         LOG(ERROR) << "HandleWindowRestore called without CefBrowser. Ignored.";
         return;
     }
-    CefRefPtr<CefBrowser> browser = shared::ClientManager::GetInstance()->AcquirePointer(*identifier);
+    CefRefPtr<CefBrowser> browser = ClientManager::GetInstance()->AcquirePointer(*identifier);
     if (!browser)
     {
         LOG(ERROR) << "HandleWindowRestore called while CefBrowser is already closed. Ignored.";
@@ -1527,7 +1524,7 @@ void HandleWindowShow(PacketReader& reader, PacketWriter& writer)
         LOG(ERROR) << "HandleWindowShow called without CefBrowser. Ignored.";
         return;
     }
-    CefRefPtr<CefBrowser> browser = shared::ClientManager::GetInstance()->AcquirePointer(*identifier);
+    CefRefPtr<CefBrowser> browser = ClientManager::GetInstance()->AcquirePointer(*identifier);
     if (!browser)
     {
         LOG(ERROR) << "HandleWindowShow called while CefBrowser is already closed. Ignored.";
@@ -1565,7 +1562,7 @@ void HandleWindowHide(PacketReader& reader, PacketWriter& writer)
         LOG(ERROR) << "HandleWindowHide called without CefBrowser. Ignored.";
         return;
     }
-    CefRefPtr<CefBrowser> browser = shared::ClientManager::GetInstance()->AcquirePointer(*identifier);
+    CefRefPtr<CefBrowser> browser = ClientManager::GetInstance()->AcquirePointer(*identifier);
     if (!browser)
     {
         LOG(ERROR) << "HandleWindowHide called while CefBrowser is already closed. Ignored.";
@@ -1603,7 +1600,7 @@ void HandleWindowActivate(PacketReader& reader, PacketWriter& writer)
         LOG(ERROR) << "HandleWindowActivate called without CefBrowser. Ignored.";
         return;
     }
-    CefRefPtr<CefBrowser> browser = shared::ClientManager::GetInstance()->AcquirePointer(*identifier);
+    CefRefPtr<CefBrowser> browser = ClientManager::GetInstance()->AcquirePointer(*identifier);
     if (!browser)
     {
         LOG(ERROR) << "HandleWindowActivate called while CefBrowser is already closed. Ignored.";
@@ -1641,7 +1638,7 @@ void HandleWindowBringToTop(PacketReader& reader, PacketWriter& writer)
         LOG(ERROR) << "HandleWindowBringToTop called without CefBrowser. Ignored.";
         return;
     }
-    CefRefPtr<CefBrowser> browser = shared::ClientManager::GetInstance()->AcquirePointer(*identifier);
+    CefRefPtr<CefBrowser> browser = ClientManager::GetInstance()->AcquirePointer(*identifier);
     if (!browser)
     {
         LOG(ERROR) << "HandleWindowBringToTop called while CefBrowser is already closed. Ignored.";
@@ -1680,7 +1677,7 @@ void HandleWindowSetAlwaysOnTop(PacketReader& reader, PacketWriter& writer)
         LOG(ERROR) << "HandleWindowSetAlwaysOnTop called without valid data. Ignored.";
         return;
     }
-    CefRefPtr<CefBrowser> browser = shared::ClientManager::GetInstance()->AcquirePointer(*identifier);
+    CefRefPtr<CefBrowser> browser = ClientManager::GetInstance()->AcquirePointer(*identifier);
     if (!browser)
     {
         LOG(ERROR) << "HandleWindowSetAlwaysOnTop called while CefBrowser is already closed. Ignored.";
@@ -1719,7 +1716,7 @@ void HandleWindowSetFullscreen(PacketReader& reader, PacketWriter& writer)
         LOG(ERROR) << "HandleWindowSetFullscreen called without valid data. Ignored.";
         return;
     }
-    CefRefPtr<CefBrowser> browser = shared::ClientManager::GetInstance()->AcquirePointer(*identifier);
+    CefRefPtr<CefBrowser> browser = ClientManager::GetInstance()->AcquirePointer(*identifier);
     if (!browser)
     {
         LOG(ERROR) << "HandleWindowSetFullscreen called while CefBrowser is already closed. Ignored.";
@@ -1757,7 +1754,7 @@ void HandleWindowCenterSelf(PacketReader& reader, PacketWriter& writer)
         LOG(ERROR) << "HandleWindowCenterSelf called without valid data. Ignored.";
         return;
     }
-    CefRefPtr<CefBrowser> browser = shared::ClientManager::GetInstance()->AcquirePointer(*identifier);
+    CefRefPtr<CefBrowser> browser = ClientManager::GetInstance()->AcquirePointer(*identifier);
     if (!browser)
     {
         LOG(ERROR) << "HandleWindowCenterSelf called while CefBrowser is already closed. Ignored.";
@@ -1796,7 +1793,7 @@ void HandleWindowSetProxyRequests(PacketReader& reader, PacketWriter& writer)
         LOG(ERROR) << "HandleWindowSetProxyRequests called without valid data. Ignored.";
         return;
     }
-    CefRefPtr<CefBrowser> browser = shared::ClientManager::GetInstance()->AcquirePointer(*identifier);
+    CefRefPtr<CefBrowser> browser = ClientManager::GetInstance()->AcquirePointer(*identifier);
     if (!browser)
     {
         LOG(ERROR) << "HandleWindowSetProxyRequests called while CefBrowser is already closed. Ignored.";
@@ -1827,7 +1824,7 @@ void HandleWindowGetPosition(PacketReader& reader, PacketWriter& writer)
         LOG(ERROR) << "HandleWindowGetPosition called without valid data. Ignored.";
         return;
     }
-    CefRefPtr<CefBrowser> browser = shared::ClientManager::GetInstance()->AcquirePointer(*identifier);
+    CefRefPtr<CefBrowser> browser = ClientManager::GetInstance()->AcquirePointer(*identifier);
     if (!browser)
     {
         LOG(ERROR) << "HandleWindowGetPosition called while CefBrowser is already closed. Ignored.";
@@ -1872,7 +1869,7 @@ void HandleWindowSetPosition(PacketReader& reader, PacketWriter& writer)
         LOG(ERROR) << "HandleWindowSetPosition called without valid data. Ignored.";
         return;
     }
-    CefRefPtr<CefBrowser> browser = shared::ClientManager::GetInstance()->AcquirePointer(*identifier);
+    CefRefPtr<CefBrowser> browser = ClientManager::GetInstance()->AcquirePointer(*identifier);
     if (!browser)
     {
         LOG(ERROR) << "HandleWindowSetPosition called while CefBrowser is already closed. Ignored.";
@@ -1916,7 +1913,7 @@ void HandleWindowSetDevelopmentToolsEnabled(PacketReader& reader, PacketWriter& 
         LOG(ERROR) << "HandleWindowSetDevelopmentToolsEnabled called without valid data. Ignored.";
         return;
     }
-    CefRefPtr<CefBrowser> browser = shared::ClientManager::GetInstance()->AcquirePointer(*identifier);
+    CefRefPtr<CefBrowser> browser = ClientManager::GetInstance()->AcquirePointer(*identifier);
     if (!browser)
     {
         LOG(ERROR) << "HandleWindowSetDevelopmentToolsEnabled called while CefBrowser is already closed. Ignored.";
@@ -1954,7 +1951,7 @@ void HandleWindowSetDevelopmentToolsVisible(PacketReader& reader, PacketWriter& 
         LOG(ERROR) << "HandleWindowSetDevelopmentToolsVisible called without valid data. Ignored.";
         return;
     }
-    CefRefPtr<CefBrowser> browser = shared::ClientManager::GetInstance()->AcquirePointer(*identifier);
+    CefRefPtr<CefBrowser> browser = ClientManager::GetInstance()->AcquirePointer(*identifier);
     if (!browser)
     {
         LOG(ERROR) << "HandleWindowSetDevelopmentToolsVisible called while CefBrowser is already closed. Ignored.";
@@ -1997,7 +1994,7 @@ void HandleWindowClose(PacketReader& reader, PacketWriter& writer)
         LOG(ERROR) << "HandleWindowClose called without valid data. Ignored.";
         return;
     }
-    CefRefPtr<CefBrowser> browser = shared::ClientManager::GetInstance()->AcquirePointer(*identifier);
+    CefRefPtr<CefBrowser> browser = ClientManager::GetInstance()->AcquirePointer(*identifier);
     if (!browser)
     {
         LOG(ERROR) << "HandleWindowClose called while CefBrowser is already closed. Ignored.";
@@ -2028,7 +2025,7 @@ void HandleWindowLoadUrl(PacketReader& reader, PacketWriter& writer)
         LOG(ERROR) << "HandleWindowLoadUrl called without valid data. Ignored.";
         return;
     }
-    CefRefPtr<CefBrowser> browser = shared::ClientManager::GetInstance()->AcquirePointer(*identifier);
+    CefRefPtr<CefBrowser> browser = ClientManager::GetInstance()->AcquirePointer(*identifier);
     if (!browser)
     {
         LOG(ERROR) << "HandleWindowLoadUrl called while CefBrowser is already closed. Ignored.";
@@ -2061,7 +2058,7 @@ void HandleWindowSetZoom(PacketReader& reader, PacketWriter& writer)
         LOG(ERROR) << "HandleWindowSetZoom called without valid data. Ignored.";
         return;
     }
-    CefRefPtr<CefBrowser> browser = shared::ClientManager::GetInstance()->AcquirePointer(*identifier);
+    CefRefPtr<CefBrowser> browser = ClientManager::GetInstance()->AcquirePointer(*identifier);
     if (!browser)
     {
         LOG(ERROR) << "HandleWindowSetZoom called while CefBrowser is already closed. Ignored.";
@@ -2093,7 +2090,7 @@ void HandleWindowGetZoom(PacketReader& reader, PacketWriter& writer)
         LOG(ERROR) << "HandleWindowGetZoom called without valid data. Ignored.";
         return;
     }
-    CefRefPtr<CefBrowser> browser = shared::ClientManager::GetInstance()->AcquirePointer(*identifier);
+    CefRefPtr<CefBrowser> browser = ClientManager::GetInstance()->AcquirePointer(*identifier);
     if (!browser)
     {
         LOG(ERROR) << "HandleWindowGetZoom called while CefBrowser is already closed. Ignored.";
@@ -2125,7 +2122,7 @@ void HandleWindowRequestFocus(PacketReader& reader, PacketWriter& writer)
         LOG(ERROR) << "HandleWindowRequestFocus called without CefBrowser. Ignored.";
         return;
     }
-    CefRefPtr<CefBrowser> browser = shared::ClientManager::GetInstance()->AcquirePointer(*identifier);
+    CefRefPtr<CefBrowser> browser = ClientManager::GetInstance()->AcquirePointer(*identifier);
     if (!browser)
     {
         LOG(ERROR) << "HandleWindowRequestFocus called while CefBrowser is already closed. Ignored.";
@@ -2164,7 +2161,7 @@ void HandleWindowSetModifyRequests(PacketReader& reader, PacketWriter& writer)
         LOG(ERROR) << "HandleWindowSetModifyRequests called without valid data. Ignored.";
         return;
     }
-    CefRefPtr<CefBrowser> browser = shared::ClientManager::GetInstance()->AcquirePointer(*identifier);
+    CefRefPtr<CefBrowser> browser = ClientManager::GetInstance()->AcquirePointer(*identifier);
     if (!browser)
     {
         LOG(ERROR) << "HandleWindowSetModifyRequests called while CefBrowser is already closed. Ignored.";
@@ -2263,8 +2260,8 @@ void CloseEverything()
     }
 
     IPC::Singleton.Stop();
-    if (shared::ClientManager::GetInstance()->GetBrowserCount() > 0) {
-        shared::ClientManager::GetInstance()->CloseAllBrowsers(true);
+    if (ClientManager::GetInstance()->GetBrowserCount() > 0) {
+        ClientManager::GetInstance()->CloseAllBrowsers(true);
     } else {
         CefQuitMessageLoop();
     }
@@ -2291,7 +2288,7 @@ std::optional<std::future<std::optional<IPCDevToolsMethodResult>>> HandleWindowE
         return std::nullopt;
     }
 
-    CefRefPtr<CefBrowser> browser = shared::ClientManager::GetInstance()->AcquirePointer(*identifier);
+    CefRefPtr<CefBrowser> browser = ClientManager::GetInstance()->AcquirePointer(*identifier);
     if (!browser)
     {
         LOG(ERROR) << "HandleWindowExecuteDevToolsMethod called while CefBrowser is already closed. Ignored.";
@@ -2361,7 +2358,7 @@ void HandleWindowSetTitle(PacketReader& reader, PacketWriter& writer)
         LOG(ERROR) << "HandleWindowSetTitle called without valid data. Ignored.";
         return;
     }
-    CefRefPtr<CefBrowser> browser = shared::ClientManager::GetInstance()->AcquirePointer(*identifier);
+    CefRefPtr<CefBrowser> browser = ClientManager::GetInstance()->AcquirePointer(*identifier);
     if (!browser)
     {
         LOG(ERROR) << "HandleWindowSetTitle called while CefBrowser is already closed. Ignored.";
@@ -2402,7 +2399,7 @@ void HandleWindowSetIcon(PacketReader& reader, PacketWriter& writer)
         LOG(ERROR) << "HandleWindowSetIcon called without valid data. Ignored.";
         return;
     }
-    CefRefPtr<CefBrowser> browser = shared::ClientManager::GetInstance()->AcquirePointer(*identifier);
+    CefRefPtr<CefBrowser> browser = ClientManager::GetInstance()->AcquirePointer(*identifier);
     if (!browser)
     {
         LOG(ERROR) << "HandleWindowSetIcon called while CefBrowser is already closed. Ignored.";
@@ -2443,7 +2440,7 @@ void HandleAddUrlToProxy(PacketReader& reader, PacketWriter& writer)
         LOG(ERROR) << "HandleAddUrlToProxy called without valid data. Ignored.";
         return;
     }
-    CefRefPtr<CefBrowser> browser = shared::ClientManager::GetInstance()->AcquirePointer(*identifier);
+    CefRefPtr<CefBrowser> browser = ClientManager::GetInstance()->AcquirePointer(*identifier);
     if (!browser)
     {
         LOG(ERROR) << "HandleAddUrlToProxy called while CefBrowser is already closed. Ignored.";
@@ -2485,7 +2482,7 @@ void HandleRemoveUrlToProxy(PacketReader& reader, PacketWriter& writer)
         LOG(ERROR) << "HandleRemoveUrlToProxy called without valid data. Ignored.";
         return;
     }
-    CefRefPtr<CefBrowser> browser = shared::ClientManager::GetInstance()->AcquirePointer(*identifier);
+    CefRefPtr<CefBrowser> browser = ClientManager::GetInstance()->AcquirePointer(*identifier);
     if (!browser)
     {
         LOG(ERROR) << "HandleRemoveUrlToProxy called while CefBrowser is already closed. Ignored.";
@@ -2527,7 +2524,7 @@ void HandleAddDomainToProxy(PacketReader& reader, PacketWriter& writer)
         LOG(ERROR) << "HandleAddDomainToProxy called without valid data. Ignored.";
         return;
     }
-    CefRefPtr<CefBrowser> browser = shared::ClientManager::GetInstance()->AcquirePointer(*identifier);
+    CefRefPtr<CefBrowser> browser = ClientManager::GetInstance()->AcquirePointer(*identifier);
     if (!browser)
     {
         LOG(ERROR) << "HandleAddDomainToProxy called while CefBrowser is already closed. Ignored.";
@@ -2569,7 +2566,7 @@ void HandleRemoveDomainToProxy(PacketReader& reader, PacketWriter& writer)
         LOG(ERROR) << "HandleRemoveDomainToProxy called without valid data. Ignored.";
         return;
     }
-    CefRefPtr<CefBrowser> browser = shared::ClientManager::GetInstance()->AcquirePointer(*identifier);
+    CefRefPtr<CefBrowser> browser = ClientManager::GetInstance()->AcquirePointer(*identifier);
     if (!browser)
     {
         LOG(ERROR) << "HandleRemoveDomainToProxy called while CefBrowser is already closed. Ignored.";
@@ -2611,7 +2608,7 @@ void HandleAddUrlToModify(PacketReader& reader, PacketWriter& writer)
         LOG(ERROR) << "HandleAddUrlToModify called without valid data. Ignored.";
         return;
     }
-    CefRefPtr<CefBrowser> browser = shared::ClientManager::GetInstance()->AcquirePointer(*identifier);
+    CefRefPtr<CefBrowser> browser = ClientManager::GetInstance()->AcquirePointer(*identifier);
     if (!browser)
     {
         LOG(ERROR) << "HandleAddUrlToModify called while CefBrowser is already closed. Ignored.";
@@ -2653,7 +2650,7 @@ void HandleRemoveUrlToModify(PacketReader& reader, PacketWriter& writer)
         LOG(ERROR) << "HandleRemoveUrlToModify called without valid data. Ignored.";
         return;
     }
-    CefRefPtr<CefBrowser> browser = shared::ClientManager::GetInstance()->AcquirePointer(*identifier);
+    CefRefPtr<CefBrowser> browser = ClientManager::GetInstance()->AcquirePointer(*identifier);
     if (!browser)
     {
         LOG(ERROR) << "HandleRemoveUrlToModify called while CefBrowser is already closed. Ignored.";
@@ -2691,7 +2688,7 @@ void HandleWindowGetSize(PacketReader& reader, PacketWriter& writer)
         LOG(ERROR) << "HandleWindowGetSize called without valid data. Ignored.";
         return;
     }
-    CefRefPtr<CefBrowser> browser = shared::ClientManager::GetInstance()->AcquirePointer(*identifier);
+    CefRefPtr<CefBrowser> browser = ClientManager::GetInstance()->AcquirePointer(*identifier);
     if (!browser)
     {
         LOG(ERROR) << "HandleWindowGetSize called while CefBrowser is already closed. Ignored.";
@@ -2736,7 +2733,7 @@ void HandleWindowSetSize(PacketReader& reader, PacketWriter& writer)
         LOG(ERROR) << "HandleWindowSetSize called without valid data. Ignored.";
         return;
     }
-    CefRefPtr<CefBrowser> browser = shared::ClientManager::GetInstance()->AcquirePointer(*identifier);
+    CefRefPtr<CefBrowser> browser = ClientManager::GetInstance()->AcquirePointer(*identifier);
     if (!browser)
     {
         LOG(ERROR) << "HandleWindowSetSize called while CefBrowser is already closed. Ignored.";
@@ -2778,7 +2775,7 @@ void HandleAddDevToolsEventMethod(PacketReader& reader, PacketWriter& writer)
         LOG(ERROR) << "HandleAddDevToolsEventMethod called without valid data. Ignored.";
         return;
     }
-    CefRefPtr<CefBrowser> browser = shared::ClientManager::GetInstance()->AcquirePointer(*identifier);
+    CefRefPtr<CefBrowser> browser = ClientManager::GetInstance()->AcquirePointer(*identifier);
     if (!browser)
     {
         LOG(ERROR) << "HandleAddDevToolsEventMethod called while CefBrowser is already closed. Ignored.";
@@ -2820,7 +2817,7 @@ void HandleRemoveDevToolsEventMethod(PacketReader& reader, PacketWriter& writer)
         LOG(ERROR) << "HandleRemoveDevToolsEventMethod called without valid data. Ignored.";
         return;
     }
-    CefRefPtr<CefBrowser> browser = shared::ClientManager::GetInstance()->AcquirePointer(*identifier);
+    CefRefPtr<CefBrowser> browser = ClientManager::GetInstance()->AcquirePointer(*identifier);
     if (!browser)
     {
         LOG(ERROR) << "HandleRemoveDevToolsEventMethod called while CefBrowser is already closed. Ignored.";

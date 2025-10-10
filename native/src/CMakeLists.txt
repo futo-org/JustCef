@@ -147,6 +147,8 @@ set(DOTCEF_SRCS
   pipe.cc
   pipe.h
   work_queue.h
+  simple_handler.cc
+  simple_handler.h
   )
 
 if(OS_LINUX)
