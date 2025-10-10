@@ -147,6 +147,8 @@ set(DOTCEF_SRCS
   pipe.cc
   pipe.h
   work_queue.h
+  simple_handler.cc
+  simple_handler.h
   )
 
 if(OS_LINUX)
@@ -206,17 +208,18 @@ endif()
 #
 
 if(OS_LINUX)
-  find_package(PkgConfig REQUIRED)
-  pkg_check_modules(GTK3 REQUIRED gtk+-3.0)
-  include_directories(${GTK3_INCLUDE_DIRS})
-  link_directories(${GTK3_LIBRARY_DIRS})
-  add_definitions(${GTK3_CFLAGS_OTHER})
+  #find_package(PkgConfig REQUIRED)
+  #pkg_check_modules(GTK3 REQUIRED gtk+-3.0)
+  #include_directories(${GTK3_INCLUDE_DIRS})
+  #link_directories(${GTK3_LIBRARY_DIRS})
+  #add_definitions(${GTK3_CFLAGS_OTHER})
 
   # Executable target.
   add_executable(${DOTCEF_TARGET} ${DOTCEF_SRCS})
   SET_DOTCEF_EXECUTABLE_TARGET_PROPERTIES(${DOTCEF_TARGET})
   add_dependencies(${DOTCEF_TARGET} libcef_dll_wrapper)
-  target_link_libraries(${DOTCEF_TARGET} libcef_lib libcef_dll_wrapper ${CEF_STANDARD_LIBS} ${GTK3_LIBRARIES})
+  #target_link_libraries(${DOTCEF_TARGET} libcef_lib libcef_dll_wrapper ${CEF_STANDARD_LIBS} ${GTK3_LIBRARIES})
+  target_link_libraries(${DOTCEF_TARGET} libcef_lib libcef_dll_wrapper ${CEF_STANDARD_LIBS})
 
   COPY_FILES("${DOTCEF_TARGET}" "${CEF_BINARY_FILES}" "${CEF_BINARY_DIR}" "${DOTCEF_TARGET_OUT_DIR}")
   COPY_FILES("${DOTCEF_TARGET}" "${CEF_RESOURCE_FILES}" "${CEF_RESOURCE_DIR}" "${DOTCEF_TARGET_OUT_DIR}")

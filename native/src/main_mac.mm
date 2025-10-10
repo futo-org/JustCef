@@ -98,7 +98,7 @@
 
 - (void)tryToTerminateApplication:(NSApplication*)app {
     printf("tryToTerminateApplication called.\r\n");
-    shared::ClientManager* manager = shared::ClientManager::GetInstance();
+    ClientManager* manager = ClientManager::GetInstance();
     if (manager && !manager->IsClosing())
     {
         printf("Calling manager->CloseAllBrowsers(false) started.\r\n");
