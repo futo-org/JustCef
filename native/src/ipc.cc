@@ -1192,7 +1192,6 @@ class DevToolsWindowDelegate : public CefWindowDelegate {
             : browser_view_(browser_view) {}
     
         void OnWindowCreated(CefRefPtr<CefWindow> window) override {
-            window->SetToFillLayout();
             window->AddChildView(browser_view_);
         }
     
