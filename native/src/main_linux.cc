@@ -45,7 +45,9 @@ namespace shared {
   }
 
   // Entry point function for all processes.
+  #ifdef NO_STACK_PROTECTOR
   NO_STACK_PROTECTOR
+  #endif
   int main(int argc, char* argv[]) {
     if (argc == 1) {
       auto executableDir = GetExecutablePath();
