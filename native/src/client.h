@@ -32,6 +32,7 @@ class Client : public CefClient,
     CefRefPtr<CefKeyboardHandler> GetKeyboardHandler() override { return this; }
     CefRefPtr<CefRequestHandler> GetRequestHandler() override { return this; }
     CefRefPtr<CefResourceRequestHandler> GetResourceRequestHandler(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefRefPtr<CefRequest> request, bool is_navigation, bool is_download, const CefString& request_initiator, bool& disable_default_handling) override { return this; }
+    bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefProcessId source_process, CefRefPtr<CefProcessMessage> message) override;
     // CefDisplayHandler methods:
     void OnTitleChange(CefRefPtr<CefBrowser> browser, const CefString& title) override;
     void OnFullscreenModeChange(CefRefPtr<CefBrowser> browser, bool fullscreen) override;

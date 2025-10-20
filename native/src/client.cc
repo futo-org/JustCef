@@ -12,6 +12,7 @@
 #include "ipc.h"
 #include "devtoolsclient.h"
 #include "stb_image.h"
+#include "steam.h"
 
 #ifdef _WIN32
 typedef HRESULT(WINAPI* DwmSetWindowAttributeProc)(HWND, DWORD, LPCVOID, DWORD);
@@ -943,6 +944,32 @@ bool Client::OnConsoleMessage(CefRefPtr<CefBrowser> browser, cef_log_severity_t 
 {
     if (settings.logConsole)
         LOG(INFO) << "ConsoleMessage:" << level << ":" << source.ToString().c_str() << ":" << line << ": " << message.ToString().c_str();
+    return true;
+}
+
+bool Client::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefProcessId source_process, CefRefPtr<CefProcessMessage> message) {
+    if (message->GetName() != kOskMsg) return false;
+
+    LOG(INFO) << "OnProcessMessageReceived (name = " << message->GetName() << ", size = " << message->GetArgumentList()->GetSize() << ").";
+    const int show = message->GetArgumentList()->GetInt(0);
+    if (!show) {
+        LOG(INFO) << "Steam dismiss OSK.";
+        Steam::Instance().DismissOsk();
+        return true;
+    }
+
+    LOG(INFO) << "Steam show OSK.";
+
+    const int x = message->GetArgumentList()->GetInt(1), y = message->GetArgumentList()->GetInt(2);
+    const int w = message->GetArgumentList()->GetInt(3), h = message->GetArgumentList()->GetInt(4);
+    const auto mode = static_cast<EFloatingGamepadTextInputMode>(message->GetArgumentList()->GetInt(5));
+    if (Steam::Instance().ShouldShowOsk()) {
+        LOG(INFO) << "Steam show OSK (x = " << x << ", y = " << y << ", w = " << w << ", h = " << h << ", mode = " << mode << ").";
+        Steam::Instance().ShowOsk(x, y, w, h, mode);
+    } else {
+        LOG(INFO) << "Steam show OSK failed because should show osk is false (x = " << x << ", y = " << y << ", w = " << w << ", h = " << h << ", mode = " << mode << ").";
+    }
+
     return true;
 }
 
