@@ -219,7 +219,7 @@ if(OS_LINUX)
   SET_DOTCEF_EXECUTABLE_TARGET_PROPERTIES(${DOTCEF_TARGET})
   add_dependencies(${DOTCEF_TARGET} libcef_dll_wrapper)
   #target_link_libraries(${DOTCEF_TARGET} libcef_lib libcef_dll_wrapper ${CEF_STANDARD_LIBS} ${GTK3_LIBRARIES})
-  target_link_libraries(${DOTCEF_TARGET} libcef_lib libcef_dll_wrapper ${CEF_STANDARD_LIBS})
+  target_link_libraries(${DOTCEF_TARGET} libcef_lib libcef_dll_wrapper ${CEF_STANDARD_LIBS} dl)
 
   COPY_FILES("${DOTCEF_TARGET}" "${CEF_BINARY_FILES}" "${CEF_BINARY_DIR}" "${DOTCEF_TARGET_OUT_DIR}")
   COPY_FILES("${DOTCEF_TARGET}" "${CEF_RESOURCE_FILES}" "${CEF_RESOURCE_DIR}" "${DOTCEF_TARGET_OUT_DIR}")
