@@ -5,7 +5,6 @@
 #include <mutex>
 
 #if defined(_WIN32)
-    #define NOMINMAX
     #include <windows.h>
     #define DYNLIB HMODULE
     #define LOADLIB(path) ::LoadLibraryW(path)
