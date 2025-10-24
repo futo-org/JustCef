@@ -24,8 +24,8 @@ set_property(GLOBAL PROPERTY OS_FOLDERS ON)
 #set(CEF_VERSION "131.2.7+g9a14dc9+chromium-131.0.6778.86")
 #set(CEF_VERSION "131.3.1+gcb062df+chromium-131.0.6778.109")
 #set(CEF_VERSION "132.3.2+g4997b2f+chromium-132.0.6834.161")
-set(CEF_VERSION "140.1.20+g49f5d09+chromium-140.0.7339.214")
-
+#set(CEF_VERSION "140.1.20+g49f5d09+chromium-140.0.7339.214")
+set(CEF_VERSION "141.0.10+g1d65b0d+chromium-141.0.7390.123")
 # Sysroot build
 set("CMAKE_VERBOSE_MAKEFILE:BOOL" "ON")
 
