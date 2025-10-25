@@ -55,18 +55,18 @@ endif()
 # Set the configuration-specific binary output directory.
 if(GEN_NINJA OR GEN_MAKEFILES)
   # Force Ninja and Make to create a subdirectory named after the configuration.
-  set(DOTCEF_TARGET_OUT_DIR "${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}")
+  set(CEF_TARGET_OUT_DIR "${CMAKE_BINARY_DIR}/${CMAKE_BUILD_TYPE}")
 else()
-  set(DOTCEF_TARGET_OUT_DIR "${CMAKE_BINARY_DIR}/$<CONFIGURATION>")
+  set(CEF_TARGET_OUT_DIR "${CMAKE_BINARY_DIR}/$<CONFIGURATION>")
 endif()
 
 # Set properties common to all example targets.
 macro(SET_DOTCEF_PROPERTIES target)
   # Output all binaries to the configuration-specific build directory.
   set_target_properties(${target} PROPERTIES
-                        ARCHIVE_OUTPUT_DIRECTORY "${DOTCEF_TARGET_OUT_DIR}"
-                        RUNTIME_OUTPUT_DIRECTORY "${DOTCEF_TARGET_OUT_DIR}"
-                        LIBRARY_OUTPUT_DIRECTORY "${DOTCEF_TARGET_OUT_DIR}")
+                        ARCHIVE_OUTPUT_DIRECTORY "${CEF_TARGET_OUT_DIR}"
+                        RUNTIME_OUTPUT_DIRECTORY "${CEF_TARGET_OUT_DIR}"
+                        LIBRARY_OUTPUT_DIRECTORY "${CEF_TARGET_OUT_DIR}")
 
   if(OS_MACOSX OR OS_WINDOWS)
     # Place the target in the "examples" folder in Visual Studio and Xcode.
@@ -97,7 +97,7 @@ macro(SET_DOTCEF_EXECUTABLE_TARGET_PROPERTIES target)
       COMMAND "mt.exe" -nologo
               -manifest \"${CMAKE_CURRENT_SOURCE_DIR}/${DOTCEF_EXE_MANIFEST}\"
                         \"${CMAKE_CURRENT_SOURCE_DIR}/${DOTCEF_COMPATIBILITY_MANIFEST}\"
-              -outputresource:"${DOTCEF_TARGET_OUT_DIR}/${target}.exe"\;\#1
+              -outputresource:"${CEF_TARGET_OUT_DIR}/${target}.exe"\;\#1
       COMMENT "Adding manifest..."
       )
   endif()
@@ -221,9 +221,9 @@ if(OS_LINUX)
   #target_link_libraries(${DOTCEF_TARGET} libcef_lib libcef_dll_wrapper ${CEF_STANDARD_LIBS} ${GTK3_LIBRARIES})
   target_link_libraries(${DOTCEF_TARGET} libcef_lib libcef_dll_wrapper ${CEF_STANDARD_LIBS} dl)
 
-  COPY_FILES("${DOTCEF_TARGET}" "${CEF_BINARY_FILES}" "${CEF_BINARY_DIR}" "${DOTCEF_TARGET_OUT_DIR}")
-  COPY_FILES("${DOTCEF_TARGET}" "${CEF_RESOURCE_FILES}" "${CEF_RESOURCE_DIR}" "${DOTCEF_TARGET_OUT_DIR}")
-  SET_LINUX_SUID_PERMISSIONS("${DOTCEF_TARGET}" "${DOTCEF_TARGET_OUT_DIR}/chrome-sandbox")
+  COPY_FILES("${DOTCEF_TARGET}" "${CEF_BINARY_FILES}" "${CEF_BINARY_DIR}" "${CEF_TARGET_OUT_DIR}")
+  COPY_FILES("${DOTCEF_TARGET}" "${CEF_RESOURCE_FILES}" "${CEF_RESOURCE_DIR}" "${CEF_TARGET_OUT_DIR}")
+  SET_LINUX_SUID_PERMISSIONS("${DOTCEF_TARGET}" "${CEF_TARGET_OUT_DIR}/chrome-sandbox")
 endif()
 
 #
@@ -236,7 +236,7 @@ if(OS_MAC)
   SET_DOTCEF_SOURCE_GROUPS("${DOTCEF_HELPER_SRCS}")
 
   # Output path for the main app bundle.
-  set(DOTCEF_APP "${DOTCEF_TARGET_OUT_DIR}/${DOTCEF_TARGET}.app")
+  set(DOTCEF_APP "${CEF_TARGET_OUT_DIR}/${DOTCEF_TARGET}.app")
 
   # Variables referenced from the main Info.plist file.
   set(EXECUTABLE_NAME "${DOTCEF_TARGET}")
@@ -313,7 +313,7 @@ if(OS_MAC)
       TARGET ${DOTCEF_TARGET}
       POST_BUILD
       COMMAND ${CMAKE_COMMAND} -E copy_directory
-              "${DOTCEF_TARGET_OUT_DIR}/${_helper_output_name}.app"
+              "${CEF_TARGET_OUT_DIR}/${_helper_output_name}.app"
               "${DOTCEF_APP}/Contents/Frameworks/${_helper_output_name}.app"
       VERBATIM
       )
@@ -344,19 +344,38 @@ if(OS_WINDOWS)
   # Create source groups for Visual Studio.
   SET_DOTCEF_SOURCE_GROUPS("${DOTCEF_SRCS}")
 
-  # Executable target.
-  add_executable(${DOTCEF_TARGET} WIN32 ${DOTCEF_SRCS})
-  SET_DOTCEF_EXECUTABLE_TARGET_PROPERTIES(${DOTCEF_TARGET})
+  if(USE_SANDBOX)
+    # Shared library (DLL) target.
+    add_library(${DOTCEF_TARGET} SHARED ${DOTCEF_SRCS})
+    SET_DOTCEF_LIBRARY_TARGET_PROPERTIES(${DOTCEF_TARGET})
+
+    # Copy and rename the bootstrap binary.
+    COPY_SINGLE_FILE(${DOTCEF_TARGET} ${CEF_BINARY_DIR}/bootstrap.exe ${CEF_TARGET_OUT_DIR}/${DOTCEF_TARGET}.exe)
+
+    if (CMAKE_GENERATOR MATCHES "Visual Studio")
+      # Make the bootstrap binary the default command for the Visual Studio debugger.
+      set_target_properties(${DOTCEF_TARGET} PROPERTIES
+        VS_DEBUGGER_COMMAND "$<TARGET_FILE_DIR:${DOTCEF_TARGET}>/${DOTCEF_TARGET}.exe"
+      )
+    endif()
+  else()
+    # Executable target.
+    add_executable(${DOTCEF_TARGET} WIN32 ${DOTCEF_SRCS})
+    SET_DOTCEF_EXECUTABLE_TARGET_PROPERTIES(${DOTCEF_TARGET})
+
+    # Add the custom manifest files to the executable.
+    ADD_WINDOWS_MANIFEST("${CMAKE_CURRENT_SOURCE_DIR}/win" "${DOTCEF_TARGET}" "exe")
+  endif()
+
   add_dependencies(${DOTCEF_TARGET} libcef_dll_wrapper)
   target_link_libraries(${DOTCEF_TARGET} libcef_lib libcef_dll_wrapper ${CEF_STANDARD_LIBS})
 
-  if(USE_SANDBOX)
-    # Logical target used to link the cef_sandbox library.
-    ADD_LOGICAL_TARGET("cef_sandbox_lib" "${CEF_SANDBOX_LIB_DEBUG}" "${CEF_SANDBOX_LIB_RELEASE}")
-    target_link_libraries(${DOTCEF_TARGET} cef_sandbox_lib ${CEF_SANDBOX_STANDARD_LIBS})
-  endif()
-
   # Copy binary and resource files to the target output directory.
-  COPY_FILES("${DOTCEF_TARGET}" "${CEF_BINARY_FILES}" "${CEF_BINARY_DIR}" "${DOTCEF_TARGET_OUT_DIR}")
-  COPY_FILES("${DOTCEF_TARGET}" "${CEF_RESOURCE_FILES}" "${CEF_RESOURCE_DIR}" "${DOTCEF_TARGET_OUT_DIR}")
+  COPY_FILES("${DOTCEF_TARGET}" "${CEF_BINARY_FILES}" "${CEF_BINARY_DIR}" "${CEF_TARGET_OUT_DIR}")
+  COPY_FILES("${DOTCEF_TARGET}" "${CEF_RESOURCE_FILES}" "${CEF_RESOURCE_DIR}" "${CEF_TARGET_OUT_DIR}")
+
+  if(USE_SANDBOX)
+    # Set LPAC ACLs required for Windows sandbox support.
+    SET_LPAC_ACLS("${DOTCEF_TARGET}")
+  endif()
 endif()
