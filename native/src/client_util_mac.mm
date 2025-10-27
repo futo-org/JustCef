@@ -2,15 +2,9 @@
 
 #import <Cocoa/Cocoa.h>
 #include <dispatch/dispatch.h>
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
 #include "include/cef_browser.h"
-
-#if __has_include(<UniformTypeIdentifiers/UniformTypeIdentifiers.h>)
-  #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
-  #define HAS_UTTYPE 1
-#else
-  #define HAS_UTTYPE 0
-#endif
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
@@ -25,20 +19,7 @@ static inline NSWindow* BrowserNSWindow(CefRefPtr<CefBrowser> browser) {
 }
 
 
-static inline NSArray<NSString*>* ExtensionsFromFilters(const std::vector<std::pair<std::string,std::string>>& filters) {
-  NSMutableArray<NSString*>* exts = [NSMutableArray array];
-  for (const auto& f : filters) {
-    NSString* s = [NSString stringWithUTF8String:f.second.c_str()];
-    if (s.length == 0) continue;
-    if ([s hasPrefix:@"."]) s = [s substringFromIndex:1];
-    if ([s containsString:@"/"]) continue;
-    [exts addObject:s];
-  }
-  return exts;
-}
-
-#if HAS_UTTYPE
-static inline NSArray<UTType*>* ContentTypesFromFilters(const std::vector<std::pair<std::string,std::string>>& filters) API_AVAILABLE(macos(11.0)) {
+static inline NSArray<UTType*>* ContentTypesFromFilters(const std::vector<std::pair<std::string,std::string>>& filters) {
   NSMutableArray<UTType*>* types = [NSMutableArray array];
   for (const auto& f : filters) {
     NSString* tag = [NSString stringWithUTF8String:f.second.c_str()];
@@ -55,7 +36,6 @@ static inline NSArray<UTType*>* ContentTypesFromFilters(const std::vector<std::p
   }
   return types;
 }
-#endif
 
 namespace shared {
     void PlatformTitleChange(CefRefPtr<CefBrowser> browser, const std::string& title) 
@@ -346,97 +326,74 @@ namespace shared {
         [window makeKeyWindow];
     }
 
-    std::future<std::vector<std::string>> PlatformPickFiles(bool multiple, const std::vector<std::pair<std::string, std::string>>& filters)
-    {
-        auto promise = std::make_shared<std::promise<std::vector<std::string>>>();
 
-        dispatch_async(dispatch_get_main_queue(), ^{
-            NSOpenPanel* panel = [NSOpenPanel openPanel];
-            panel.allowsMultipleSelection = multiple;
-            panel.canChooseDirectories = NO;
-            panel.canChooseFiles = YES;
+  std::future<std::vector<std::string>> PlatformPickFiles(bool multiple, const std::vector<std::pair<std::string,std::string>>& filters)
+  {
+    auto promise = std::make_shared<std::promise<std::vector<std::string>>>();
 
-        #if HAS_UTTYPE
-            if (@available(macOS 11.0, *)) {
-                panel.allowedContentTypes = ContentTypesFromFilters(filters);
-            } else
-        #endif
-            {
-                #pragma clang diagnostic push
-                #pragma clang diagnostic ignored "-Wdeprecated-declarations"
-                panel.allowedFileTypes = ExtensionsFromFilters(filters);
-                #pragma clang diagnostic pop
-            }
+    dispatch_async(dispatch_get_main_queue(), ^{
+      NSOpenPanel* panel = [NSOpenPanel openPanel];
+      panel.allowsMultipleSelection = multiple;
+      panel.canChooseDirectories = NO;
+      panel.canChooseFiles = YES;
+      panel.allowedContentTypes = ContentTypesFromFilters(filters);
 
-            [panel beginWithCompletionHandler:^(NSInteger result) {
-                std::vector<std::string> files;
-                if (result == NSModalResponseOK) {
-                    for (NSURL* url in panel.URLs) {
-                        const char* p = url.path.UTF8String;
-                        if (p) files.emplace_back(p);
-                    }
-                }
-                promise->set_value(std::move(files));
-            }];
-        });
+      [panel beginWithCompletionHandler:^(NSInteger result) {
+        std::vector<std::string> files;
+        if (result == NSModalResponseOK) {
+          for (NSURL* url in panel.URLs) {
+            if (const char* p = url.path.UTF8String) files.emplace_back(p);
+          }
+        }
+        promise->set_value(std::move(files));
+      }];
+    });
 
-        return promise->get_future();
-    }
+    return promise->get_future();
+  }
 
-    std::future<std::string> PlatformPickDirectory()
-    {
-        auto promise = std::make_shared<std::promise<std::string>>();
+  std::future<std::string> PlatformPickDirectory()
+  {
+    auto promise = std::make_shared<std::promise<std::string>>();
 
-        dispatch_async(dispatch_get_main_queue(), ^{
-            NSOpenPanel* panel = [NSOpenPanel openPanel];
-            panel.canChooseDirectories = YES;
-            panel.canChooseFiles = NO;
-            panel.allowsMultipleSelection = NO;
+    dispatch_async(dispatch_get_main_queue(), ^{
+      NSOpenPanel* panel = [NSOpenPanel openPanel];
+      panel.canChooseDirectories = YES;
+      panel.canChooseFiles = NO;
+      panel.allowsMultipleSelection = NO;
 
-            [panel beginWithCompletionHandler:^(NSInteger result) {
-            if (result == NSModalResponseOK) {
-                NSURL* url = panel.URLs.firstObject;
-                promise->set_value(url ? url.path.UTF8String : "");
-            } else {
-                promise->set_value("");
-            }
-            }];
-        });
+      [panel beginWithCompletionHandler:^(NSInteger result) {
+        if (result == NSModalResponseOK) {
+          NSURL* url = panel.URLs.firstObject;
+          promise->set_value(url ? url.path.UTF8String : "");
+        } else {
+          promise->set_value("");
+        }
+      }];
+    });
 
-        return promise->get_future();
-    }
+    return promise->get_future();
+  }
 
-    std::future<std::string> PlatformSaveFile(const std::string& default_name, const std::vector<std::pair<std::string, std::string>>& filters)
-    {
-        auto promise = std::make_shared<std::promise<std::string>>();
+  std::future<std::string> PlatformSaveFile(const std::string& default_name, const std::vector<std::pair<std::string,std::string>>& filters)
+  {
+    auto promise = std::make_shared<std::promise<std::string>>();
 
-        dispatch_async(dispatch_get_main_queue(), ^{
-            NSSavePanel* savePanel = [NSSavePanel savePanel];
-            savePanel.nameFieldStringValue = [NSString stringWithUTF8String:default_name.c_str()];
+    dispatch_async(dispatch_get_main_queue(), ^{
+      NSSavePanel* savePanel = [NSSavePanel savePanel];
+      savePanel.nameFieldStringValue = [NSString stringWithUTF8String:default_name.c_str()];
+      savePanel.allowedContentTypes = ContentTypesFromFilters(filters);
 
-        #if HAS_UTTYPE
-            if (@available(macOS 11.0, *)) {
-                savePanel.allowedContentTypes = ContentTypesFromFilters(filters);
-            } else
-        #endif
-            {
-                #pragma clang diagnostic push
-                #pragma clang diagnostic ignored "-Wdeprecated-declarations"
-                savePanel.allowedFileTypes = ExtensionsFromFilters(filters);
-                #pragma clang diagnostic pop
-            }
+      [savePanel beginWithCompletionHandler:^(NSInteger result) {
+        if (result == NSModalResponseOK) {
+          NSURL* url = savePanel.URL;
+          promise->set_value(url ? url.path.UTF8String : "");
+        } else {
+          promise->set_value("");
+        }
+      }];
+    });
 
-            [savePanel beginWithCompletionHandler:^(NSInteger result) {
-                if (result == NSModalResponseOK) {
-                    NSURL* url = savePanel.URL;
-                    promise->set_value(url ? url.path.UTF8String : "");
-                } else {
-                    promise->set_value("");
-                }
-            }];
-        });
-
-        return promise->get_future();
-    }
-
+    return promise->get_future();
+  }
 }

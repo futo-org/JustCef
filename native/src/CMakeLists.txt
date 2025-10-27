@@ -240,7 +240,7 @@ if(OS_MAC)
     list(APPEND CEF_COMPILER_FLAGS
       -fobjc-arc
       )
-    set_target_properties(${target} PROPERTIES
+    set_target_properties(${DOTCEF_TARGET} PROPERTIES
       CLANG_ENABLE_OBJC_ARC "YES"
       )
   endif()
@@ -256,7 +256,7 @@ if(OS_MAC)
   add_executable(${DOTCEF_TARGET} MACOSX_BUNDLE ${DOTCEF_SRCS} ${DOTCEF_RESOURCES_SRCS})
   SET_DOTCEF_EXECUTABLE_TARGET_PROPERTIES(${DOTCEF_TARGET})
   add_dependencies(${DOTCEF_TARGET} libcef_dll_wrapper)
-  target_link_libraries(${DOTCEF_TARGET} libcef_dll_wrapper ${CEF_STANDARD_LIBS})
+  target_link_libraries(${DOTCEF_TARGET} libcef_dll_wrapper ${CEF_STANDARD_LIBS} "-framework UniformTypeIdentifiers")
   set_target_properties(${DOTCEF_TARGET} PROPERTIES
     RESOURCE "${DOTCEF_RESOURCES_SRCS}"
     MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/${DOTCEF_INFO_PLIST}"
@@ -300,7 +300,7 @@ if(OS_MAC)
     add_executable(${_helper_target} MACOSX_BUNDLE ${DOTCEF_HELPER_SRCS})
     SET_DOTCEF_EXECUTABLE_TARGET_PROPERTIES(${_helper_target})
     add_dependencies(${_helper_target} libcef_dll_wrapper)
-    target_link_libraries(${_helper_target} libcef_dll_wrapper ${CEF_STANDARD_LIBS})
+    target_link_libraries(${_helper_target} libcef_dll_wrapper ${CEF_STANDARD_LIBS} "-framework UniformTypeIdentifiers")
     set_target_properties(${_helper_target} PROPERTIES
       MACOSX_BUNDLE_INFO_PLIST ${_helper_info_plist}
       OUTPUT_NAME ${_helper_output_name}
