@@ -112,7 +112,6 @@
         (NSApplication*)sender {
     return NSTerminateNow;
 }
-@end
 
 // Called when the user clicks the app dock icon while the application is
 // already running.
@@ -132,6 +131,7 @@
 - (BOOL)applicationSupportsSecureRestorableState:(NSApplication*)app {
   return YES;
 }
+@end
 
 namespace shared {
 
