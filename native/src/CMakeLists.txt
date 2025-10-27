@@ -240,7 +240,7 @@ if(OS_MAC)
     list(APPEND CEF_COMPILER_FLAGS
       -fobjc-arc
       )
-    set_target_properties(${DOTCEF_TARGET} PROPERTIES
+    set_target_properties(${target} PROPERTIES
       CLANG_ENABLE_OBJC_ARC "YES"
       )
   endif()
