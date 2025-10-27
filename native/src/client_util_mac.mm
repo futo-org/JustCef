@@ -8,13 +8,22 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
+static inline NSView* BrowserNSView(CefRefPtr<CefBrowser> browser) {
+  return (__bridge NSView*)browser->GetHost()->GetWindowHandle();
+}
+
+static inline NSWindow* BrowserNSWindow(CefRefPtr<CefBrowser> browser) {
+  NSView* v = BrowserNSView(browser);
+  return v ? v.window : nil;
+}
+
 namespace shared {
     void PlatformTitleChange(CefRefPtr<CefBrowser> browser, const std::string& title) 
     {
-        NSView* view = (NSView*)browser->GetHost()->GetWindowHandle();
+        NSView* view = BrowserNSView(browser);
         if (!view) return;
 
-        NSWindow* window = [view window];
+        NSWindow* window = BrowserNSWindow(browser);
         if (!window) return;
 
         std::string titleStr(title);
@@ -49,10 +58,10 @@ namespace shared {
     
     bool PlatformGetFullscreen(CefRefPtr<CefBrowser> browser)
     {
-        NSView* view = (NSView*)browser->GetHost()->GetWindowHandle();
+        NSView* view = BrowserNSView(browser);
         if (!view) return false;
 
-        NSWindow* window = [view window];
+        NSWindow* window = BrowserNSWindow(browser);
         if (!window) return false;
 
         return ([window styleMask] & NSWindowStyleMaskFullScreen) != 0;
@@ -60,10 +69,10 @@ namespace shared {
 
     void PlatformSetMinimumWindowSize(CefRefPtr<CefBrowser> browser, int minWidth, int minHeight)
     {
-        NSView* view = (NSView*)browser->GetHost()->GetWindowHandle();
+        NSView* view = BrowserNSView(browser);
         if (!view) return;
 
-        NSWindow* window = [view window];
+        NSWindow* window = BrowserNSWindow(browser);
         if (!window) return;
 
         NSSize minSize;
@@ -75,10 +84,10 @@ namespace shared {
 
     void PlatformSetFrameless(CefRefPtr<CefBrowser> browser, bool frameless)
     {
-        NSView* view = (NSView*)browser->GetHost()->GetWindowHandle();
+        NSView* view = BrowserNSView(browser);
         if (!view) return;
 
-        NSWindow* window = [view window];
+        NSWindow* window = BrowserNSWindow(browser);
         if (!window) return;
 
         NSWindowStyleMask styleMask = [window styleMask];
@@ -92,10 +101,10 @@ namespace shared {
 
     void PlatformSetResizable(CefRefPtr<CefBrowser> browser, bool resizable)
     {
-        NSView* view = (NSView*)browser->GetHost()->GetWindowHandle();
+        NSView* view = BrowserNSView(browser);
         if (!view) return;
 
-        NSWindow* window = [view window];
+        NSWindow* window = BrowserNSWindow(browser);
         if (!window) return;
 
         NSWindowStyleMask styleMask = [window styleMask];
@@ -109,10 +118,10 @@ namespace shared {
 
     void PlatformSetFullscreen(CefRefPtr<CefBrowser> browser, bool fullscreen)
     {
-        NSView* view = (NSView*)browser->GetHost()->GetWindowHandle();
+        NSView* view = BrowserNSView(browser);
         if (!view) return;
 
-        NSWindow* window = [view window];
+        NSWindow* window = BrowserNSWindow(browser);
         if (!window) return;
 
         bool isCurrentlyFullscreen = ([window styleMask] & NSWindowStyleMaskFullScreen) != 0;
@@ -126,10 +135,10 @@ namespace shared {
 
     void PlatformMaximize(CefRefPtr<CefBrowser> browser)
     {
-        NSView* view = (NSView*)browser->GetHost()->GetWindowHandle();
+        NSView* view = BrowserNSView(browser);
         if (!view) return;
 
-        NSWindow* window = [view window];
+        NSWindow* window = BrowserNSWindow(browser);
         if (!window) return;
 
         [window zoom:nil];
@@ -137,10 +146,10 @@ namespace shared {
 
     void PlatformMinimize(CefRefPtr<CefBrowser> browser)
     {
-        NSView* view = (NSView*)browser->GetHost()->GetWindowHandle();
+        NSView* view = BrowserNSView(browser);
         if (!view) return;
 
-        NSWindow* window = [view window];
+        NSWindow* window = BrowserNSWindow(browser);
         if (!window) return;
 
         [window miniaturize:nil];
@@ -148,10 +157,10 @@ namespace shared {
 
     void PlatformRestore(CefRefPtr<CefBrowser> browser)
     {
-        NSView* view = (NSView*)browser->GetHost()->GetWindowHandle();
+        NSView* view = BrowserNSView(browser);
         if (!view) return;
 
-        NSWindow* window = [view window];
+        NSWindow* window = BrowserNSWindow(browser);
         if (!window) return;
 
         [window deminiaturize:nil];
@@ -159,10 +168,10 @@ namespace shared {
 
     void PlatformShow(CefRefPtr<CefBrowser> browser)
     {
-        NSView* view = (NSView*)browser->GetHost()->GetWindowHandle();
+        NSView* view = BrowserNSView(browser);
         if (!view) return;
 
-        NSWindow* window = [view window];
+        NSWindow* window = BrowserNSWindow(browser);
         if (!window) return;
 
         [window makeKeyAndOrderFront:nil];
@@ -170,10 +179,10 @@ namespace shared {
 
     void PlatformHide(CefRefPtr<CefBrowser> browser)
     {
-        NSView* view = (NSView*)browser->GetHost()->GetWindowHandle();
+        NSView* view = BrowserNSView(browser);
         if (!view) return;
 
-        NSWindow* window = [view window];
+        NSWindow* window = BrowserNSWindow(browser);
         if (!window) return;
 
         [window orderOut:nil];
@@ -181,10 +190,10 @@ namespace shared {
 
     void PlatformActivate(CefRefPtr<CefBrowser> browser)
     {
-        NSView* view = (NSView*)browser->GetHost()->GetWindowHandle();
+        NSView* view = BrowserNSView(browser);
         if (!view) return;
 
-        NSWindow* window = [view window];
+        NSWindow* window = BrowserNSWindow(browser);
         if (!window) return;
 
         [NSApp activateIgnoringOtherApps:YES];
@@ -193,10 +202,10 @@ namespace shared {
 
     void PlatformBringToTop(CefRefPtr<CefBrowser> browser)
     {
-        NSView* view = (NSView*)browser->GetHost()->GetWindowHandle();
+        NSView* view = BrowserNSView(browser);
         if (!view) return;
 
-        NSWindow* window = [view window];
+        NSWindow* window = BrowserNSWindow(browser);
         if (!window) return;
 
         [window orderFrontRegardless];
@@ -204,10 +213,10 @@ namespace shared {
 
     void PlatformSetAlwaysOnTop(CefRefPtr<CefBrowser> browser, bool alwaysOnTop)
     {
-        NSView* view = (NSView*)browser->GetHost()->GetWindowHandle();
+        NSView* view = BrowserNSView(browser);
         if (!view) return;
 
-        NSWindow* window = [view window];
+        NSWindow* window = BrowserNSWindow(browser);
         if (!window) return;
 
         if (alwaysOnTop) {
@@ -219,10 +228,10 @@ namespace shared {
 
     CefSize PlatformGetWindowSize(CefRefPtr<CefBrowser> browser)
     {
-        NSView* view = (NSView*)browser->GetHost()->GetWindowHandle();
+        NSView* view = BrowserNSView(browser);
         if (!view) return CefSize(0, 0);
 
-        NSWindow* window = [view window];
+        NSWindow* window = BrowserNSWindow(browser);
         if (!window) return CefSize(0, 0);
 
         NSRect frame = [window frame];
@@ -231,10 +240,10 @@ namespace shared {
 
     void PlatformCenterWindow(CefRefPtr<CefBrowser> browser, const CefSize& size)
     {
-        NSView* view = (NSView*)browser->GetHost()->GetWindowHandle();
+        NSView* view = BrowserNSView(browser);
         if (!view) return;
 
-        NSWindow* window = [view window];
+        NSWindow* window = BrowserNSWindow(browser);
         if (!window) return;
 
         NSRect screen = [[window screen] frame];
@@ -246,10 +255,10 @@ namespace shared {
 
     void PlatformSetWindowSize(CefRefPtr<CefBrowser> browser, const CefSize& size)
     {
-        NSView* view = (NSView*)browser->GetHost()->GetWindowHandle();
+        NSView* view = BrowserNSView(browser);
         if (!view) return;
 
-        NSWindow* window = [view window];
+        NSWindow* window = BrowserNSWindow(browser);
         if (!window) return;
 
         NSRect frame = [window frame];
@@ -259,10 +268,10 @@ namespace shared {
 
     CefPoint PlatformGetWindowPosition(CefRefPtr<CefBrowser> browser)
     {
-        NSView* view = (NSView*)browser->GetHost()->GetWindowHandle();
+        NSView* view = BrowserNSView(browser);
         if (!view) return CefPoint(0, 0);
 
-        NSWindow* window = [view window];
+        NSWindow* window = BrowserNSWindow(browser);
         if (!window) return CefPoint(0, 0);
 
         NSRect frame = [window frame];
@@ -271,10 +280,10 @@ namespace shared {
 
     void PlatformSetWindowPosition(CefRefPtr<CefBrowser> browser, const CefPoint& position)
     {
-        NSView* view = (NSView*)browser->GetHost()->GetWindowHandle();
+        NSView* view = BrowserNSView(browser);
         if (!view) return;
 
-        NSWindow* window = [view window];
+        NSWindow* window = BrowserNSWindow(browser);
         if (!window) return;
 
         NSRect frame = [window frame];
@@ -285,10 +294,10 @@ namespace shared {
 
     void PlatformWindowRequestFocus(CefRefPtr<CefBrowser> browser)
     {
-        NSView* view = (NSView*)browser->GetHost()->GetWindowHandle();
+        NSView* view = BrowserNSView(browser);
         if (!view) return;
 
-        NSWindow* window = [view window];
+        NSWindow* window = BrowserNSWindow(browser);
         if (!window) return;
 
         [window makeKeyWindow];
