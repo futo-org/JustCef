@@ -5,6 +5,13 @@
 
 #include "include/cef_browser.h"
 
+#if __has_include(<UniformTypeIdentifiers/UniformTypeIdentifiers.h>)
+  #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
+  #define HAS_UTTYPE 1
+#else
+  #define HAS_UTTYPE 0
+#endif
+
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
@@ -16,6 +23,39 @@ static inline NSWindow* BrowserNSWindow(CefRefPtr<CefBrowser> browser) {
   NSView* v = BrowserNSView(browser);
   return v ? v.window : nil;
 }
+
+
+static inline NSArray<NSString*>* ExtensionsFromFilters(const std::vector<std::pair<std::string,std::string>>& filters) {
+  NSMutableArray<NSString*>* exts = [NSMutableArray array];
+  for (const auto& f : filters) {
+    NSString* s = [NSString stringWithUTF8String:f.second.c_str()];
+    if (s.length == 0) continue;
+    if ([s hasPrefix:@"."]) s = [s substringFromIndex:1];
+    if ([s containsString:@"/"]) continue;
+    [exts addObject:s];
+  }
+  return exts;
+}
+
+#if HAS_UTTYPE
+static inline NSArray<UTType*>* ContentTypesFromFilters(const std::vector<std::pair<std::string,std::string>>& filters) API_AVAILABLE(macos(11.0)) {
+  NSMutableArray<UTType*>* types = [NSMutableArray array];
+  for (const auto& f : filters) {
+    NSString* tag = [NSString stringWithUTF8String:f.second.c_str()];
+    if (tag.length == 0) continue;
+
+    UTType* t = nil;
+    if ([tag containsString:@"/"]) {
+      t = [UTType typeWithMIMEType:tag];
+    } else {
+      if ([tag hasPrefix:@"."]) tag = [tag substringFromIndex:1];
+      t = [UTType typeWithFilenameExtension:tag];
+    }
+    if (t) [types addObject:t];
+  }
+  return types;
+}
+#endif
 
 namespace shared {
     void PlatformTitleChange(CefRefPtr<CefBrowser> browser, const std::string& title) 
@@ -31,29 +71,32 @@ namespace shared {
         [window setTitle:str];
     }
 
-    void PlatformIconChange(CefRefPtr<CefBrowser> browser, const std::string& iconPath) 
+    void PlatformIconChange(CefRefPtr<CefBrowser> /*browser*/, const std::string& iconPath)
     {
-        int width, height, channels;
-        unsigned char* image = stbi_load(iconPath.c_str(), &width, &height, &channels, 4);
-        if (!image) {
-            return;
-        }
+        int w, h, channels;
+        unsigned char* rgba = stbi_load(iconPath.c_str(), &w, &h, &channels, 4);
+        if (!rgba) return;
 
-        NSImage* nsImage = nil;
-        {
-            NSData* data = [NSData dataWithBytes:image length:width * height * 4];
-            NSBitmapImageRep* imageRep = [[NSBitmapImageRep alloc] initWithData:data];
-            [imageRep setSize:NSMakeSize(width, height)];
-            nsImage = [[NSImage alloc] initWithSize:NSMakeSize(width, height)];
-            [nsImage addRepresentation:imageRep];
-        }
+        NSBitmapImageRep* rep = [[NSBitmapImageRep alloc]
+            initWithBitmapDataPlanes:NULL
+                        pixelsWide:w
+                        pixelsHigh:h
+                    bitsPerSample:8
+                    samplesPerPixel:4
+                            hasAlpha:YES
+                            isPlanar:NO
+                    colorSpaceName:NSCalibratedRGBColorSpace
+                        bytesPerRow:w*4
+                        bitsPerPixel:32];
 
-        if (nsImage) {
-            [NSApp setApplicationIconImage:nsImage];
-            //TODO: Should nsImage be freed?
-        }
+        memcpy([rep bitmapData], rgba, (size_t)w * (size_t)h * 4);
 
-        stbi_image_free(image);
+        NSImage* img = [[NSImage alloc] initWithSize:NSMakeSize(w, h)];
+        [img addRepresentation:rep];
+
+        [NSApp setApplicationIconImage:img];
+
+        stbi_image_free(rgba);
     }
     
     bool PlatformGetFullscreen(CefRefPtr<CefBrowser> browser)
@@ -309,25 +352,31 @@ namespace shared {
 
         dispatch_async(dispatch_get_main_queue(), ^{
             NSOpenPanel* panel = [NSOpenPanel openPanel];
-            [panel setAllowsMultipleSelection:multiple];
-            [panel setCanChooseDirectories:NO];
-            [panel setCanChooseFiles:YES];
+            panel.allowsMultipleSelection = multiple;
+            panel.canChooseDirectories = NO;
+            panel.canChooseFiles = YES;
 
-            NSMutableArray* fileTypes = [[NSMutableArray alloc] init];
-            for (const auto& filter : filters) {
-                [fileTypes addObject:[NSString stringWithUTF8String:filter.second.c_str()]];
+        #if HAS_UTTYPE
+            if (@available(macOS 11.0, *)) {
+                panel.allowedContentTypes = ContentTypesFromFilters(filters);
+            } else
+        #endif
+            {
+                #pragma clang diagnostic push
+                #pragma clang diagnostic ignored "-Wdeprecated-declarations"
+                panel.allowedFileTypes = ExtensionsFromFilters(filters);
+                #pragma clang diagnostic pop
             }
-            [panel setAllowedFileTypes:fileTypes];
 
             [panel beginWithCompletionHandler:^(NSInteger result) {
                 std::vector<std::string> files;
                 if (result == NSModalResponseOK) {
-                    for (NSURL* url in [panel URLs]) {
-                        files.push_back([[url path] UTF8String]);
+                    for (NSURL* url in panel.URLs) {
+                        const char* p = url.path.UTF8String;
+                        if (p) files.emplace_back(p);
                     }
                 }
-                promise->set_value(files);
-                [fileTypes release];
+                promise->set_value(std::move(files));
             }];
         });
 
@@ -340,17 +389,17 @@ namespace shared {
 
         dispatch_async(dispatch_get_main_queue(), ^{
             NSOpenPanel* panel = [NSOpenPanel openPanel];
-            [panel setCanChooseDirectories:YES];
-            [panel setCanChooseFiles:NO];
-            [panel setAllowsMultipleSelection:NO];
+            panel.canChooseDirectories = YES;
+            panel.canChooseFiles = NO;
+            panel.allowsMultipleSelection = NO;
 
             [panel beginWithCompletionHandler:^(NSInteger result) {
-                if (result == NSModalResponseOK) {
-                    NSURL* url = [[panel URLs] objectAtIndex:0];
-                    promise->set_value([[url path] UTF8String]);
-                } else {
-                    promise->set_value("");
-                }
+            if (result == NSModalResponseOK) {
+                NSURL* url = panel.URLs.firstObject;
+                promise->set_value(url ? url.path.UTF8String : "");
+            } else {
+                promise->set_value("");
+            }
             }];
         });
 
@@ -363,26 +412,31 @@ namespace shared {
 
         dispatch_async(dispatch_get_main_queue(), ^{
             NSSavePanel* savePanel = [NSSavePanel savePanel];
-            [savePanel setNameFieldStringValue:[NSString stringWithUTF8String:default_name.c_str()]];
+            savePanel.nameFieldStringValue = [NSString stringWithUTF8String:default_name.c_str()];
 
-            NSMutableArray* fileTypes = [[NSMutableArray alloc] init];
-            for (const auto& filter : filters) {
-                [fileTypes addObject:[NSString stringWithUTF8String:filter.second.c_str()]];
+        #if HAS_UTTYPE
+            if (@available(macOS 11.0, *)) {
+                savePanel.allowedContentTypes = ContentTypesFromFilters(filters);
+            } else
+        #endif
+            {
+                #pragma clang diagnostic push
+                #pragma clang diagnostic ignored "-Wdeprecated-declarations"
+                savePanel.allowedFileTypes = ExtensionsFromFilters(filters);
+                #pragma clang diagnostic pop
             }
-            [savePanel setAllowedFileTypes:fileTypes];
 
             [savePanel beginWithCompletionHandler:^(NSInteger result) {
                 if (result == NSModalResponseOK) {
-                    NSURL* url = [[savePanel URL] retain];
-                    promise->set_value([[url path] UTF8String]);
-                    [url release];
+                    NSURL* url = savePanel.URL;
+                    promise->set_value(url ? url.path.UTF8String : "");
                 } else {
                     promise->set_value("");
                 }
-                [fileTypes release];
             }];
         });
 
         return promise->get_future();
     }
+
 }
