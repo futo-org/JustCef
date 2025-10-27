@@ -235,17 +235,22 @@ if(OS_MAC)
   SET_DOTCEF_SOURCE_GROUPS("${DOTCEF_SRCS}")
   SET_DOTCEF_SOURCE_GROUPS("${DOTCEF_HELPER_SRCS}")
 
+  option(OPTION_USE_ARC "Build with ARC (automatic Reference Counting) on macOS." ON)
+  if(OPTION_USE_ARC)
+    list(APPEND CEF_COMPILER_FLAGS
+      -fobjc-arc
+      )
+    set_target_properties(${target} PROPERTIES
+      CLANG_ENABLE_OBJC_ARC "YES"
+      )
+  endif()
+
   # Output path for the main app bundle.
   set(DOTCEF_APP "${CEF_TARGET_OUT_DIR}/${DOTCEF_TARGET}.app")
 
   # Variables referenced from the main Info.plist file.
   set(EXECUTABLE_NAME "${DOTCEF_TARGET}")
   set(PRODUCT_NAME "${DOTCEF_TARGET}")
-
-  if(USE_SANDBOX)
-    # Logical target used to link the cef_sandbox library.
-    ADD_LOGICAL_TARGET("cef_sandbox_lib" "${CEF_SANDBOX_LIB_DEBUG}" "${CEF_SANDBOX_LIB_RELEASE}")
-  endif()
 
   # Main app bundle target.
   add_executable(${DOTCEF_TARGET} MACOSX_BUNDLE ${DOTCEF_SRCS} ${DOTCEF_RESOURCES_SRCS})
@@ -300,10 +305,6 @@ if(OS_MAC)
       MACOSX_BUNDLE_INFO_PLIST ${_helper_info_plist}
       OUTPUT_NAME ${_helper_output_name}
       )
-
-    if(USE_SANDBOX)
-      target_link_libraries(${_helper_target} cef_sandbox_lib)
-    endif()
 
     # Add the Helper as a dependency of the main executable target.
     add_dependencies(${DOTCEF_TARGET} "${_helper_target}")
