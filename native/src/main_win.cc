@@ -158,7 +158,7 @@ int RunMain(HINSTANCE hInstance, LPTSTR /*lpCmdLine*/, int /*nCmdShow*/, void* s
 #if defined(CEF_USE_BOOTSTRAP)
 
 CEF_BOOTSTRAP_EXPORT int RunWinMain(HINSTANCE hInstance, LPTSTR lpCmdLine, int nCmdShow, void* sandbox_info, cef_version_info_t* /*version_info*/) {
-    return ::RunMain(hInstance, lpCmdLine, nCmdShow, sandbox_info);
+    return shared::RunMain(hInstance, lpCmdLine, nCmdShow, sandbox_info);
 }
 
 #else
@@ -181,7 +181,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPTSTR lpCmd
     sandbox_info = scoped_sandbox.sandbox_info();
 #endif
 
-    return ::RunMain(hInstance, lpCmdLine, nCmdShow, sandbox_info);
+    return shared::RunMain(hInstance, lpCmdLine, nCmdShow, sandbox_info);
 }
 
 #endif
