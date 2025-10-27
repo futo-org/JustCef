@@ -114,6 +114,25 @@
 }
 @end
 
+// Called when the user clicks the app dock icon while the application is
+// already running.
+- (BOOL)applicationShouldHandleReopen:(NSApplication*)theApplication
+                    hasVisibleWindows:(BOOL)flag {
+  SimpleHandler* handler = SimpleHandler::GetInstance();
+  if (handler && !handler->IsClosing()) {
+    handler->ShowMainWindow();
+  }
+  return NO;
+}
+
+// Requests that any state restoration archive be created with secure encoding
+// (macOS 12+ only). See https://crrev.com/c737387656 for details. This also
+// fixes an issue with macOS default behavior incorrectly restoring windows
+// after hard reset (holding down the power button).
+- (BOOL)applicationSupportsSecureRestorableState:(NSApplication*)app {
+  return YES;
+}
+
 namespace shared {
 
 // Entry point function for the browser process.
@@ -164,6 +183,11 @@ int main(int argc, char* argv[]) {
 
     // Initialize the SharedApplication instance.
     [SharedApplication sharedApplication];
+    
+    // If there was an invocation to NSApp prior to this method, then the NSApp
+    // will not be a SharedApplication, but will instead be an NSApplication.
+    // This is undesirable and we must enforce that this doesn't happen.
+    CHECK([NSApp isKindOfClass:[SharedApplication class]]);
 
     // Create the singleton manager instance.
     ClientManager manager;
@@ -172,6 +196,13 @@ int main(int argc, char* argv[]) {
     CefSettings settings;
     //settings.log_severity = LOGSEVERITY_WARNING;
     
+    // When generating projects with CMake the CEF_USE_SANDBOX value will be
+    // defined automatically. Pass -DUSE_SANDBOX=OFF to the CMake command-line
+    // to disable use of the sandbox.
+#if !defined(CEF_USE_SANDBOX)
+    settings.no_sandbox = true;
+#endif
+
     // Support a command-line switch to specify a cache path.
     // If --cache-path is provided, its value is used and not removed on exit.
     // Otherwise, generate a temporary cache directory.
@@ -232,7 +263,10 @@ int main(int argc, char* argv[]) {
     }
 
     // Release the delegate.
+#if !__has_feature(objc_arc)
     [delegate release];
+#endif  // !__has_feature(objc_arc)
+    delegate = nil;
 
     // Release the AutoRelease pool.
     [autopool release];
