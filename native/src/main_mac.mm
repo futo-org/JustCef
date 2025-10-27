@@ -115,11 +115,10 @@
 
 // Called when the user clicks the app dock icon while the application is
 // already running.
-- (BOOL)applicationShouldHandleReopen:(NSApplication*)theApplication
-                    hasVisibleWindows:(BOOL)flag {
-  SimpleHandler* handler = SimpleHandler::GetInstance();
-  if (handler && !handler->IsClosing()) {
-    handler->ShowMainWindow();
+- (BOOL)applicationShouldHandleReopen:(NSApplication*)theApplication hasVisibleWindows:(BOOL)flag {
+  ClientManager* manager = ClientManager::GetInstance();
+  if (manager && !manager->IsClosing()) {
+    manager->ShowMainWindow();
   }
   return NO;
 }

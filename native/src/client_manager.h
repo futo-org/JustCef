@@ -28,6 +28,7 @@ public:
   // Returns true if the last browser instance is closing.
   bool IsClosing() const;
 
+  void ShowMainWindow();
 private:
   base::ThreadChecker thread_checker_;
 

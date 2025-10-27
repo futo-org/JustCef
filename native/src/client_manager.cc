@@ -1,7 +1,12 @@
 #include "client_manager.h"
 #include "ipc.h"
 
+#include "include/base/cef_callback.h"
 #include "include/cef_app.h"
+#include "include/cef_parser.h"
+#include "include/views/cef_browser_view.h"
+#include "include/views/cef_window.h"
+#include "include/wrapper/cef_closure_task.h"
 #include "include/wrapper/cef_helpers.h"
 
 ClientManager* g_manager = nullptr;
@@ -125,4 +130,22 @@ CefRefPtr<CefBrowser> ClientManager::AcquirePointer(int identifier) {
 bool ClientManager::IsClosing() const {
   DCHECK(thread_checker_.CalledOnValidThread());
   return is_closing_;
+}
+
+void ClientManager::ShowMainWindow() {
+  if (!CefCurrentlyOn(TID_UI)) {
+    CefPostTask(TID_UI, base::BindOnce(&ClientManager::ShowMainWindow, base::Unretained(this)));
+    return;
+  }
+
+  if (browser_list_.empty()) {
+    return;
+  }
+
+  auto main_browser = browser_list_.front();
+  if (auto browser_view = CefBrowserView::GetForBrowser(main_browser)) {
+    if (auto window = browser_view->GetWindow()) {
+      window->Show();
+    }
+  }
 }
