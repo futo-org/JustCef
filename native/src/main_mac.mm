@@ -144,132 +144,130 @@ int main(int argc, char* argv[]) {
         return 1;
 
     // Initialize the AutoRelease pool.
-    NSAutoreleasePool* autopool = [[NSAutoreleasePool alloc] init];
+    @autoreleasepool {
 
-    // Provide CEF with command-line arguments.
-    CefMainArgs main_args(argc, argv);
+        // Provide CEF with command-line arguments.
+        CefMainArgs main_args(argc, argv);
 
-    // Create a temporary CommandLine object.
-    CefRefPtr<CefCommandLine> command_line = CreateCommandLine(main_args);
+        // Create a temporary CommandLine object.
+        CefRefPtr<CefCommandLine> command_line = CreateCommandLine(main_args);
 
-    int readFd = -1;
-    int writeFd = -1;
+        int readFd = -1;
+        int writeFd = -1;
 
-    // Parse command-line arguments for IPC file descriptors.
-    for (int i = 1; i < argc; i++) {
-        NSString* arg = [NSString stringWithUTF8String:argv[i]];
-        if ([arg isEqualToString:@"--parent-to-child"] && i + 1 < argc) {
-            readFd = atoi(argv[++i]);
-        } else if ([arg isEqualToString:@"--child-to-parent"] && i + 1 < argc) {
-            writeFd = atoi(argv[++i]);
+        // Parse command-line arguments for IPC file descriptors.
+        for (int i = 1; i < argc; i++) {
+            NSString* arg = [NSString stringWithUTF8String:argv[i]];
+            if ([arg isEqualToString:@"--parent-to-child"] && i + 1 < argc) {
+                readFd = atoi(argv[++i]);
+            } else if ([arg isEqualToString:@"--child-to-parent"] && i + 1 < argc) {
+                writeFd = atoi(argv[++i]);
+            }
         }
-    }
 
-    if (readFd != -1 && writeFd != -1) {
-        IPC::Singleton.SetHandles(readFd, writeFd);
-        printf("Set handles.\r\n");
-    } else {
-        printf("Missing handles.\r\n");
-    }
+        if (readFd != -1 && writeFd != -1) {
+            IPC::Singleton.SetHandles(readFd, writeFd);
+            printf("Set handles.\r\n");
+        } else {
+            printf("Missing handles.\r\n");
+        }
 
-    if (!command_line->HasSwitch("url") && !IPC::Singleton.HasValidHandles()) {
-        printf("Either URL or IPC handles should be set.");
-        return 1;
-    }
+        if (!command_line->HasSwitch("url") && !IPC::Singleton.HasValidHandles()) {
+            printf("Either URL or IPC handles should be set.");
+            return 1;
+        }
 
-    // Create a CefApp for the browser process. Other processes are handled by
-    // process_helper_mac.cc.
-    CefRefPtr<CefApp> app = CreateBrowserProcessApp();
+        // Create a CefApp for the browser process. Other processes are handled by
+        // process_helper_mac.cc.
+        CefRefPtr<CefApp> app = CreateBrowserProcessApp();
 
-    // Initialize the SharedApplication instance.
-    [SharedApplication sharedApplication];
-    
-    // If there was an invocation to NSApp prior to this method, then the NSApp
-    // will not be a SharedApplication, but will instead be an NSApplication.
-    // This is undesirable and we must enforce that this doesn't happen.
-    CHECK([NSApp isKindOfClass:[SharedApplication class]]);
+        // Initialize the SharedApplication instance.
+        [SharedApplication sharedApplication];
+        
+        // If there was an invocation to NSApp prior to this method, then the NSApp
+        // will not be a SharedApplication, but will instead be an NSApplication.
+        // This is undesirable and we must enforce that this doesn't happen.
+        CHECK([NSApp isKindOfClass:[SharedApplication class]]);
 
-    // Create the singleton manager instance.
-    ClientManager manager;
+        // Create the singleton manager instance.
+        ClientManager manager;
 
-    // Specify CEF global settings here.
-    CefSettings settings;
-    //settings.log_severity = LOGSEVERITY_WARNING;
-    
-    // When generating projects with CMake the CEF_USE_SANDBOX value will be
-    // defined automatically. Pass -DUSE_SANDBOX=OFF to the CMake command-line
-    // to disable use of the sandbox.
-#if !defined(CEF_USE_SANDBOX)
-    settings.no_sandbox = true;
-#endif
+        // Specify CEF global settings here.
+        CefSettings settings;
+        //settings.log_severity = LOGSEVERITY_WARNING;
+        
+        // When generating projects with CMake the CEF_USE_SANDBOX value will be
+        // defined automatically. Pass -DUSE_SANDBOX=OFF to the CMake command-line
+        // to disable use of the sandbox.
+    #if !defined(CEF_USE_SANDBOX)
+        settings.no_sandbox = true;
+    #endif
 
-    // Support a command-line switch to specify a cache path.
-    // If --cache-path is provided, its value is used and not removed on exit.
-    // Otherwise, generate a temporary cache directory.
-    bool autoRemoveCachePath = true;
-    std::string cachePathStd;
-    if (command_line->HasSwitch("cache-path")) {
-        cachePathStd = command_line->GetSwitchValue("cache-path");
-        autoRemoveCachePath = false;
-    } else {
-        NSDate *now = [NSDate date];
-        NSTimeInterval s = [now timeIntervalSince1970];
-        NSString *uniqueIdentifier = [NSString stringWithFormat:@"%lld", (long long)s];
-        NSString *cacheDirectoryName = [@"dotcef_" stringByAppendingString:uniqueIdentifier];
-        NSString *tempCachePath = [NSTemporaryDirectory() stringByAppendingPathComponent:cacheDirectoryName];
-        cachePathStd = std::string([tempCachePath UTF8String]);
-    }
-    CefString(&settings.cache_path) = cachePathStd;
-    CefString(&settings.root_cache_path) = cachePathStd;
+        // Support a command-line switch to specify a cache path.
+        // If --cache-path is provided, its value is used and not removed on exit.
+        // Otherwise, generate a temporary cache directory.
+        bool autoRemoveCachePath = true;
+        std::string cachePathStd;
+        if (command_line->HasSwitch("cache-path")) {
+            cachePathStd = command_line->GetSwitchValue("cache-path");
+            autoRemoveCachePath = false;
+        } else {
+            NSDate *now = [NSDate date];
+            NSTimeInterval s = [now timeIntervalSince1970];
+            NSString *uniqueIdentifier = [NSString stringWithFormat:@"%lld", (long long)s];
+            NSString *cacheDirectoryName = [@"dotcef_" stringByAppendingString:uniqueIdentifier];
+            NSString *tempCachePath = [NSTemporaryDirectory() stringByAppendingPathComponent:cacheDirectoryName];
+            cachePathStd = std::string([tempCachePath UTF8String]);
+        }
+        CefString(&settings.cache_path) = cachePathStd;
+        CefString(&settings.root_cache_path) = cachePathStd;
 
-    // Initialize the CEF browser process. The first browser instance will be
-    // created in CefBrowserProcessHandler::OnContextInitialized() after CEF has
-    // been initialized. May return false if initialization fails or if early exit
-    // is desired (for example, due to process singleton relaunch behavior).
-    if (!CefInitialize(main_args, settings, app, nullptr)) {
-        return 1;
-    }
+        // Initialize the CEF browser process. The first browser instance will be
+        // created in CefBrowserProcessHandler::OnContextInitialized() after CEF has
+        // been initialized. May return false if initialization fails or if early exit
+        // is desired (for example, due to process singleton relaunch behavior).
+        if (!CefInitialize(main_args, settings, app, nullptr)) {
+            return 1;
+        }
 
-    // Create the application delegate.
-    NSObject* delegate = [[SharedAppDelegate alloc] init];
-    [delegate performSelectorOnMainThread:@selector(createApplication:)
-                                                         withObject:nil
-                                                    waitUntilDone:NO];
+        // Create the application delegate.
+        NSObject* delegate = [[SharedAppDelegate alloc] init];
+        [delegate performSelectorOnMainThread:@selector(createApplication:)
+                                                            withObject:nil
+                                                        waitUntilDone:NO];
 
-    // Run the CEF message loop. This will block until CefQuitMessageLoop() is
-    // called.
-    CefRunMessageLoop();
+        // Run the CEF message loop. This will block until CefQuitMessageLoop() is
+        // called.
+        CefRunMessageLoop();
 
-    // Shut down CEF.
-    CefShutdown();
+        // Shut down CEF.
+        CefShutdown();
 
-    // Remove the cache directory only if it was auto-generated.
-    if (autoRemoveCachePath) {
-        NSError *error = nil;
-        NSFileManager *fileManager = [NSFileManager defaultManager];
-        NSString *cachePathStr = [NSString stringWithUTF8String:cachePathStd.c_str()];
-        if ([fileManager fileExistsAtPath:cachePathStr]) {
-            BOOL removed = [fileManager removeItemAtPath:cachePathStr error:&error];
-            if (!removed) {
-                NSLog(@"Error deleting cache directory at path %@: %@", cachePathStr, error);
+        // Remove the cache directory only if it was auto-generated.
+        if (autoRemoveCachePath) {
+            NSError *error = nil;
+            NSFileManager *fileManager = [NSFileManager defaultManager];
+            NSString *cachePathStr = [NSString stringWithUTF8String:cachePathStd.c_str()];
+            if ([fileManager fileExistsAtPath:cachePathStr]) {
+                BOOL removed = [fileManager removeItemAtPath:cachePathStr error:&error];
+                if (!removed) {
+                    NSLog(@"Error deleting cache directory at path %@: %@", cachePathStr, error);
+                } else {
+                    NSLog(@"Successfully deleted cache directory at path %@", cachePathStr);
+                }
             } else {
-                NSLog(@"Successfully deleted cache directory at path %@", cachePathStr);
+                NSLog(@"Cache directory does not exist: %@", cachePathStr);
             }
         } else {
-            NSLog(@"Cache directory does not exist: %@", cachePathStr);
+            NSLog(@"User-specified cache path preserved: %s", cachePathStd.c_str());
         }
-    } else {
-        NSLog(@"User-specified cache path preserved: %s", cachePathStd.c_str());
-    }
 
-    // Release the delegate.
-#if !__has_feature(objc_arc)
-    [delegate release];
-#endif  // !__has_feature(objc_arc)
-    delegate = nil;
-
-    // Release the AutoRelease pool.
-    [autopool release];
+        // Release the delegate.
+        #if !__has_feature(objc_arc)
+        [delegate release];
+        #endif  // !__has_feature(objc_arc)
+        delegate = nil;
+    }  // @autoreleasepool
 
     return 0;
 }
