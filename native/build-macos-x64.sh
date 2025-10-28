@@ -1,0 +1,1 @@
+rm -rf build && cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE=toolchains/macos-x64.cmake -DCMAKE_BUILD_TYPE=Release -DPROJECT_ARCH=x86_64
