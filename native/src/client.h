@@ -20,6 +20,7 @@ class Client : public CefClient,
     public CefKeyboardHandler,
     public CefRequestHandler,
     public CefResourceRequestHandler,
+    public CefRenderHandler,
     public CefDevToolsMessageObserver {
  public:
     Client(const IPCWindowCreate& settings);
@@ -32,6 +33,8 @@ class Client : public CefClient,
     CefRefPtr<CefKeyboardHandler> GetKeyboardHandler() override { return this; }
     CefRefPtr<CefRequestHandler> GetRequestHandler() override { return this; }
     CefRefPtr<CefResourceRequestHandler> GetResourceRequestHandler(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefRefPtr<CefRequest> request, bool is_navigation, bool is_download, const CefString& request_initiator, bool& disable_default_handling) override { return this; }
+    CefRefPtr<CefRenderHandler> GetRenderHandler() override;
+    
     bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefProcessId source_process, CefRefPtr<CefProcessMessage> message) override;
     // CefDisplayHandler methods:
     void OnTitleChange(CefRefPtr<CefBrowser> browser, const CefString& title) override;
@@ -59,6 +62,11 @@ class Client : public CefClient,
     // CefDevToolsMessageObserver methods:
     void OnDevToolsMethodResult(CefRefPtr<CefBrowser> browser, int message_id, bool success, const void* result, size_t result_size) override;
     void OnDevToolsEvent(CefRefPtr<CefBrowser> browser, const CefString& method, const void* params, size_t params_size) override;
+    // CefRenderHandler methods:
+    void GetViewRect(CefRefPtr<CefBrowser> browser, CefRect& rect) override {
+        rect = CefRect(0, 0, settings.preferredWidth, settings.preferredHeight);
+    }
+    void OnPaint(CefRefPtr<CefBrowser> browser, PaintElementType type, const RectList& dirtyRects, const void* buffer, int width, int height) override {}
 
     int GetIdentifier() { return _identifier; }
     std::optional<std::future<std::optional<IPCDevToolsMethodResult>>> ExecuteDevToolsMethod(CefRefPtr<CefBrowser> browser, std::string& method, CefRefPtr<CefDictionaryValue> params = nullptr);

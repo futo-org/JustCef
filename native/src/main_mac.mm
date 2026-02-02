@@ -150,7 +150,7 @@ int main(int argc, char* argv[]) {
 
         // Create a temporary CommandLine object.
         CefRefPtr<CefCommandLine> command_line = CreateCommandLine(main_args);
-
+        const bool headless = command_line->HasSwitch("headless");
         int readFd = -1;
         int writeFd = -1;
 
@@ -202,6 +202,10 @@ int main(int argc, char* argv[]) {
         settings.no_sandbox = true;
     #endif
 
+        if (headless) {
+            settings.windowless_rendering_enabled = true;
+        }
+
         // Support a command-line switch to specify a cache path.
         // If --cache-path is provided, its value is used and not removed on exit.
         // Otherwise, generate a temporary cache directory.
@@ -230,10 +234,17 @@ int main(int argc, char* argv[]) {
         }
 
         // Create the application delegate.
-        NSObject* delegate = [[SharedAppDelegate alloc] init];
-        [delegate performSelectorOnMainThread:@selector(createApplication:)
-                                                            withObject:nil
-                                                        waitUntilDone:NO];
+        NSObject* delegate = nil;
+
+        if (!headless) {
+            delegate = [[SharedAppDelegate alloc] init];
+            [delegate performSelectorOnMainThread:@selector(createApplication:)
+                                        withObject:nil
+                                    waitUntilDone:NO];
+        } else {
+            [NSApp setActivationPolicy:NSApplicationActivationPolicyProhibited];
+        }
+
 
         // Run the CEF message loop. This will block until CefQuitMessageLoop() is
         // called.

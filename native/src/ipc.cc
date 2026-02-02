@@ -1247,6 +1247,7 @@ CefRefPtr<Client> CreateBrowserWindow(const IPCWindowCreate& windowCreate)
     LOG(INFO) << "Window create (URL = '" << windowCreate.url << "')";
 
     CefRefPtr<CefCommandLine> command_line = CefCommandLine::GetGlobalCommandLine();
+    const bool headless = command_line->HasSwitch("headless");
 
     // Check if Alloy style will be used.
     cef_runtime_style_t runtime_style = CEF_RUNTIME_STYLE_DEFAULT;
@@ -1261,6 +1262,16 @@ CefRefPtr<Client> CreateBrowserWindow(const IPCWindowCreate& windowCreate)
 
     CefRefPtr<Client> client = new Client(windowCreate);
     CefBrowserSettings settings;
+
+    if (headless) {
+        CefWindowInfo wi;
+        wi.SetAsWindowless(kNullWindowHandle);
+        wi.bounds.width = windowCreate.preferredWidth;
+        wi.bounds.height = windowCreate.preferredHeight;
+        CefBrowserHost::CreateBrowserSync(wi, client, windowCreate.url, settings, nullptr, nullptr);
+
+        return client;
+    }
 
     const bool use_views = !command_line->HasSwitch("use-native");
     LOG(INFO) << "Use views = " << (use_views ? "true" : "false");

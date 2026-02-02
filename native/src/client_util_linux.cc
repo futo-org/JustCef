@@ -1,4 +1,5 @@
 #include "client_util.h"
+#include "client.h"
 
 #if defined(CEF_X11)
 #include <X11/Xatom.h>
@@ -27,7 +28,7 @@ namespace shared {
         DCHECK(display);
 
         ::Window window = browser->GetHost()->GetWindowHandle();
-        DCHECK(window != kNullWindowHandle);
+        if (window == kNullWindowHandle) return;
 
         Atom _NET_WM_NAME = XInternAtom(display, "_NET_WM_NAME", False);
         Atom UTF8_STRING = XInternAtom(display, "UTF8_STRING", False);
@@ -124,7 +125,7 @@ namespace shared {
         DCHECK(display);
 
         ::Window window = browser->GetHost()->GetWindowHandle();
-        DCHECK(window != kNullWindowHandle);
+        if (window == kNullWindowHandle) return false;
 
         Atom wmState = XInternAtom(display, "_NET_WM_STATE", False);
         Atom fullscreen = XInternAtom(display, "_NET_WM_STATE_FULLSCREEN", False);
@@ -165,7 +166,7 @@ namespace shared {
         DCHECK(display);
 
         ::Window window = browser->GetHost()->GetWindowHandle();
-        DCHECK(window != kNullWindowHandle);
+        if (window == kNullWindowHandle) return;
 
         XSizeHints* sizeHints = XAllocSizeHints();
         sizeHints->flags = PMinSize;
@@ -185,7 +186,7 @@ namespace shared {
         DCHECK(display);
 
         ::Window window = browser->GetHost()->GetWindowHandle();
-        DCHECK(window != kNullWindowHandle);
+        if (window == kNullWindowHandle) return;
 
         Atom wmHints = XInternAtom(display, "_MOTIF_WM_HINTS", True);
         if (wmHints != None) {
@@ -215,7 +216,7 @@ namespace shared {
         DCHECK(display);
 
         ::Window window = browser->GetHost()->GetWindowHandle();
-        DCHECK(window != kNullWindowHandle);
+        if (window == kNullWindowHandle) return;
 
         XSizeHints* sizeHints = XAllocSizeHints();
         long supplied_return;
@@ -240,7 +241,7 @@ namespace shared {
         DCHECK(display);
 
         ::Window window = browser->GetHost()->GetWindowHandle();
-        DCHECK(window != kNullWindowHandle);
+        if (window == kNullWindowHandle) return;
 
         Atom wmState = XInternAtom(display, "_NET_WM_STATE", False);
         Atom fullscreenAtom = XInternAtom(display, "_NET_WM_STATE_FULLSCREEN", False);
@@ -270,7 +271,7 @@ namespace shared {
         DCHECK(display);
 
         ::Window window = browser->GetHost()->GetWindowHandle();
-        DCHECK(window != kNullWindowHandle);
+        if (window == kNullWindowHandle) return;
 
         const char* kAtoms[] = {"_NET_WM_STATE", "UTF8_STRING", "_NET_WM_STATE_MAXIMIZED_VERT", "_NET_WM_STATE_MAXIMIZED_HORZ"};
         Atom atoms[4];
@@ -302,7 +303,7 @@ namespace shared {
         DCHECK(display);
 
         ::Window window = browser->GetHost()->GetWindowHandle();
-        DCHECK(window != kNullWindowHandle);
+        if (window == kNullWindowHandle) return;
 
         XIconifyWindow(display, window, DefaultScreen(display));
         XFlush(display);
@@ -316,7 +317,7 @@ namespace shared {
         DCHECK(display);
 
         ::Window window = browser->GetHost()->GetWindowHandle();
-        DCHECK(window != kNullWindowHandle);
+        if (window == kNullWindowHandle) return;
 
         XMapWindow(display, window);
         XFlush(display);
@@ -330,7 +331,7 @@ namespace shared {
         DCHECK(display);
 
         ::Window window = browser->GetHost()->GetWindowHandle();
-        DCHECK(window != kNullWindowHandle);
+        if (window == kNullWindowHandle) return;
 
         XMapRaised(display, window);
         XFlush(display);
@@ -344,7 +345,7 @@ namespace shared {
         DCHECK(display);
 
         ::Window window = browser->GetHost()->GetWindowHandle();
-        DCHECK(window != kNullWindowHandle);
+        if (window == kNullWindowHandle) return;
 
         XUnmapWindow(display, window);
         XFlush(display);
@@ -358,7 +359,7 @@ namespace shared {
         DCHECK(display);
 
         ::Window window = browser->GetHost()->GetWindowHandle();
-        DCHECK(window != kNullWindowHandle);
+        if (window == kNullWindowHandle) return;
 
         Atom wmActivate = XInternAtom(display, "_NET_ACTIVE_WINDOW", False);
 
@@ -388,7 +389,7 @@ namespace shared {
         DCHECK(display);
 
         ::Window window = browser->GetHost()->GetWindowHandle();
-        DCHECK(window != kNullWindowHandle);
+        if (window == kNullWindowHandle) return;
 
         XRaiseWindow(display, window);
         XFlush(display);
@@ -402,7 +403,7 @@ namespace shared {
         DCHECK(display);
 
         ::Window window = browser->GetHost()->GetWindowHandle();
-        DCHECK(window != kNullWindowHandle);
+        if (window == kNullWindowHandle) return;
 
         Atom wmState = XInternAtom(display, "_NET_WM_STATE", False);
         Atom wmStateAbove = XInternAtom(display, "_NET_WM_STATE_ABOVE", False);
@@ -433,7 +434,11 @@ namespace shared {
         DCHECK(display);
 
         ::Window window = browser->GetHost()->GetWindowHandle();
-        DCHECK(window != kNullWindowHandle);
+        if (window == kNullWindowHandle) { 
+            CefRefPtr<CefClient> client = browser->GetHost()->GetClient();
+            Client* pClient = (Client*)client.get();
+            return CefSize { pClient->settings.preferredWidth, pClient->settings.preferredHeight };
+        }
 
         XWindowAttributes attrs;
         XGetWindowAttributes(display, window, &attrs);
@@ -449,7 +454,7 @@ namespace shared {
         DCHECK(display);
 
         ::Window window = browser->GetHost()->GetWindowHandle();
-        DCHECK(window != kNullWindowHandle);
+        if (window == kNullWindowHandle) return;
 
         Screen* screen = DefaultScreenOfDisplay(display);
         int screenWidth = screen->width;
@@ -470,7 +475,7 @@ namespace shared {
         DCHECK(display);
 
         ::Window window = browser->GetHost()->GetWindowHandle();
-        DCHECK(window != kNullWindowHandle);
+        if (window == kNullWindowHandle) return;
 
         XResizeWindow(display, window, size.width, size.height);
         XFlush(display);
@@ -484,7 +489,7 @@ namespace shared {
         DCHECK(display);
 
         ::Window window = browser->GetHost()->GetWindowHandle();
-        DCHECK(window != kNullWindowHandle);
+        if (window == kNullWindowHandle) return CefPoint { 0, 0 };
 
         ::Window root;
         int x, y;
@@ -509,7 +514,7 @@ namespace shared {
         DCHECK(display);
 
         ::Window window = browser->GetHost()->GetWindowHandle();
-        DCHECK(window != kNullWindowHandle);
+        if (window == kNullWindowHandle) return;
 
         XMoveWindow(display, window, position.x, position.y);
         XFlush(display);
@@ -523,7 +528,7 @@ namespace shared {
         DCHECK(display);
 
         ::Window window = browser->GetHost()->GetWindowHandle();
-        DCHECK(window != kNullWindowHandle);
+        if (window == kNullWindowHandle) return;
 
         XSetInputFocus(display, window, RevertToParent, CurrentTime);
         XFlush(display);

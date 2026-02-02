@@ -61,6 +61,7 @@ int RunMain(HINSTANCE hInstance, LPTSTR /*lpCmdLine*/, int /*nCmdShow*/, void* s
     }
 
     CefRefPtr<CefCommandLine> command_line = CreateCommandLine(main_args);
+    const bool headless = command_line->HasSwitch("headless");
     ProcessType processType = GetProcessType(command_line);
     LOG(INFO) << "main with processType = " << processType << ".";
 
@@ -116,6 +117,10 @@ int RunMain(HINSTANCE hInstance, LPTSTR /*lpCmdLine*/, int /*nCmdShow*/, void* s
 
     if (!sandbox_info) {
         settings.no_sandbox = true;
+    }
+
+    if (headless) {
+        settings.windowless_rendering_enabled = true;
     }
 
     std::filesystem::path cachePath;

@@ -84,6 +84,8 @@ namespace shared {
 
     // Create a temporary CommandLine object.
     CefRefPtr<CefCommandLine> command_line = CreateCommandLine(main_args);
+    const bool headless = command_line->HasSwitch("headless");
+
     ProcessType processType = GetProcessType(command_line);
     if (processType == PROCESS_TYPE_BROWSER) {
       int readFd = -1;
@@ -158,6 +160,10 @@ namespace shared {
 #if !defined(CEF_USE_SANDBOX)
     settings.no_sandbox = true;
 #endif
+
+    if (headless) {
+      settings.windowless_rendering_enabled = true;
+    }
 
     //settings.log_severity = LOGSEVERITY_WARNING;
     //settings.single_process = true;

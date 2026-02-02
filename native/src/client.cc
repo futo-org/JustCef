@@ -974,3 +974,10 @@ bool Client::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser, CefRefPtr<C
 }
 
 //TODO: Implement Minimized, Maximized, Restored, KeyboardEvent, Resized, Moved
+
+CefRefPtr<CefRenderHandler> Client::GetRenderHandler() { 
+    auto cl = CefCommandLine::GetGlobalCommandLine();
+    if (cl->HasSwitch("headless"))
+        return this;
+    return nullptr;
+}
