@@ -255,12 +255,12 @@ namespace DotCef
                     ? "/Users/koen/Projects/Grayjay.Desktop/JustCef/native/build/Debug/dotcefnative.app/Contents/MacOS/dotcefnative"
                     : OperatingSystem.IsWindows() 
                         ? """C:\Users\Koen\Projects\Grayjay.Desktop\JustCef\native\build\Release\dotcefnative.exe"""
-                        : "/home/koen/Projects/JustCef/native/build/Debug/dotcefnative",
+                        : "/home/koen/Projects/Grayjay.Desktop/JustCef/build/Release/dotcefnative",
                 WorkingDirectory = OperatingSystem.IsMacOS()
                     ? "/Users/koen/Projects/Grayjay.Desktop/JustCef/native/build/Debug/"
                     : OperatingSystem.IsWindows() 
                         ? """C:\Users\Koen\Projects\Grayjay.Desktop\JustCef\native\build\Release\"""
-                        : "/home/koen/Projects/JustCef/native/build/Debug/",
+                        : "/home/koen/Projects/Grayjay.Desktop/JustCef/build/Release",
 #else
                 FileName = nativePath,
                 WorkingDirectory = workingDirectory,

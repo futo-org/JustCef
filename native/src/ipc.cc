@@ -1223,7 +1223,10 @@ class BrowserViewDelegate : public CefBrowserViewDelegate {
         if (is_devtools) {
             CefWindow::CreateTopLevelWindow(new DevToolsWindowDelegate(popup_browser_view));
         } else {
-            CefWindow::CreateTopLevelWindow(new WindowDelegate(popup_browser_view, runtime_style_, CEF_SHOW_STATE_NORMAL, _settings));
+            cef_show_state_t showState = _settings.shown 
+                ? (_settings.fullscreen ? CEF_SHOW_STATE_FULLSCREEN : CEF_SHOW_STATE_NORMAL)
+                : CEF_SHOW_STATE_HIDDEN;
+            CefWindow::CreateTopLevelWindow(new WindowDelegate(popup_browser_view, runtime_style_, showState, _settings));
         }
         return true;
     }
@@ -1276,12 +1279,9 @@ CefRefPtr<Client> CreateBrowserWindow(const IPCWindowCreate& windowCreate)
     const bool use_views = !command_line->HasSwitch("use-native");
     LOG(INFO) << "Use views = " << (use_views ? "true" : "false");
 
-    cef_show_state_t showState = CEF_SHOW_STATE_NORMAL;
-    if (windowCreate.fullscreen) {
-        showState = CEF_SHOW_STATE_FULLSCREEN;
-    } else if (windowCreate.shown) {
-        showState = CEF_SHOW_STATE_NORMAL;
-    }
+    cef_show_state_t showState = windowCreate.shown 
+        ? (windowCreate.fullscreen ? CEF_SHOW_STATE_FULLSCREEN : CEF_SHOW_STATE_NORMAL)
+        : CEF_SHOW_STATE_HIDDEN;
 
     if (use_views)
     {
@@ -1296,7 +1296,11 @@ CefRefPtr<Client> CreateBrowserWindow(const IPCWindowCreate& windowCreate)
         window_info.runtime_style = runtime_style;
 
 #if defined(OS_WIN)
-        window_info.style = WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN | WS_CLIPSIBLINGS | WS_VISIBLE;
+        DWORD style = WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
+        if (windowCreate.shown) {
+            style |= WS_VISIBLE;
+        }
+        window_info.style = style;
         window_info.parent_window = nullptr;
         window_info.bounds.x = CW_USEDEFAULT;
         window_info.bounds.y = CW_USEDEFAULT;
