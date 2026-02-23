@@ -135,7 +135,7 @@ resource "aws_instance" "build_server_justcefnative_x64" {
     AWS_ACCESS_KEY_ID="${var.cf_r2_access_key_id}" \
     AWS_SECRET_ACCESS_KEY="${var.cf_r2_secret_access_key}" \
     AWS_DEFAULT_REGION=auto \
-    aws s3 cp "$ZIP_NAME" "s3://${var.cf_r2_bucket}/justcefnative/${var.release_version}/$ZIP_NAME" --endpoint-url "https://${var.cf_r2_account_id}.r2.cloudflarestorage.com"
+    aws s3 cp "$ZIP_NAME" "s3://${var.cf_r2_bucket}/justcef/${var.release_version}/$ZIP_NAME" --endpoint-url "https://${var.cf_r2_account_id}.r2.cloudflarestorage.com"
     shutdown -h now
   EOF
 
@@ -229,7 +229,7 @@ resource "aws_instance" "build_server_justcefnative_arm64" {
     AWS_ACCESS_KEY_ID="${var.cf_r2_access_key_id}" \
     AWS_SECRET_ACCESS_KEY="${var.cf_r2_secret_access_key}" \
     AWS_DEFAULT_REGION=auto \
-    aws s3 cp "$ZIP_NAME" "s3://${var.cf_r2_bucket}/justcefnative/${var.release_version}/$ZIP_NAME" --endpoint-url "https://${var.cf_r2_account_id}.r2.cloudflarestorage.com"
+    aws s3 cp "$ZIP_NAME" "s3://${var.cf_r2_bucket}/justcef/${var.release_version}/$ZIP_NAME" --endpoint-url "https://${var.cf_r2_account_id}.r2.cloudflarestorage.com"
     shutdown -h now
   EOF
 

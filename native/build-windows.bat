@@ -30,4 +30,4 @@ aws s3 cp "%ZIP_NAME%" "s3://%CF_R2_BUCKET%/justcef/%VERSION%/%ZIP_NAME%" --endp
 
 if errorlevel 1 exit /b 1
 
-echo Uploaded: https://static.grayjay.app/justcefnative/%VERSION%/%ZIP_NAME%
+echo Uploaded: https://static.grayjay.app/justcef/%VERSION%/%ZIP_NAME%
