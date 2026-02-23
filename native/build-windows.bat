@@ -18,7 +18,7 @@ cd Release
 
 set "VERSION=%CI_COMMIT_TAG%"
 set "ARCH=%PROCESSOR_ARCHITECTURE%"
-set "ZIP_NAME=JustCefNative-windows-%ARCH%-%VERSION%.zip"
+set "ZIP_NAME=JustCefNative-windows-%ARCH%.zip"
 
 powershell Compress-Archive -Path * -DestinationPath "%ZIP_NAME%"
 

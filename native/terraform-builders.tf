@@ -128,7 +128,7 @@ resource "aws_instance" "build_server_dotcefnative_x64" {
     # Compress the output and upload to S3
     cd Release
     VERSION="${var.release_version}"
-    ZIP_NAME="DotCefNative-linux-x64-${var.release_version}.zip"
+    ZIP_NAME="JustCefNative-linux-x64.zip"
 
     zip -r "$ZIP_NAME" *
 
@@ -222,7 +222,7 @@ resource "aws_instance" "build_server_dotcefnative_arm64" {
     # Compress the output and upload to Cloudflare R2 (versioned by tag)
     cd Release
     VERSION="${var.release_version}"
-    ZIP_NAME="DotCefNative-linux-arm64-${var.release_version}.zip"
+    ZIP_NAME="JustCefNative-linux-arm64.zip"
 
     zip -r "$ZIP_NAME" *
 
