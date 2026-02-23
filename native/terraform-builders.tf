@@ -56,7 +56,7 @@ resource "aws_instance" "build_server_justcefnative_x64" {
   instance_type          = "t3.micro"
   key_name               = "koen@pop-os"
   iam_instance_profile   = "EC2_Secret_ReadWrite"
-  security_groups        = ["build_server_justcefnative_security_group"]
+  vpc_security_group_ids = [aws_security_group.build_server_justcefnative_sg.id]
   instance_initiated_shutdown_behavior = "terminate"
 
   root_block_device {
@@ -150,7 +150,7 @@ resource "aws_instance" "build_server_justcefnative_arm64" {
   instance_type          = "t4g.micro"
   key_name               = "koen@pop-os"
   iam_instance_profile   = "EC2_Secret_ReadWrite"
-  security_groups        = ["build_server_justcefnative_security_group"]
+  vpc_security_group_ids = [aws_security_group.build_server_justcefnative_sg.id]
   instance_initiated_shutdown_behavior = "terminate"
 
   root_block_device {
