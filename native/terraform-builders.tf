@@ -30,7 +30,7 @@ variable "cf_r2_bucket" {
 }
 
 resource "aws_security_group" "build_server_justcefnative_sg" {
-  name        = "build_server_justcefnative_security_group"
+  name_prefix = "build_server_justcefnative-"
   description = "Security group for build server allowing SSH access"
   vpc_id      = data.aws_vpc.default.id
 
