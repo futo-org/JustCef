@@ -183,7 +183,7 @@ namespace shared {
       std::stringstream ss;
       ss << ms;
       std::string uniqueIdentifier = ss.str();
-      cachePath = std::filesystem::temp_directory_path() / ("dotcef_" + uniqueIdentifier);
+      cachePath = std::filesystem::temp_directory_path() / ("justcef_" + uniqueIdentifier);
     }
 
     LOG(INFO) << "Cache path: " << cachePath.u8string();

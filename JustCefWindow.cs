@@ -1,10 +1,10 @@
 using System.Diagnostics;
 
-namespace DotCef
+namespace JustCef
 {
-    public class DotCefWindow
+    public class JustCefWindow
     {
-        private readonly DotCefProcess _process;
+        private readonly JustCefProcess _process;
         public readonly int Identifier;
 
         public event Action? OnClose;
@@ -16,12 +16,12 @@ namespace DotCef
         public event Action<int, string?, string?>? OnLoadError;
         public event Action<string?, byte[]>? OnDevToolsEvent;
 
-        private Func<DotCefWindow, IPCRequest, IPCRequest?>? _requestModifier;
-        private Func<DotCefWindow, IPCRequest, Task<IPCResponse?>>? _requestProxy;
+        private Func<JustCefWindow, IPCRequest, IPCRequest?>? _requestModifier;
+        private Func<JustCefWindow, IPCRequest, Task<IPCResponse?>>? _requestProxy;
 
         private readonly TaskCompletionSource _closeCompletionSource = new TaskCompletionSource();
 
-        public DotCefWindow(DotCefProcess process, int identifier, Func<DotCefWindow, IPCRequest, IPCRequest?>? requestModifier, Func<DotCefWindow, IPCRequest, Task<IPCResponse?>>? requestProxy)
+        public JustCefWindow(JustCefProcess process, int identifier, Func<JustCefWindow, IPCRequest, IPCRequest?>? requestModifier, Func<JustCefWindow, IPCRequest, Task<IPCResponse?>>? requestProxy)
         {
             _process = process;
             Identifier = identifier;
@@ -83,7 +83,7 @@ namespace DotCef
             await _process.WindowSetProxyRequestsAsync(Identifier, proxyRequests, cancellationToken);
         }
 
-        public void SetRequestProxy(Func<DotCefWindow, IPCRequest, Task<IPCResponse?>>? requestProxy)
+        public void SetRequestProxy(Func<JustCefWindow, IPCRequest, Task<IPCResponse?>>? requestProxy)
         {
             _requestProxy = requestProxy;
         }
@@ -91,7 +91,7 @@ namespace DotCef
         public async Task SetModifyRequestsAsync(bool modifyRequests, bool modifyBody, CancellationToken cancellationToken = default)
             => await _process.WindowSetModifyRequestsAsync(Identifier, modifyRequests, modifyBody, cancellationToken);
 
-        public void SetRequestModifier(Func<DotCefWindow, IPCRequest, IPCRequest>? requestModifier)
+        public void SetRequestModifier(Func<JustCefWindow, IPCRequest, IPCRequest>? requestModifier)
         {
             _requestModifier = requestModifier;
         }
@@ -124,7 +124,7 @@ namespace DotCef
             }
             catch (Exception e)
             {
-                Logger.Error<DotCefWindow>($"Exception occurred while processing request proxy", e);
+                Logger.Error<JustCefWindow>($"Exception occurred while processing request proxy", e);
                 Debugger.Break();
 
                 _ = Task.Run(async () =>
@@ -135,7 +135,7 @@ namespace DotCef
                     }
                     catch (Exception ex)
                     {
-                        Logger.Error<DotCefWindow>($"Exception occurred while trying to close window after request proxy exception.", ex);
+                        Logger.Error<JustCefWindow>($"Exception occurred while trying to close window after request proxy exception.", ex);
                     }
                 });
 
@@ -159,7 +159,7 @@ namespace DotCef
             }
             catch (Exception e)
             {
-                Logger.Error<DotCefWindow>($"Exception occurred while processing modify request", e);
+                Logger.Error<JustCefWindow>($"Exception occurred while processing modify request", e);
                 Debugger.Break();
 
                 _ = Task.Run(async () =>
@@ -170,7 +170,7 @@ namespace DotCef
                     }
                     catch (Exception ex)
                     {
-                        Logger.Error<DotCefWindow>($"Exception occurred while trying to close window after modify request exception.", ex);
+                        Logger.Error<JustCefWindow>($"Exception occurred while trying to close window after modify request exception.", ex);
                     }
                 });
                 return request;

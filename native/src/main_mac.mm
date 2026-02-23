@@ -218,7 +218,7 @@ int main(int argc, char* argv[]) {
             NSDate *now = [NSDate date];
             NSTimeInterval s = [now timeIntervalSince1970];
             NSString *uniqueIdentifier = [NSString stringWithFormat:@"%lld", (long long)s];
-            NSString *cacheDirectoryName = [@"dotcef_" stringByAppendingString:uniqueIdentifier];
+            NSString *cacheDirectoryName = [@"justcef_" stringByAppendingString:uniqueIdentifier];
             NSString *tempCachePath = [NSTemporaryDirectory() stringByAppendingPathComponent:cacheDirectoryName];
             cachePathStd = std::string([tempCachePath UTF8String]);
         }

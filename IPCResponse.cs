@@ -1,4 +1,4 @@
-namespace DotCef;
+namespace JustCef;
 
 public class IPCResponse
 {

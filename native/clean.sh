@@ -1,4 +1,4 @@
 #!/bin/sh
-docker kill dotcefnative || true
-docker rm dotcefnative || true
-docker image rm dotcefnative || true
+docker kill justcefnative || true
+docker rm justcefnative || true
+docker image rm justcefnative || true

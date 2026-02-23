@@ -132,7 +132,7 @@ int RunMain(HINSTANCE hInstance, LPTSTR /*lpCmdLine*/, int /*nCmdShow*/, void* s
     } else {
         const auto now = std::chrono::system_clock::now();
         const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
-        cachePath = std::filesystem::temp_directory_path() / ("dotcef_" + std::to_string(ms));
+        cachePath = std::filesystem::temp_directory_path() / ("justcef_" + std::to_string(ms));
     }
 
     CefString(&settings.cache_path) = cachePath.u8string();

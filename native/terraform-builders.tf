@@ -29,8 +29,8 @@ variable "cf_r2_bucket" {
   type = string
 }
 
-#resource "aws_security_group" "build_server_dotcefnative_sg" {
-#  name        = "build_server_dotcefnative_security_group"
+#resource "aws_security_group" "build_server_justcefnative_sg" {
+#  name        = "build_server_justcefnative_security_group"
 #  description = "Security group for build server allowing SSH access"
 #  vpc_id      = data.aws_vpc.default.id
 #
@@ -51,12 +51,12 @@ variable "cf_r2_bucket" {
 #}
 
 # x64 Build Server
-resource "aws_instance" "build_server_dotcefnative_x64" {
+resource "aws_instance" "build_server_justcefnative_x64" {
   ami                    = "ami-0057500c2b673caf5"  # Debian 11 AMI x64
   instance_type          = "t3.micro"
   key_name               = "koen@pop-os"
   iam_instance_profile   = "EC2_Secret_ReadWrite"
-  security_groups        = ["build_server_dotcefnative_security_group"]
+  security_groups        = ["build_server_justcefnative_security_group"]
   instance_initiated_shutdown_behavior = "terminate"
 
   root_block_device {
@@ -135,7 +135,7 @@ resource "aws_instance" "build_server_dotcefnative_x64" {
     AWS_ACCESS_KEY_ID="${var.cf_r2_access_key_id}" \
     AWS_SECRET_ACCESS_KEY="${var.cf_r2_secret_access_key}" \
     AWS_DEFAULT_REGION=auto \
-    aws s3 cp "$ZIP_NAME" "s3://${var.cf_r2_bucket}/dotcefnative/${var.release_version}/$ZIP_NAME" --endpoint-url "https://${var.cf_r2_account_id}.r2.cloudflarestorage.com"
+    aws s3 cp "$ZIP_NAME" "s3://${var.cf_r2_bucket}/justcefnative/${var.release_version}/$ZIP_NAME" --endpoint-url "https://${var.cf_r2_account_id}.r2.cloudflarestorage.com"
     shutdown -h now
   EOF
 
@@ -145,12 +145,12 @@ resource "aws_instance" "build_server_dotcefnative_x64" {
 }
 
 # ARM64 Build Server
-resource "aws_instance" "build_server_dotcefnative_arm64" {
+resource "aws_instance" "build_server_justcefnative_arm64" {
   ami                    = "ami-01476ceec1d5e9a72"  # Debian 11 AMI ARM64
   instance_type          = "t4g.micro"
   key_name               = "koen@pop-os"
   iam_instance_profile   = "EC2_Secret_ReadWrite"
-  security_groups        = ["build_server_dotcefnative_security_group"]
+  security_groups        = ["build_server_justcefnative_security_group"]
   instance_initiated_shutdown_behavior = "terminate"
 
   root_block_device {
@@ -229,7 +229,7 @@ resource "aws_instance" "build_server_dotcefnative_arm64" {
     AWS_ACCESS_KEY_ID="${var.cf_r2_access_key_id}" \
     AWS_SECRET_ACCESS_KEY="${var.cf_r2_secret_access_key}" \
     AWS_DEFAULT_REGION=auto \
-    aws s3 cp "$ZIP_NAME" "s3://${var.cf_r2_bucket}/dotcefnative/${var.release_version}/$ZIP_NAME" --endpoint-url "https://${var.cf_r2_account_id}.r2.cloudflarestorage.com"
+    aws s3 cp "$ZIP_NAME" "s3://${var.cf_r2_bucket}/justcefnative/${var.release_version}/$ZIP_NAME" --endpoint-url "https://${var.cf_r2_account_id}.r2.cloudflarestorage.com"
     shutdown -h now
   EOF
 
@@ -239,9 +239,9 @@ resource "aws_instance" "build_server_dotcefnative_arm64" {
 }
 
 output "public_ip_x64" {
-  value = aws_instance.build_server_dotcefnative_x64.public_ip
+  value = aws_instance.build_server_justcefnative_x64.public_ip
 }
 
 output "public_ip_arm64" {
-  value = aws_instance.build_server_dotcefnative_arm64.public_ip
+  value = aws_instance.build_server_justcefnative_arm64.public_ip
 }

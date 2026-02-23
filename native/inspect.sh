@@ -1,4 +1,4 @@
 #!/bin/sh
-docker kill dotcefnative
-docker rm dotcefnative
-docker run --name dotcefnative -it dotcefnative
+docker kill justcefnative
+docker rm justcefnative
+docker run --name justcefnative -it justcefnative

@@ -4,7 +4,7 @@ using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Text;
 
-namespace DotCef;
+namespace JustCef;
 
 [SupportedOSPlatform("windows")]
 public static class DialogWindows

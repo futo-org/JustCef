@@ -11,11 +11,11 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Text;
-using DotCef;
+using JustCef;
 
-namespace DotCef
+namespace JustCef
 {
-    public class DotCefProcess : IDisposable
+    public class JustCefProcess : IDisposable
     {
         public enum PacketType : byte
         {
@@ -154,12 +154,12 @@ namespace DotCef
         private bool _started = false;
         private SemaphoreSlim _writeSemaphore = new SemaphoreSlim(1);
         private uint _requestIdCounter = 0;
-        private readonly List<DotCefWindow> _windows = new List<DotCefWindow>();
+        private readonly List<JustCefWindow> _windows = new List<JustCefWindow>();
         private CancellationTokenSource _cancellationTokenSource = new CancellationTokenSource();
         private uint _streamIdentifierGenerator = 0;
         private Dictionary<uint, CancellationTokenSource> _streamCancellationTokens = new Dictionary<uint, CancellationTokenSource>();
 
-        public List<DotCefWindow> Windows
+        public List<JustCefWindow> Windows
         {
             get
             {
@@ -170,7 +170,7 @@ namespace DotCef
             }
         }
 
-        public DotCefWindow? GetWindow(int identifier)
+        public JustCefWindow? GetWindow(int identifier)
         {
             lock (_windows)
             {
@@ -193,7 +193,7 @@ namespace DotCef
             }
         }
 
-        public DotCefProcess()
+        public JustCefProcess()
         {
             //var writer = new AnonymousPipeServerStream(PipeDirection.Out, HandleInheritability.None);
             //writer.Dispose();
@@ -221,9 +221,9 @@ namespace DotCef
 
 #if !HARDCODED_PATHS
             string[] searchPaths = GenerateSearchPaths();
-            Logger.Info<DotCefProcess>("Searching for dotcefnative, search paths:");
+            Logger.Info<JustCefProcess>("Searching for justcefnative, search paths:");
             foreach (var path in searchPaths)
-                Logger.Info<DotCefProcess>(" - " + path);
+                Logger.Info<JustCefProcess>(" - " + path);
 
             foreach (string path in searchPaths)
             {
@@ -233,29 +233,29 @@ namespace DotCef
             }
 
             if (nativePath == null)
-                throw new Exception("Failed to find dotcefnative");
+                throw new Exception("Failed to find justcefnative");
 
             var workingDirectory = GetDirectory(nativePath);
-            Logger.Info<DotCefProcess>($"Working directory '{workingDirectory}'.");
-            Logger.Info<DotCefProcess>($"CEF exe path '{nativePath}'.");
+            Logger.Info<JustCefProcess>($"Working directory '{workingDirectory}'.");
+            Logger.Info<JustCefProcess>($"CEF exe path '{nativePath}'.");
 
             if (!File.Exists(nativePath))
             {
-                Logger.Error<DotCefProcess>($"File not found at native path '{nativePath}'.");
+                Logger.Error<JustCefProcess>($"File not found at native path '{nativePath}'.");
                 throw new Exception("Native executable not found.");
             }
 #else
-            Logger.Info<DotCefProcess>($"USING HARDCODED PATHS.");
+            Logger.Info<JustCefProcess>($"USING HARDCODED PATHS.");
 #endif
 
             ProcessStartInfo psi = new ProcessStartInfo
             {
 #if HARDCODED_PATHS
                 FileName = OperatingSystem.IsMacOS()
-                    ? "/Users/koen/Projects/Grayjay.Desktop/JustCef/native/build/Debug/dotcefnative.app/Contents/MacOS/dotcefnative"
+                    ? "/Users/koen/Projects/Grayjay.Desktop/JustCef/native/build/Debug/justcefnative.app/Contents/MacOS/justcefnative"
                     : OperatingSystem.IsWindows() 
-                        ? """C:\Users\Koen\Projects\Grayjay.Desktop\JustCef\native\build\Release\dotcefnative.exe"""
-                        : "/home/koen/Projects/Grayjay.Desktop/JustCef/build/Release/dotcefnative",
+                        ? """C:\Users\Koen\Projects\Grayjay.Desktop\JustCef\native\build\Release\justcefnative.exe"""
+                        : "/home/koen/Projects/Grayjay.Desktop/JustCef/build/Release/justcefnative",
                 WorkingDirectory = OperatingSystem.IsMacOS()
                     ? "/Users/koen/Projects/Grayjay.Desktop/JustCef/native/build/Debug/"
                     : OperatingSystem.IsWindows() 
@@ -271,7 +271,7 @@ namespace DotCef
                 RedirectStandardOutput = true
             };
 
-            Logger.Info<DotCefProcess>(psi.Arguments);
+            Logger.Info<JustCefProcess>(psi.Arguments);
 
             var process = new Process();
             process.StartInfo = psi;
@@ -279,13 +279,13 @@ namespace DotCef
             {
                 var d = args?.Data;
                 if (d != null)
-                    Logger.Info<DotCefProcess>(d);
+                    Logger.Info<JustCefProcess>(d);
             };
             process.OutputDataReceived += (_, args) =>
             {
                 var d = args?.Data;
                 if (d != null)
-                    Logger.Info<DotCefProcess>(d);
+                    Logger.Info<JustCefProcess>(d);
             };
 
             if (!process.Start())
@@ -307,7 +307,7 @@ namespace DotCef
             {
                 try
                 {
-                    Logger.Info<DotCefProcess>("Receive loop started.");
+                    Logger.Info<JustCefProcess>("Receive loop started.");
 
                     byte[] headerBuffer = new byte[HeaderSize];
 
@@ -323,7 +323,7 @@ namespace DotCef
                         int bodySize = (int)size + 4 - HeaderSize;
                         if (bodySize > MaxIPCSize)
                         {
-                            Logger.Error<DotCefProcess>("Invalid packet size. Shutting down.");
+                            Logger.Error<JustCefProcess>("Invalid packet size. Shutting down.");
                             Dispose();
                             return;
                         }
@@ -352,7 +352,7 @@ namespace DotCef
                                     if (foundPendingRequest && pendingRequest != null)
                                         pendingRequest.ResponseBodyTaskCompletionSource.SetResult(rentedBodyBuffer != null ? rentedBodyBuffer.Value.Buffer.AsSpan().Slice(0, rentedBodyBuffer.Value.Length).ToArray() : Array.Empty<byte>());
                                     else
-                                        Logger.Error<DotCefProcess>($"Received a packet response for a request that no longer has an awaiter (request id = {requestId}).");
+                                        Logger.Error<JustCefProcess>($"Received a packet response for a request that no longer has an awaiter (request id = {requestId}).");
                                 }
                                 else if (packetType == PacketType.Request)
                                 {
@@ -392,7 +392,7 @@ namespace DotCef
                             }
                             catch (Exception e)
                             {
-                                Logger.Error<DotCefProcess>($"An exception occurred in the IPC while handling a packet", e);
+                                Logger.Error<JustCefProcess>($"An exception occurred in the IPC while handling a packet", e);
                                 //TODO: If packetType == PacketType.Request, write back an error?
                             }
                             finally
@@ -404,11 +404,11 @@ namespace DotCef
                 }
                 catch (Exception e)
                 {
-                    Logger.Error<DotCefProcess>($"An exception occurred in the IPC", e);
+                    Logger.Error<JustCefProcess>($"An exception occurred in the IPC", e);
                 }
                 finally
                 {
-                    Logger.Info<DotCefProcess>("Receive loop stopped.");
+                    Logger.Info<JustCefProcess>("Receive loop stopped.");
                     Dispose();
                 }
 
@@ -425,7 +425,7 @@ namespace DotCef
                     case OpcodeClient.Ping:
                         break;
                     case OpcodeClient.Print:
-                        Logger.Info<DotCefProcess>(reader.ReadString(reader.RemainingSize));
+                        Logger.Info<JustCefProcess>(reader.ReadString(reader.RemainingSize));
                         break;
                     case OpcodeClient.Echo:
                         writer.WriteBytes(reader.ReadBytes(reader.RemainingSize));
@@ -449,13 +449,13 @@ namespace DotCef
                         }
                         break;
                     default:
-                        Logger.Warning<DotCefProcess>($"Received unhandled opcode {opcode}.");
+                        Logger.Warning<JustCefProcess>($"Received unhandled opcode {opcode}.");
                         break;
                 }
             }
             catch (Exception e)
             {
-                Logger.Error<DotCefProcess>($"Exception occurred while processing call", e);
+                Logger.Error<JustCefProcess>($"Exception occurred while processing call", e);
                 Debugger.Break();
             }
         }
@@ -623,7 +623,7 @@ namespace DotCef
                 }
                 catch (Exception e)
                 {
-                    Logger.Error<DotCefProcess>($"Failed to stream body", e);
+                    Logger.Error<JustCefProcess>($"Failed to stream body", e);
                 }
                 finally
                 {
@@ -732,24 +732,24 @@ namespace DotCef
 
         private void HandleNotification(OpcodeClientNotification opcode, PacketReader reader)
         {
-            Logger.Info<DotCefProcess>($"Received notification {opcode}");
+            Logger.Info<JustCefProcess>($"Received notification {opcode}");
 
             switch (opcode)
             {
                 case OpcodeClientNotification.Exit:
-                    Logger.Info<DotCefProcess>("CEF process is exiting.");
+                    Logger.Info<JustCefProcess>("CEF process is exiting.");
                     Dispose();
                     break;
                 case OpcodeClientNotification.Ready:
-                    Logger.Info<DotCefProcess>("Client is ready.");
+                    Logger.Info<JustCefProcess>("Client is ready.");
                     _readyTaskCompletionSource.SetResult();
                     break;
                 case OpcodeClientNotification.WindowOpened:
-                    Logger.Info<DotCefProcess>($"Window opened: {reader.Read<int>()}");
+                    Logger.Info<JustCefProcess>($"Window opened: {reader.Read<int>()}");
                     break;
                 case OpcodeClientNotification.WindowClosed:
                     {
-                        DotCefWindow? window;
+                        JustCefWindow? window;
                         lock (_windows)
                         {
                             var identifier = reader.Read<int>();
@@ -760,7 +760,7 @@ namespace DotCef
                             }
                         }
 
-                        Logger.Info<DotCefProcess>($"Window closed: {window}");
+                        Logger.Info<JustCefProcess>($"Window closed: {window}");
                         window?.InvokeOnClose();
                         break;
                     }
@@ -810,7 +810,7 @@ namespace DotCef
                     break;
                 }
                 default:
-                    Logger.Info<DotCefProcess>($"Received unhandled notification opcode {opcode}.");
+                    Logger.Info<JustCefProcess>($"Received unhandled notification opcode {opcode}.");
                     break;
             }
         }
@@ -1041,9 +1041,9 @@ namespace DotCef
                 throw new Exception("Process should be started.");
         }
 
-        public async Task<DotCefWindow> CreateWindowAsync(string url, int minimumWidth, int minimumHeight, int preferredWidth = 0, int preferredHeight = 0,
+        public async Task<JustCefWindow> CreateWindowAsync(string url, int minimumWidth, int minimumHeight, int preferredWidth = 0, int preferredHeight = 0,
             bool fullscreen = false, bool contextMenuEnable = false, bool shown = true, bool developerToolsEnabled = false, bool resizable = true, bool frameless = false,
-            bool centered = true, bool proxyRequests = false, bool logConsole = false, Func<DotCefWindow, IPCRequest, Task<IPCResponse?>>? requestProxy = null, bool modifyRequests = false, Func<DotCefWindow, IPCRequest, IPCRequest?>? requestModifier = null, bool modifyRequestBody = false,
+            bool centered = true, bool proxyRequests = false, bool logConsole = false, Func<JustCefWindow, IPCRequest, Task<IPCResponse?>>? requestProxy = null, bool modifyRequests = false, Func<JustCefWindow, IPCRequest, IPCRequest?>? requestModifier = null, bool modifyRequestBody = false,
             string? title = null, string? iconPath = null, string? appId = null, CancellationToken cancellationToken = default)
         {
             EnsureStarted();
@@ -1074,7 +1074,7 @@ namespace DotCef
             writer.WriteSizePrefixedString(appId);
 
             var reader = await CallAsync(OpcodeController.WindowCreate, writer.Data, 0, writer.Size, cancellationToken);
-            var window = new DotCefWindow(this, reader.Read<int>(), requestModifier, requestProxy);
+            var window = new JustCefWindow(this, reader.Read<int>(), requestModifier, requestProxy);
             lock (_windows)
             {
                 _windows.Add(window);
@@ -1486,11 +1486,11 @@ namespace DotCef
         private static string GetNativeFileName()
         {
             if (OperatingSystem.IsWindows())
-                return "dotcefnative.exe";
+                return "justcefnative.exe";
             else if (OperatingSystem.IsMacOS())
-                return "dotcefnative";
+                return "justcefnative";
             else if (OperatingSystem.IsLinux())
-                return "dotcefnative";
+                return "justcefnative";
             else
                 throw new PlatformNotSupportedException("Unsupported platform.");
         }
@@ -1514,12 +1514,12 @@ namespace DotCef
 
             if (OperatingSystem.IsMacOS())
             {
-                searchPaths.Add(Path.Combine(baseDirectory, $"dotcefnative.app/Contents/MacOS/{nativeFileName}"));
+                searchPaths.Add(Path.Combine(baseDirectory, $"justcefnative.app/Contents/MacOS/{nativeFileName}"));
                 searchPaths.Add(Path.Combine(baseDirectory, $"JustCef.app/Contents/MacOS/{nativeFileName}"));
             }
             if (OperatingSystem.IsMacOS())
             {
-                searchPaths.Add(Path.Combine(baseDirectory, $"../Frameworks/dotcefnative.app/Contents/MacOS/{nativeFileName}"));
+                searchPaths.Add(Path.Combine(baseDirectory, $"../Frameworks/justcefnative.app/Contents/MacOS/{nativeFileName}"));
                 searchPaths.Add(Path.Combine(baseDirectory, $"../Frameworks/JustCef.app/Contents/MacOS/{nativeFileName}"));
             }
             searchPaths.Add(Path.Combine(baseDirectory, cefDir, nativeFileName));
@@ -1529,12 +1529,12 @@ namespace DotCef
             {
                 if (OperatingSystem.IsMacOS())
                 {
-                    searchPaths.Add(Path.Combine(assemblyDirectory, $"dotcefnative.app/Contents/MacOS/{nativeFileName}"));
+                    searchPaths.Add(Path.Combine(assemblyDirectory, $"justcefnative.app/Contents/MacOS/{nativeFileName}"));
                     searchPaths.Add(Path.Combine(assemblyDirectory, $"JustCef.app/Contents/MacOS/{nativeFileName}"));
                 }
                 if (OperatingSystem.IsMacOS())
                 {
-                    searchPaths.Add(Path.Combine(assemblyDirectory, $"../Frameworks/dotcefnative.app/Contents/MacOS/{nativeFileName}"));
+                    searchPaths.Add(Path.Combine(assemblyDirectory, $"../Frameworks/justcefnative.app/Contents/MacOS/{nativeFileName}"));
                     searchPaths.Add(Path.Combine(assemblyDirectory, $"../Frameworks/JustCef.app/Contents/MacOS/{nativeFileName}"));
                 }
                 searchPaths.Add(Path.Combine(assemblyDirectory, cefDir, nativeFileName));
@@ -1545,12 +1545,12 @@ namespace DotCef
             {
                 if (OperatingSystem.IsMacOS())
                 {
-                    searchPaths.Add(Path.Combine(executableDirectory, $"dotcefnative.app/Contents/MacOS/{nativeFileName}"));
+                    searchPaths.Add(Path.Combine(executableDirectory, $"justcefnative.app/Contents/MacOS/{nativeFileName}"));
                     searchPaths.Add(Path.Combine(executableDirectory, $"JustCef.app/Contents/MacOS/{nativeFileName}"));
                 }
                 if (OperatingSystem.IsMacOS())
                 {
-                    searchPaths.Add(Path.Combine(executableDirectory, $"../Frameworks/dotcefnative.app/Contents/MacOS/{nativeFileName}"));
+                    searchPaths.Add(Path.Combine(executableDirectory, $"../Frameworks/justcefnative.app/Contents/MacOS/{nativeFileName}"));
                     searchPaths.Add(Path.Combine(executableDirectory, $"../Frameworks/JustCef.app/Contents/MacOS/{nativeFileName}"));
                 }
                 searchPaths.Add(Path.Combine(executableDirectory, cefDir, nativeFileName));
@@ -1559,12 +1559,12 @@ namespace DotCef
 
             if (OperatingSystem.IsMacOS())
             {
-                searchPaths.Add(Path.Combine(currentWorkingDirectory, $"dotcefnative.app/Contents/MacOS/{nativeFileName}"));
+                searchPaths.Add(Path.Combine(currentWorkingDirectory, $"justcefnative.app/Contents/MacOS/{nativeFileName}"));
                 searchPaths.Add(Path.Combine(currentWorkingDirectory, $"JustCef.app/Contents/MacOS/{nativeFileName}"));
             }
             if (OperatingSystem.IsMacOS())
             {
-                searchPaths.Add(Path.Combine(currentWorkingDirectory, $"../Frameworks/dotcefnative.app/Contents/MacOS/{nativeFileName}"));
+                searchPaths.Add(Path.Combine(currentWorkingDirectory, $"../Frameworks/justcefnative.app/Contents/MacOS/{nativeFileName}"));
                 searchPaths.Add(Path.Combine(currentWorkingDirectory, $"../Frameworks/JustCef.app/Contents/MacOS/{nativeFileName}"));
             }
             searchPaths.Add(Path.Combine(currentWorkingDirectory, nativeFileName));

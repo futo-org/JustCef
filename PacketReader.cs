@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace DotCef;
+namespace JustCef;
 
 public class PacketReader
 {

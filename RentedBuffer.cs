@@ -1,7 +1,7 @@
 using System.Buffers;
 using System.Runtime.InteropServices;
 
-namespace DotCef
+namespace JustCef
 {
     public struct RentedBuffer<T> : IDisposable
     {

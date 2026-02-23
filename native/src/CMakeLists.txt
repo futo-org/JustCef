@@ -197,10 +197,10 @@ endif()
 #
 
 # Target executable names.
-set(DOTCEF_TARGET "dotcefnative")
+set(DOTCEF_TARGET "justcefnative")
 if(OS_MAC)
-  set(DOTCEF_HELPER_TARGET "dotcefnative_Helper")
-  set(DOTCEF_HELPER_OUTPUT_NAME "dotcefnative Helper")
+  set(DOTCEF_HELPER_TARGET "justcefnative_Helper")
+  set(DOTCEF_HELPER_OUTPUT_NAME "justcefnative Helper")
 endif()
 
 #
