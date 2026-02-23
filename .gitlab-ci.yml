@@ -1,16 +1,23 @@
 stages:
   - build
 
+workflow:
+  rules:
+    - if: '$CI_COMMIT_TAG'
+      when: always
+    - when: never
+
 build_windows:
   stage: build
   tags:
     - WindowsBuilder
-  only:
-    - master
-  when: manual
+  rules:
+    - if: '$CI_COMMIT_TAG'
+      when: manual
+    - when: never
   script:
     - cd native
-    - cmd.exe /c 'build-windows.bat'
+    - cmd.exe /c "build-windows.bat"
   artifacts:
     paths:
       - native/build/Release/*
@@ -19,10 +26,17 @@ build_terraform:
   stage: build
   tags:
     - LinuxBuilder
-  only:
-    - master
-  when: manual
+  variables:
+    TF_VAR_release_version: $CI_COMMIT_TAG
+    TF_VAR_cf_r2_account_id: $CF_R2_ACCOUNT_ID
+    TF_VAR_cf_r2_access_key_id: $CF_R2_ACCESS_KEY_ID
+    TF_VAR_cf_r2_secret_access_key: $CF_R2_SECRET_ACCESS_KEY
+    TF_VAR_cf_r2_bucket: $CF_R2_BUCKET
+  rules:
+    - if: '$CI_COMMIT_TAG'
+      when: manual
+    - when: never
   script:
     - cd native
-    - terraform init
-    - terraform apply -auto-approve
+    - terraform init -input=false
+    - terraform apply -auto-approve -input=false

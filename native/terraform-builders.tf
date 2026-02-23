@@ -6,6 +6,29 @@ data "aws_vpc" "default" {
   default = true
 }
 
+variable "release_version" {
+  type = string
+}
+
+variable "cf_r2_account_id" {
+  type = string
+  sensitive = true
+}
+
+variable "cf_r2_access_key_id" {
+  type = string
+  sensitive = true
+}
+
+variable "cf_r2_secret_access_key" {
+  type = string
+  sensitive = true
+}
+
+variable "cf_r2_bucket" {
+  type = string
+}
+
 #resource "aws_security_group" "build_server_dotcefnative_sg" {
 #  name        = "build_server_dotcefnative_security_group"
 #  description = "Security group for build server allowing SSH access"
@@ -55,7 +78,7 @@ resource "aws_instance" "build_server_dotcefnative_x64" {
                   libx11-xcb-dev libxcomposite-dev libxcursor-dev libxi-dev \
                   libxtst-dev libxrandr-dev libasound2-dev libxdamage-dev \
                   libxss-dev libglib2.0-dev libnss3 libgtk-3-dev curl \
-                  libssl-dev ca-certificates zip
+                  libssl-dev ca-certificates zip awscli
 
     # Configure Git LFS
     git lfs install
@@ -104,9 +127,15 @@ resource "aws_instance" "build_server_dotcefnative_x64" {
 
     # Compress the output and upload to S3
     cd Release
-    zip -r DotCefNative-linux-x64.zip *
-    aws s3 cp DotCefNative-linux-x64.zip s3://dotcefnativeartifacts/DotCefNative-linux-x64.zip
+    VERSION="${var.release_version}"
+    ZIP_NAME="DotCefNative-linux-x64-${var.release_version}.zip"
 
+    zip -r "$ZIP_NAME" *
+
+    AWS_ACCESS_KEY_ID="${var.cf_r2_access_key_id}" \
+    AWS_SECRET_ACCESS_KEY="${var.cf_r2_secret_access_key}" \
+    AWS_DEFAULT_REGION=auto \
+    aws s3 cp "$ZIP_NAME" "s3://${var.cf_r2_bucket}/dotcefnative/${var.release_version}/$ZIP_NAME" --endpoint-url "https://${var.cf_r2_account_id}.r2.cloudflarestorage.com"
     shutdown -h now
   EOF
 
@@ -143,7 +172,7 @@ resource "aws_instance" "build_server_dotcefnative_arm64" {
                   libx11-xcb-dev libxcomposite-dev libxcursor-dev libxi-dev \
                   libxtst-dev libxrandr-dev libasound2-dev libxdamage-dev \
                   libxss-dev libglib2.0-dev libnss3 libgtk-3-dev curl \
-                  libssl-dev ca-certificates zip
+                  libssl-dev ca-certificates zip awscli
 
     # Configure Git LFS
     git lfs install
@@ -190,11 +219,17 @@ resource "aws_instance" "build_server_dotcefnative_arm64" {
     cmake -DCMAKE_BUILD_TYPE=Release ..
     cmake --build . --config Release
 
-    # Compress the output and upload to S3
+    # Compress the output and upload to Cloudflare R2 (versioned by tag)
     cd Release
-    zip -r DotCefNative-linux-arm64.zip *
-    aws s3 cp DotCefNative-linux-arm64.zip s3://dotcefnativeartifacts/DotCefNative-linux-arm64.zip
+    VERSION="${var.release_version}"
+    ZIP_NAME="DotCefNative-linux-arm64-${var.release_version}.zip"
 
+    zip -r "$ZIP_NAME" *
+
+    AWS_ACCESS_KEY_ID="${var.cf_r2_access_key_id}" \
+    AWS_SECRET_ACCESS_KEY="${var.cf_r2_secret_access_key}" \
+    AWS_DEFAULT_REGION=auto \
+    aws s3 cp "$ZIP_NAME" "s3://${var.cf_r2_bucket}/dotcefnative/${var.release_version}/$ZIP_NAME" --endpoint-url "https://${var.cf_r2_account_id}.r2.cloudflarestorage.com"
     shutdown -h now
   EOF
 
