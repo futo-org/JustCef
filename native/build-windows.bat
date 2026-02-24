@@ -22,8 +22,8 @@ set "ZIP_NAME=JustCefNative-windows-%ARCH%.zip"
 
 if exist "%ZIP_NAME%" del /q "%ZIP_NAME%"
 dir
-echo zip -x "%ZIP_NAME%" -x "justcefnative.exp" -x "justcefnative.lib" "%ZIP_NAME%" .
-zip -x "%ZIP_NAME%" -x "justcefnative.exp" -x "justcefnative.lib" "%ZIP_NAME%" .
+echo zip -x "%ZIP_NAME%" -x "justcefnative.exp" -x "justcefnative.lib" -r "%ZIP_NAME%" .
+zip -x "%ZIP_NAME%" -x "justcefnative.exp" -x "justcefnative.lib" -r "%ZIP_NAME%" .
 if errorlevel 1 exit /b 1
 
 set "AWS_ACCESS_KEY_ID=%CF_R2_ACCESS_KEY_ID%"
