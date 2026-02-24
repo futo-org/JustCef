@@ -67,8 +67,6 @@ resource "aws_instance" "build_server_justcefnative_x64" {
 
   user_data = <<-EOF
     #!/bin/bash
-    set -euo pipefail
-
     fallocate -l 2G /swapfile
     chmod 600 /swapfile
     mkswap /swapfile
@@ -177,8 +175,6 @@ resource "aws_instance" "build_server_justcefnative_arm64" {
 
   user_data = <<-EOF
     #!/bin/bash
-    set -euo pipefail
-    
     fallocate -l 2G /swapfile
     chmod 600 /swapfile
     mkswap /swapfile
