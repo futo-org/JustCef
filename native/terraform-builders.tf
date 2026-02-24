@@ -67,6 +67,8 @@ resource "aws_instance" "build_server_justcefnative_x64" {
 
   user_data = <<-EOF
     #!/bin/bash
+    set -euo pipefail
+
     fallocate -l 2G /swapfile
     chmod 600 /swapfile
     mkswap /swapfile
@@ -74,7 +76,7 @@ resource "aws_instance" "build_server_justcefnative_x64" {
 
     # Update and install dependencies
     apt update
-    apt install -y git git-lfs build-essential zlib1g-dev libnss3-dev libatk1.0-dev \
+    apt install -y git git-lfs build-essential binutils file zlib1g-dev libnss3-dev libatk1.0-dev \
                   libx11-xcb-dev libxcomposite-dev libxcursor-dev libxi-dev \
                   libxtst-dev libxrandr-dev libasound2-dev libxdamage-dev \
                   libxss-dev libglib2.0-dev libnss3 libgtk-3-dev curl \
@@ -130,6 +132,20 @@ resource "aws_instance" "build_server_justcefnative_x64" {
     VERSION="${var.release_version}"
     ZIP_NAME="JustCefNative-linux-x64.zip"
 
+    find . -type f -print0 | while IFS= read -r -d '' f; do
+      if readelf -h "$f" >/dev/null 2>&1; then
+        ELF_DESC=$(file -b "$f")
+        case "$ELF_DESC" in
+          *"shared object"*)
+            strip --strip-unneeded "$f" || true
+            ;;
+          *"executable"*|*"pie executable"*)
+            strip --strip-all "$f" || true
+            ;;
+        esac
+      fi
+    done
+
     zip -r "$ZIP_NAME" *
 
     AWS_ACCESS_KEY_ID="${var.cf_r2_access_key_id}" \
@@ -161,6 +177,8 @@ resource "aws_instance" "build_server_justcefnative_arm64" {
 
   user_data = <<-EOF
     #!/bin/bash
+    set -euo pipefail
+    
     fallocate -l 2G /swapfile
     chmod 600 /swapfile
     mkswap /swapfile
@@ -168,7 +186,7 @@ resource "aws_instance" "build_server_justcefnative_arm64" {
 
     # Update and install dependencies
     apt update
-    apt install -y git git-lfs build-essential zlib1g-dev libnss3-dev libatk1.0-dev \
+    apt install -y git git-lfs build-essential binutils file zlib1g-dev libnss3-dev libatk1.0-dev \
                   libx11-xcb-dev libxcomposite-dev libxcursor-dev libxi-dev \
                   libxtst-dev libxrandr-dev libasound2-dev libxdamage-dev \
                   libxss-dev libglib2.0-dev libnss3 libgtk-3-dev curl \
@@ -223,6 +241,20 @@ resource "aws_instance" "build_server_justcefnative_arm64" {
     cd Release
     VERSION="${var.release_version}"
     ZIP_NAME="JustCefNative-linux-arm64.zip"
+
+    find . -type f -print0 | while IFS= read -r -d '' f; do
+      if readelf -h "$f" >/dev/null 2>&1; then
+        ELF_DESC=$(file -b "$f")
+        case "$ELF_DESC" in
+          *"shared object"*)
+            strip --strip-unneeded "$f" || true
+            ;;
+          *"executable"*|*"pie executable"*)
+            strip --strip-all "$f" || true
+            ;;
+        esac
+      fi
+    done
 
     zip -r "$ZIP_NAME" *
 
