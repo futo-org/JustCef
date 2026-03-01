@@ -7,65 +7,89 @@
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <RuntimeIdentifiers>win-x86;win-x64;win-arm64;linux-x64;linux-arm;linux-arm64;osx-x64;osx-arm64</RuntimeIdentifiers>
+    <JustCefVersion>1</JustCefVersion>
+    <JustCefBaseUrl>https://static.grayjay.app/justcef</JustCefBaseUrl>
   </PropertyGroup>
 
-  <Target Name="PrintRuntimeInfo" BeforeTargets="Build">
-    <Message Importance="high" Text="Building for RuntimeIdentifier: '$(RuntimeIdentifier)'" />
+  <PropertyGroup>
+    <JustCefRid Condition="'$(RuntimeIdentifier)' != ''">$(RuntimeIdentifier)</JustCefRid>
+    <JustCefRid Condition="'$(JustCefRid)' == '' and '$(NETCoreSdkPortableRuntimeIdentifier)' != ''">$(NETCoreSdkPortableRuntimeIdentifier)</JustCefRid>
+    <JustCefRid Condition="'$(JustCefRid)' == '' and '$(NETCoreSdkRuntimeIdentifier)' != ''">$(NETCoreSdkRuntimeIdentifier)</JustCefRid>
+    <_JustCefHostArch Condition="'$(JustCefRid)' == ''">$([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)</_JustCefHostArch>
+
+    <JustCefRid Condition="'$(JustCefRid)' == '' and $([System.OperatingSystem]::IsWindows()) and '$(_JustCefHostArch)' == 'X64'">win-x64</JustCefRid>
+    <JustCefRid Condition="'$(JustCefRid)' == '' and $([System.OperatingSystem]::IsWindows()) and '$(_JustCefHostArch)' == 'Arm64'">win-arm64</JustCefRid>
+    <JustCefRid Condition="'$(JustCefRid)' == '' and $([System.OperatingSystem]::IsWindows()) and '$(_JustCefHostArch)' == 'X86'">win-x86</JustCefRid>
+
+    <JustCefRid Condition="'$(JustCefRid)' == '' and $([System.OperatingSystem]::IsLinux()) and '$(_JustCefHostArch)' == 'X64'">linux-x64</JustCefRid>
+    <JustCefRid Condition="'$(JustCefRid)' == '' and $([System.OperatingSystem]::IsLinux()) and '$(_JustCefHostArch)' == 'Arm64'">linux-arm64</JustCefRid>
+    <JustCefRid Condition="'$(JustCefRid)' == '' and $([System.OperatingSystem]::IsLinux()) and '$(_JustCefHostArch)' == 'Arm'">linux-arm</JustCefRid>
+
+    <JustCefRid Condition="'$(JustCefRid)' == '' and $([System.OperatingSystem]::IsMacOS()) and '$(_JustCefHostArch)' == 'X64'">osx-x64</JustCefRid>
+    <JustCefRid Condition="'$(JustCefRid)' == '' and $([System.OperatingSystem]::IsMacOS()) and '$(_JustCefHostArch)' == 'Arm64'">osx-arm64</JustCefRid>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <JustCefArchiveName Condition="'$(JustCefRid)' == 'linux-x64'">JustCefNative-linux-x64.zip</JustCefArchiveName>
+    <JustCefArchiveName Condition="'$(JustCefRid)' == 'linux-arm64'">JustCefNative-linux-arm64.zip</JustCefArchiveName>
+    <JustCefArchiveName Condition="'$(JustCefRid)' == 'osx-x64'">JustCefNative-osx-x64.zip</JustCefArchiveName>
+    <JustCefArchiveName Condition="'$(JustCefRid)' == 'osx-arm64'">JustCefNative-osx-arm64.zip</JustCefArchiveName>
+    <JustCefArchiveName Condition="'$(JustCefRid)' == 'win-x64'">JustCefNative-windows-AMD64.zip</JustCefArchiveName>
+    <JustCefArchiveName Condition="'$(JustCefArchiveName)' == '' and '$(JustCefArchiveOverride)' != ''">$(JustCefArchiveOverride)</JustCefArchiveName>
+    <JustCefUrl Condition="'$(JustCefArchiveName)' != ''">$(JustCefBaseUrl)/$(JustCefVersion)/$(JustCefArchiveName)</JustCefUrl>
+    <JustCefCacheRoot>$([System.IO.Path]::Combine('$(BaseIntermediateOutputPath)','justcef','$(TargetFramework)'))</JustCefCacheRoot>
+    <JustCefCacheDir>$([System.IO.Path]::Combine('$(JustCefCacheRoot)','$(JustCefVersion)','$(JustCefRid)'))</JustCefCacheDir>
+    <JustCefZipPath>$([System.IO.Path]::Combine('$(JustCefCacheDir)','$(JustCefArchiveName)'))</JustCefZipPath>
+    <JustCefExtractDir>$([System.IO.Path]::Combine('$(JustCefCacheDir)','extracted'))</JustCefExtractDir>
+  </PropertyGroup>
+
+  <Target Name="PrintRuntimeInfo" BeforeTargets="Build" Condition="'$(DesignTimeBuild)' != 'true'">
+    <Message Importance="high" Text="JustCef: Effective RID='$(JustCefRid)'" />
+    <Message Importance="high" Text="JustCef: Archive='$(JustCefArchiveName)'" Condition="'$(JustCefArchiveName)' != ''" />
+    <Message Importance="high" Text="JustCef: URL='$(JustCefUrl)'" Condition="'$(JustCefUrl)' != ''" />
   </Target>
 
-  <!-- Windows x86 -->
-  <ItemGroup Condition="'$(RuntimeIdentifier)' == 'win-x86'">
-    <None Include="prebuilt/win-x86/**">
-      <Link>cef/%(RecursiveDir)%(Filename)%(Extension)</Link>
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
-    </None>
-  </ItemGroup>
+  <Target Name="PrepareJustCefNative"
+          BeforeTargets="AssignTargetPaths;GetCopyToOutputDirectoryItems;ComputeFilesToPublish"
+          Condition="'$(DesignTimeBuild)' != 'true'">
 
-  <!-- Windows x64 -->
-  <ItemGroup Condition="'$(RuntimeIdentifier)' == 'win-x64'">
-    <None Include="prebuilt/win-x64/**">
-      <Link>cef/%(RecursiveDir)%(Filename)%(Extension)</Link>
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
-    </None>
-  </ItemGroup>
+    <Error Condition="'$(JustCefRid)' == ''"
+           Text="JustCef: Could not infer an effective RID. Set -r or set RuntimeIdentifier." />
 
-  <!-- Windows ARM64 -->
-  <ItemGroup Condition="'$(RuntimeIdentifier)' == 'win-arm64'">
-    <None Include="prebuilt/win-arm64/**">
-      <Link>cef/%(RecursiveDir)%(Filename)%(Extension)</Link>
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
-    </None>
-  </ItemGroup>
+    <Error Condition="'$(JustCefArchiveName)' == ''"
+           Text="JustCef: No archive mapping for RID '$(JustCefRid)'. Set JustCefArchiveOverride or add a mapping." />
 
-  <!-- Linux x64 -->
-  <ItemGroup Condition="'$(RuntimeIdentifier)' == 'linux-x64'">
-    <None Include="prebuilt/linux-x64/**">
-      <Link>cef/%(RecursiveDir)%(Filename)%(Extension)</Link>
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
-    </None>
-  </ItemGroup>
+    <MakeDir Directories="$(JustCefCacheDir);$(JustCefExtractDir)" />
 
-  <!-- Linux ARM -->
-  <ItemGroup Condition="'$(RuntimeIdentifier)' == 'linux-arm'">
-    <None Include="prebuilt/linux-arm/**">
-      <Link>cef/%(RecursiveDir)%(Filename)%(Extension)</Link>
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
-    </None>
-  </ItemGroup>
+    <PropertyGroup>
+      <_JustCefScriptWin>$(MSBuildProjectDirectory)\ensure-justcef-win.ps1</_JustCefScriptWin>
+      <_JustCefScriptLinux>$(MSBuildProjectDirectory)/ensure-justcef-linux.sh</_JustCefScriptLinux>
+      <_JustCefScriptMac>$(MSBuildProjectDirectory)/ensure-justcef-macos.sh</_JustCefScriptMac>
+    </PropertyGroup>
 
-  <!-- Linux ARM64 -->
-  <ItemGroup Condition="'$(RuntimeIdentifier)' == 'linux-arm64'">
-    <None Include="prebuilt/linux-arm64/**">
-      <Link>cef/%(RecursiveDir)%(Filename)%(Extension)</Link>
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
-    </None>
-  </ItemGroup>
+    <Exec Condition="$([MSBuild]::IsOSPlatform('Windows'))"
+          Command='powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(_JustCefScriptWin)&quot; -Url &quot;$(JustCefUrl)&quot; -ZipPath &quot;$(JustCefZipPath)&quot; -ExtractDir &quot;$(JustCefExtractDir)&quot; -Version &quot;$(JustCefVersion)&quot;' />
+
+    <Exec Condition="$([MSBuild]::IsOSPlatform('Linux'))"
+          Command='bash &quot;$(_JustCefScriptLinux)&quot; &quot;$(JustCefUrl)&quot; &quot;$(JustCefZipPath)&quot; &quot;$(JustCefExtractDir)&quot; &quot;$(JustCefVersion)&quot;' />
+
+    <Exec Condition="$([MSBuild]::IsOSPlatform('OSX'))"
+          Command='bash &quot;$(_JustCefScriptMac)&quot; &quot;$(JustCefUrl)&quot; &quot;$(JustCefZipPath)&quot; &quot;$(JustCefExtractDir)&quot; &quot;$(JustCefVersion)&quot;' />
+
+    <ItemGroup>
+      <_JustCefFiles Include="$(JustCefExtractDir)/**/*"
+                     Exclude="$(JustCefExtractDir)/**/.justcef.*" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <Content Include="@(_JustCefFiles)">
+        <TargetPath>cef/%(_JustCefFiles.RecursiveDir)%(_JustCefFiles.Filename)%(_JustCefFiles.Extension)</TargetPath>
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </Content>
+    </ItemGroup>
+
+  </Target>
 
   <PropertyGroup Condition="'$(Configuration)'=='Release'">
     <DebugSymbols>False</DebugSymbols>

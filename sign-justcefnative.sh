@@ -67,6 +67,12 @@ notarize() {
         echo "Error: Stapling failed for $NOTARIZE_PATH."
         exit 1
     fi
+
+    /usr/bin/ditto -c -k --sequesterRsrc --keepParent "$NOTARIZE_PATH" "$ZIP_PATH"
+    if [ $? -ne 0 ]; then
+        echo "Failed to create zip $ZIP_PATH"
+        exit 1
+    fi
 }
 
 build_sign_notarize() {

@@ -1,0 +1,58 @@
+param(
+  [Parameter(Mandatory=$true)][string]$Url,
+  [Parameter(Mandatory=$true)][string]$ZipPath,
+  [Parameter(Mandatory=$true)][string]$ExtractDir,
+  [Parameter(Mandatory=$true)][string]$Version
+)
+
+$ErrorActionPreference = "Stop"
+
+$markerVersion = Join-Path $ExtractDir ".justcef.version"
+$markerUrl     = Join-Path $ExtractDir ".justcef.url"
+
+function Test-DirNonEmpty([string]$Path) {
+  if (!(Test-Path -LiteralPath $Path -PathType Container)) { return $false }
+  return @(Get-ChildItem -LiteralPath $Path -Force -ErrorAction SilentlyContinue).Count -gt 0
+}
+
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent $ZipPath) | Out-Null
+New-Item -ItemType Directory -Force -Path $ExtractDir | Out-Null
+
+if ((Test-Path -LiteralPath $markerVersion) -and ((Get-Content -LiteralPath $markerVersion -Raw).Trim() -eq $Version) -and (Test-DirNonEmpty $ExtractDir)) {
+  exit 0
+}
+
+if (!(Test-Path -LiteralPath $ZipPath)) {
+  Write-Host "JustCef: downloading $Url"
+  $tmp = "$ZipPath.tmp"
+  if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force }
+  Invoke-WebRequest -Uri $Url -OutFile $tmp -UseBasicParsing
+  Move-Item -LiteralPath $tmp -Destination $ZipPath -Force
+}
+
+# Re-extract cleanly
+if (Test-Path -LiteralPath $ExtractDir) {
+  Remove-Item -LiteralPath $ExtractDir -Recurse -Force
+}
+New-Item -ItemType Directory -Force -Path $ExtractDir | Out-Null
+
+Expand-Archive -LiteralPath $ZipPath -DestinationPath $ExtractDir -Force
+
+# Normalize: if zip contains a single top-level directory, flatten it
+$entries = Get-ChildItem -LiteralPath $ExtractDir -Force
+if ($entries.Count -eq 1 -and $entries[0].PSIsContainer) {
+  $inner = $entries[0].FullName
+  $tmpFlatten = "${ExtractDir}.flatten"
+  if (Test-Path -LiteralPath $tmpFlatten) { Remove-Item -LiteralPath $tmpFlatten -Recurse -Force }
+  New-Item -ItemType Directory -Force -Path $tmpFlatten | Out-Null
+
+  Get-ChildItem -LiteralPath $inner -Force | ForEach-Object {
+    Move-Item -LiteralPath $_.FullName -Destination $tmpFlatten -Force
+  }
+
+  Remove-Item -LiteralPath $ExtractDir -Recurse -Force
+  Move-Item -LiteralPath $tmpFlatten -Destination $ExtractDir -Force
+}
+
+Set-Content -LiteralPath $markerVersion -Value $Version -NoNewline
+Set-Content -LiteralPath $markerUrl -Value $Url -NoNewline
