@@ -15,19 +15,32 @@ is_dir_nonempty() {
 
 mkdir -p "$(dirname "$ZIP_PATH")" "$EXTRACT_DIR"
 
-if [[ -f "$MARKER_VERSION" ]] && [[ "$(cat "$MARKER_VERSION")" == "$VERSION" ]] && is_dir_nonempty "$EXTRACT_DIR"; then
+LOCK_PATH="${ZIP_PATH}.lock"
+mkdir -p "$(dirname "$LOCK_PATH")"
+exec 9>"$LOCK_PATH"
+
+if command -v flock >/dev/null 2>&1; then
+  flock 9
+else
+  LOCK_DIR="${LOCK_PATH}.d"
+  while ! mkdir "$LOCK_DIR" 2>/dev/null; do sleep 0.1; done
+  trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT INT TERM
+fi
+
+if [[ -f "$MARKER_VERSION" ]] \
+  && [[ "$(cat "$MARKER_VERSION")" == "$VERSION" ]] \
+  && [[ -f "$ZIP_PATH" ]] \
+  && is_dir_nonempty "$EXTRACT_DIR"; then
   exit 0
 fi
 
 if [[ ! -f "$ZIP_PATH" ]]; then
   echo "JustCef: downloading $URL"
-  tmp="${ZIP_PATH}.tmp"
-  rm -f "$tmp"
+  tmp="$(mktemp "${ZIP_PATH}.tmp.XXXXXX")"
   curl -L --fail --retry 3 --retry-delay 2 -o "$tmp" "$URL"
-  mv "$tmp" "$ZIP_PATH"
+  mv -f "$tmp" "$ZIP_PATH"
 fi
 
-# Re-extract cleanly
 rm -rf "$EXTRACT_DIR"
 mkdir -p "$EXTRACT_DIR"
 
@@ -40,7 +53,6 @@ else
   exit 1
 fi
 
-# Normalize: if zip contains a single top-level directory, flatten it
 top_level_count="$(find "$EXTRACT_DIR" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')"
 if [[ "$top_level_count" == "1" ]]; then
   only_entry="$(find "$EXTRACT_DIR" -mindepth 1 -maxdepth 1)"
