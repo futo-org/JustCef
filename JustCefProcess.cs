@@ -1319,9 +1319,6 @@ namespace JustCef
 
         public async Task<string[]> PickFileAsync(bool multiple, (string Name, string Pattern)[] filters,  CancellationToken cancellationToken = default)
         {
-            if (OperatingSystem.IsWindows())
-                return DialogWindows.PickFiles(multiple, filters);
-            
             var writer = new PacketWriter();
             writer.Write((byte)(multiple ? 1 : 0));
             writer.Write((uint)filters.Length);

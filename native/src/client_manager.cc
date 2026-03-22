@@ -127,6 +127,15 @@ CefRefPtr<CefBrowser> ClientManager::AcquirePointer(int identifier) {
   return nullptr;
 }
 
+CefRefPtr<CefBrowser> ClientManager::AcquireFirstPointer() {
+  std::lock_guard<std::recursive_mutex> lk(_browserListMutex);
+
+  if (browser_list_.empty())
+    return nullptr;
+
+  return browser_list_.front();
+}
+
 bool ClientManager::IsClosing() const {
   DCHECK(thread_checker_.CalledOnValidThread());
   return is_closing_;
