@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+#include "include/base/cef_callback.h"
 #include "include/cef_browser.h"
 #include "include/cef_command_line.h"
 #include "include/cef_task.h"
@@ -118,7 +119,7 @@ namespace {
     explicit FileDialogPathsCallback(std::shared_ptr<std::promise<std::vector<std::string>>> promise)
         : promise_(std::move(promise)) {}
 
-    void OnFileDialogDismissed(int /*selected_accept_filter*/, const std::vector<CefString>& file_paths) override {
+    void OnFileDialogDismissed(const std::vector<CefString>& file_paths) override {
       std::vector<std::string> paths;
       paths.reserve(file_paths.size());
       for (const CefString& path : file_paths)
@@ -139,7 +140,7 @@ namespace {
     explicit FileDialogPathCallback(std::shared_ptr<std::promise<std::string>> promise)
         : promise_(std::move(promise)) {}
 
-    void OnFileDialogDismissed(int /*selected_accept_filter*/, const std::vector<CefString>& file_paths) override {
+    void OnFileDialogDismissed(const std::vector<CefString>& file_paths) override {
       if (!file_paths.empty())
         promise_->set_value(file_paths.front().ToString());
       else
@@ -160,7 +161,7 @@ namespace {
       return;
     }
 
-    browser->GetHost()->RunFileDialog(mode, title, default_file_path, accept_filters, 0, new FileDialogPathsCallback(std::move(promise)));
+    browser->GetHost()->RunFileDialog(mode, title, default_file_path, accept_filters, new FileDialogPathsCallback(std::move(promise)));
   }
 
   void RunFileDialogForPathOnUi(std::shared_ptr<std::promise<std::string>> promise, CefBrowserHost::FileDialogMode mode, const std::string& title, const std::string& default_file_path, std::vector<CefString> accept_filters) {
@@ -170,7 +171,7 @@ namespace {
       return;
     }
 
-    browser->GetHost()->RunFileDialog(mode, title, default_file_path, accept_filters, 0, new FileDialogPathCallback(std::move(promise)));
+    browser->GetHost()->RunFileDialog(mode, title, default_file_path, accept_filters, new FileDialogPathCallback(std::move(promise)));
   }
 }  // namespace
 
