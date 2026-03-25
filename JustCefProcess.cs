@@ -158,6 +158,12 @@ namespace JustCef
         private CancellationTokenSource _cancellationTokenSource = new CancellationTokenSource();
         private uint _streamIdentifierGenerator = 0;
         private Dictionary<uint, CancellationTokenSource> _streamCancellationTokens = new Dictionary<uint, CancellationTokenSource>();
+        private readonly TaskCompletionSource _exitTaskCompletionSource = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        private void SignalExited()
+        {
+            _exitTaskCompletionSource.TrySetResult();
+        }
 
         public List<JustCefWindow> Windows
         {
@@ -255,12 +261,12 @@ namespace JustCef
                     ? "/Users/koen/Projects/Grayjay.Desktop/JustCef/native/build/Debug/justcefnative.app/Contents/MacOS/justcefnative"
                     : OperatingSystem.IsWindows() 
                         ? """C:\Users\Koen\Projects\Grayjay.Desktop\JustCef\native\build\Release\justcefnative.exe"""
-                        : "/home/koen/Projects/Grayjay.Desktop/JustCef/build/Release/justcefnative",
+                        : "/home/koen/Projects/JustCef/native/build/Debug/justcefnative",
                 WorkingDirectory = OperatingSystem.IsMacOS()
                     ? "/Users/koen/Projects/Grayjay.Desktop/JustCef/native/build/Debug/"
                     : OperatingSystem.IsWindows() 
                         ? """C:\Users\Koen\Projects\Grayjay.Desktop\JustCef\native\build\Release\"""
-                        : "/home/koen/Projects/Grayjay.Desktop/JustCef/build/Release",
+                        : "/home/koen/Projects/JustCef/native/build/Debug",
 #else
                 FileName = nativePath,
                 WorkingDirectory = workingDirectory,
@@ -275,6 +281,12 @@ namespace JustCef
 
             var process = new Process();
             process.StartInfo = psi;
+            process.EnableRaisingEvents = true;
+            process.Exited += (_, _) =>
+            {
+                Logger.Info<JustCefProcess>("Child process exited.");
+                SignalExited();
+            };
             process.ErrorDataReceived += (_, args) =>
             {
                 var d = args?.Data;
@@ -402,17 +414,23 @@ namespace JustCef
                         });
                     }
                 }
+                catch (OperationCanceledException) when (_cancellationTokenSource.IsCancellationRequested)
+                {
+                }
+                catch (EndOfStreamException)
+                {
+                    Logger.Info<JustCefProcess>("IPC pipe closed.");
+                }
                 catch (Exception e)
                 {
                     Logger.Error<JustCefProcess>($"An exception occurred in the IPC", e);
                 }
                 finally
                 {
+                    SignalExited();
                     Logger.Info<JustCefProcess>("Receive loop stopped.");
                     Dispose();
                 }
-
-
             });
         }
 
@@ -738,6 +756,7 @@ namespace JustCef
             {
                 case OpcodeClientNotification.Exit:
                     Logger.Info<JustCefProcess>("CEF process is exiting.");
+                    SignalExited();
                     Dispose();
                     break;
                 case OpcodeClientNotification.Ready:
@@ -1155,23 +1174,13 @@ namespace JustCef
         public void WaitForExit()
         {
             EnsureStarted();
-            _childProcess?.WaitForExit();
+            _exitTaskCompletionSource.Task.GetAwaiter().GetResult();
         }
 
         public async Task WaitForExitAsync(CancellationToken cancellationToken = default)
         {
             EnsureStarted();
-            if (_childProcess != null)
-            {
-                try
-                {
-                    await _childProcess.WaitForExitAsync(cancellationToken);
-                }
-                catch
-                {
-                    //Ignored
-                }
-            }
+            await _exitTaskCompletionSource.Task.WaitAsync(cancellationToken);
         }
 
         public void WaitForReady()
@@ -1317,9 +1326,10 @@ namespace JustCef
                 .Write(forceClose), cancellationToken);
         }
 
-        public async Task<string[]> PickFileAsync(bool multiple, (string Name, string Pattern)[] filters,  CancellationToken cancellationToken = default)
+        public async Task<string[]> WindowPickFileAsync(int identifier, bool multiple, (string Name, string Pattern)[] filters, CancellationToken cancellationToken = default)
         {
             var writer = new PacketWriter();
+            writer.Write(identifier);
             writer.Write((byte)(multiple ? 1 : 0));
             writer.Write((uint)filters.Length);
             for (int i = 0; i < filters.Length; i++)
@@ -1337,15 +1347,16 @@ namespace JustCef
             return paths;
         }
 
-        public async Task<string> PickDirectoryAsync(CancellationToken cancellationToken = default)
+        public async Task<string> WindowPickDirectoryAsync(int identifier, CancellationToken cancellationToken = default)
         {
-            var reader = await CallAsync(OpcodeController.PickDirectory, cancellationToken);
+            var reader = await CallAsync(OpcodeController.PickDirectory, new PacketWriter().Write(identifier), cancellationToken);
             return reader.ReadSizePrefixedString()!;
         }
 
-        public async Task<string> SaveFileAsync(string defaultName, (string Name, string Pattern)[] filters,  CancellationToken cancellationToken = default)
+        public async Task<string> WindowSaveFileAsync(int identifier, string defaultName, (string Name, string Pattern)[] filters, CancellationToken cancellationToken = default)
         {
             var writer = new PacketWriter();
+            writer.Write(identifier);
             writer.WriteSizePrefixedString(defaultName);
 
             writer.Write((uint)filters.Length);
@@ -1449,6 +1460,8 @@ namespace JustCef
             _cancellationTokenSource.Cancel();
             _writer.Dispose();
             _reader.Dispose();
+
+            SignalExited();
 
             _childProcess?.Close();
 

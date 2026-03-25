@@ -57,7 +57,7 @@ void ClientManager::DoClose(CefRefPtr<CefBrowser> browser) {
     }
   }
 
-  LOG(INFO) << "ClientManager::DoClose is_closing_ = " << is_closing_ << ".";
+  LOG(INFO) << "ClientManager::DoClose is_closing_ = " << is_closing_ << " browser_list_.size() " << browser_list_.size() << ".";
 
   if (is_closing_)
   {
@@ -125,15 +125,6 @@ CefRefPtr<CefBrowser> ClientManager::AcquirePointer(int identifier) {
   }
 
   return nullptr;
-}
-
-CefRefPtr<CefBrowser> ClientManager::AcquireFirstPointer() {
-  std::lock_guard<std::recursive_mutex> lk(_browserListMutex);
-
-  if (browser_list_.empty())
-    return nullptr;
-
-  return browser_list_.front();
 }
 
 bool ClientManager::IsClosing() const {

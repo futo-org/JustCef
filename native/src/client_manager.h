@@ -24,7 +24,6 @@ public:
   // Request that all existing browser windows close.
   void CloseAllBrowsers(bool force_close);
   CefRefPtr<CefBrowser> AcquirePointer(int identifier);
-  CefRefPtr<CefBrowser> AcquireFirstPointer();
 
   // Returns true if the last browser instance is closing.
   bool IsClosing() const;

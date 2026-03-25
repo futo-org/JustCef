@@ -323,6 +323,7 @@ bool Client::DoClose(CefRefPtr<CefBrowser> browser) {
     LOG(INFO) << "DoClose called " << browser->GetIdentifier();
 
     CEF_REQUIRE_UI_THREAD();
+    shared::CancelPendingFileDialogs(browser->GetIdentifier());
 
     // Closing the main window requires special handling. See the DoClose()
     // documentation in the CEF header for a detailed destription of this
@@ -339,6 +340,7 @@ void Client::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
     LOG(INFO) << "OnBeforeClose called " << browser->GetIdentifier();
 
     CEF_REQUIRE_UI_THREAD();
+    shared::CancelPendingFileDialogs(browser->GetIdentifier());
 
 #if _WIN32
     HWND hwnd = browser->GetHost()->GetWindowHandle();

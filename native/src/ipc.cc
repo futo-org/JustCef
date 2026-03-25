@@ -2190,13 +2190,19 @@ void HandleWindowSetModifyRequests(PacketReader& reader, PacketWriter& writer)
 
 void HandleWindowOpenDirectoryPicker(PacketReader& reader, PacketWriter& writer)
 {
-    std::string path = shared::PlatformPickDirectory().get();
+    std::optional<int32_t> identifier = reader.read<int32_t>();
+    if (!identifier)
+    {
+        LOG(ERROR) << "HandleWindowOpenDirectoryPicker called without valid data. Ignored.";
+        return;
+    }
+
+    std::string path = shared::PlatformPickDirectory(*identifier).get();
     writer.writeSizePrefixedString(path);
 }
 
-void HandleWindowOpenFilePicker(bool multiple, const std::vector<std::pair<std::string, std::string>>& filters, PacketWriter& writer)
+void HandleWindowOpenFilePicker(const std::vector<std::string>& paths, PacketWriter& writer)
 {
-    std::vector<std::string> paths = shared::PlatformPickFiles(multiple, filters).get();
     writer.write<uint32_t>((uint32_t)paths.size());
 
     for (uint32_t i = 0; i < paths.size(); i++)
@@ -2205,10 +2211,11 @@ void HandleWindowOpenFilePicker(bool multiple, const std::vector<std::pair<std::
 
 void HandleWindowOpenFilePicker(PacketReader& reader, PacketWriter& writer)
 {
+    std::optional<int32_t> identifier = reader.read<int32_t>();
     std::optional<bool> multiple = reader.read<bool>();
     std::optional<uint32_t> filterCount = reader.read<uint32_t>();
     std::vector<std::pair<std::string, std::string>> filters;
-    if (!multiple || !filterCount)
+    if (!identifier || !multiple || !filterCount)
     {
         LOG(ERROR) << "HandleWindowOpenFilePicker called without valid data. Ignored.";
         return;
@@ -2228,20 +2235,16 @@ void HandleWindowOpenFilePicker(PacketReader& reader, PacketWriter& writer)
         filters.push_back(std::pair<std::string, std::string>(name.value(), pattern.value()));
     }
 
-    return HandleWindowOpenFilePicker(*multiple, filters, writer);
-}
-
-void HandleWindowSaveFilePicker(const std::string& defaultName, const std::vector<std::pair<std::string, std::string>>& filters, PacketWriter& writer)
-{
-    std::string path = shared::PlatformSaveFile(defaultName, filters).get();
-    writer.writeSizePrefixedString(path);
+    std::vector<std::string> paths = shared::PlatformPickFiles(*identifier, *multiple, filters).get();
+    return HandleWindowOpenFilePicker(paths, writer);
 }
 
 void HandleWindowSaveFilePicker(PacketReader& reader, PacketWriter& writer)
 {
+    std::optional<int32_t> identifier = reader.read<int32_t>();
     std::optional<std::string> defaultName = reader.readSizePrefixedString();
     std::optional<uint32_t> filterCount = reader.read<uint32_t>();
-    if (!defaultName || !filterCount) 
+    if (!identifier || !defaultName || !filterCount) 
     {
         LOG(ERROR) << "HandleWindowSaveFilePicker called without valid data. Ignored.";
         return;
@@ -2262,7 +2265,8 @@ void HandleWindowSaveFilePicker(PacketReader& reader, PacketWriter& writer)
         filters.push_back(std::pair<std::string, std::string>(name.value(), pattern.value()));
     }
 
-    return HandleWindowSaveFilePicker(*defaultName, filters, writer);
+    std::string path = shared::PlatformSaveFile(*identifier, *defaultName, filters).get();
+    writer.writeSizePrefixedString(path);
 }
 
 void CloseEverything()

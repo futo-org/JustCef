@@ -31,9 +31,9 @@ namespace shared {
     CefPoint PlatformGetWindowPosition(CefRefPtr<CefBrowser> browser);
     void PlatformSetWindowPosition(CefRefPtr<CefBrowser> browser, const CefPoint& position);
     void PlatformWindowRequestFocus(CefRefPtr<CefBrowser> browser);
-    std::future<std::vector<std::string>> PlatformPickFiles(bool multiple, const std::vector<std::pair<std::string /* name [Text Files (*.txt)] */, std::string /* *.txt */>>& filters);
-    std::future<std::string> PlatformPickDirectory();
-    std::future<std::string> PlatformSaveFile(const std::string& default_name, const std::vector<std::pair<std::string, std::string>>& filters);
+    std::future<std::vector<std::string>> PlatformPickFiles(int browser_identifier, bool multiple, const std::vector<std::pair<std::string /* name [Text Files (*.txt)] */, std::string /* *.txt */>>& filters);
+    std::future<std::string> PlatformPickDirectory(int browser_identifier);
+    std::future<std::string> PlatformSaveFile(int browser_identifier, const std::string& default_name, const std::vector<std::pair<std::string, std::string>>& filters);
+    void CancelPendingFileDialogs(int browser_identifier);
 }
 #endif  // CEF_DOTCEF_CLIENT_BASE_H_
-
