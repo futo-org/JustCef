@@ -18,25 +18,6 @@ static inline NSWindow* BrowserNSWindow(CefRefPtr<CefBrowser> browser) {
   return v ? v.window : nil;
 }
 
-static inline NSArray<UTType*>* ContentTypesFromFilters(const std::vector<std::pair<std::string,std::string>>& filters) {
-  NSMutableArray<UTType*>* types = [NSMutableArray array];
-  for (const auto& f : filters) {
-    NSString* tag = [NSString stringWithUTF8String:f.second.c_str()];
-    if (tag.length == 0) continue;
-
-    UTType* t = nil;
-    if ([tag containsString:@"/"]) {
-      t = [UTType typeWithMIMEType:tag];
-    } else {
-      if ([tag hasPrefix:@"."]) tag = [tag substringFromIndex:1];
-      t = [UTType typeWithFilenameExtension:tag];
-    }
-    if (t) [types addObject:t];
-  }
-  return types;
-}
-
-
 namespace shared {
     void PlatformTitleChange(CefRefPtr<CefBrowser> browser, const std::string& title) 
     {
