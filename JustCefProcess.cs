@@ -1063,7 +1063,7 @@ namespace JustCef
         public async Task<JustCefWindow> CreateWindowAsync(string url, int minimumWidth, int minimumHeight, int preferredWidth = 0, int preferredHeight = 0,
             bool fullscreen = false, bool contextMenuEnable = false, bool shown = true, bool developerToolsEnabled = false, bool resizable = true, bool frameless = false,
             bool centered = true, bool proxyRequests = false, bool logConsole = false, Func<JustCefWindow, IPCRequest, Task<IPCResponse?>>? requestProxy = null, bool modifyRequests = false, Func<JustCefWindow, IPCRequest, IPCRequest?>? requestModifier = null, bool modifyRequestBody = false,
-            string? title = null, string? iconPath = null, string? appId = null, CancellationToken cancellationToken = default)
+            string? title = null, string? iconPath = null, string? appId = null, CancellationToken cancellationToken = default, bool bridgeEnabled = false)
         {
             EnsureStarted();
 
@@ -1083,6 +1083,7 @@ namespace JustCef
 
             writer.Write(proxyRequests);
             writer.Write(logConsole);
+            writer.Write(bridgeEnabled);
             writer.Write(minimumWidth);
             writer.Write(minimumHeight);
             writer.Write(preferredWidth);

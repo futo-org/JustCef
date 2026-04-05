@@ -121,6 +121,8 @@ endif()
 # Main executable sources.
 set(DOTCEF_SRCS
   app_browser.cc
+  bridge.cc
+  bridge.h
   bufferpool.cc
   bufferpool.h
   datastream.cc

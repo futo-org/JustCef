@@ -183,6 +183,7 @@ typedef struct _IPCWindowCreate
     bool modifyRequestBody = false;
     bool proxyRequests = false;
     bool logConsole = false;
+    bool bridgeEnabled = false;
     int minimumWidth = 800;
     int minimumHeight = 600;
     int preferredWidth = 1024;

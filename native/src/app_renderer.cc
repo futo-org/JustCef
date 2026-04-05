@@ -1,9 +1,44 @@
 #include "app_factory.h"
+#include "bridge.h"
 #include "steam.h"
+
+#include <unordered_set>
 
 class RenderApp : public CefApp, public CefRenderProcessHandler {
 public:
     CefRefPtr<CefRenderProcessHandler> GetRenderProcessHandler() override { return this; }
+
+    void OnBrowserCreated(CefRefPtr<CefBrowser> browser, CefRefPtr<CefDictionaryValue> extra_info) override {
+        if (!browser) {
+            return;
+        }
+
+        if (IsBridgeEnabled(extra_info)) {
+            bridge_enabled_browsers_.insert(browser->GetIdentifier());
+        } else {
+            bridge_enabled_browsers_.erase(browser->GetIdentifier());
+        }
+    }
+
+    void OnBrowserDestroyed(CefRefPtr<CefBrowser> browser) override {
+        if (!browser) {
+            return;
+        }
+
+        bridge_enabled_browsers_.erase(browser->GetIdentifier());
+    }
+
+    void OnContextCreated(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefRefPtr<CefV8Context> context) override {
+        if (!browser || !frame || !frame->IsMain()) {
+            return;
+        }
+
+        if (bridge_enabled_browsers_.find(browser->GetIdentifier()) == bridge_enabled_browsers_.end()) {
+            return;
+        }
+
+        InstallBridge(context);
+    }
 
     void OnFocusedNodeChanged(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefRefPtr<CefDOMNode> node) override {
         const bool editable = node && node->IsEditable();
@@ -38,6 +73,8 @@ public:
     }
 
 private:
+    std::unordered_set<int> bridge_enabled_browsers_;
+
     IMPLEMENT_REFCOUNTING(RenderApp);
 };
 

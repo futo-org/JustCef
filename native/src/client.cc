@@ -1,5 +1,6 @@
 #include "client.h"
 
+#include "bridge.h"
 #include "include/cef_command_line.h"
 #include "include/views/cef_browser_view.h"
 #include "include/views/cef_window.h"
@@ -246,6 +247,20 @@ void Client::OnFullscreenModeChange(CefRefPtr<CefBrowser> browser, bool fullscre
     IPC::Singleton.QueueWork([browser, fullscreen] () {
         IPC::Singleton.NotifyWindowFullscreenChanged(browser, fullscreen);
     });
+}
+
+bool Client::OnBeforePopup(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int popup_id, const CefString& target_url, const CefString& target_frame_name, CefLifeSpanHandler::WindowOpenDisposition target_disposition, bool user_gesture, const CefPopupFeatures& popupFeatures, CefWindowInfo& windowInfo, CefRefPtr<CefClient>& client, CefBrowserSettings& settings, CefRefPtr<CefDictionaryValue>& extra_info, bool* no_javascript_access) {
+    extra_info = CreateBridgeExtraInfo(false, extra_info);
+    return false;
+}
+
+void Client::OnBeforeDevToolsPopup(CefRefPtr<CefBrowser> browser,
+                                   CefWindowInfo& windowInfo,
+                                   CefRefPtr<CefClient>& client,
+                                   CefBrowserSettings& settings,
+                                   CefRefPtr<CefDictionaryValue>& extra_info,
+                                   bool* use_default_window) {
+    extra_info = CreateBridgeExtraInfo(false, extra_info);
 }
 
 void Client::OnAfterCreated(CefRefPtr<CefBrowser> browser) {

@@ -1,4 +1,5 @@
 #include "ipc.h"
+#include "bridge.h"
 #include "client.h"
 #include "client_manager.h"
 #include "client_util.h"
@@ -1265,13 +1266,14 @@ CefRefPtr<Client> CreateBrowserWindow(const IPCWindowCreate& windowCreate)
 
     CefRefPtr<Client> client = new Client(windowCreate);
     CefBrowserSettings settings;
+    CefRefPtr<CefDictionaryValue> extra_info = CreateBridgeExtraInfo(windowCreate.bridgeEnabled);
 
     if (headless) {
         CefWindowInfo wi;
         wi.SetAsWindowless(kNullWindowHandle);
         wi.bounds.width = windowCreate.preferredWidth;
         wi.bounds.height = windowCreate.preferredHeight;
-        CefBrowserHost::CreateBrowserSync(wi, client, windowCreate.url, settings, nullptr, nullptr);
+        CefBrowserHost::CreateBrowserSync(wi, client, windowCreate.url, settings, extra_info, nullptr);
 
         return client;
     }
@@ -1285,7 +1287,7 @@ CefRefPtr<Client> CreateBrowserWindow(const IPCWindowCreate& windowCreate)
 
     if (use_views)
     {
-        CefRefPtr<CefBrowserView> browser_view = CefBrowserView::CreateBrowserView(client, windowCreate.url, settings, nullptr, nullptr, new BrowserViewDelegate(windowCreate, runtime_style));
+        CefRefPtr<CefBrowserView> browser_view = CefBrowserView::CreateBrowserView(client, windowCreate.url, settings, extra_info, nullptr, new BrowserViewDelegate(windowCreate, runtime_style));
         CefWindow::CreateTopLevelWindow(new WindowDelegate(browser_view, runtime_style, showState, windowCreate));
     } 
     else 
@@ -1330,7 +1332,7 @@ CefRefPtr<Client> CreateBrowserWindow(const IPCWindowCreate& windowCreate)
         // TODO: Copy over window name
         // cef_string_copy(windowName.c_str(), windowName.length(), &window_name);
 
-        CefBrowserHost::CreateBrowserSync(window_info, client, windowCreate.url, settings, nullptr, nullptr);
+        CefBrowserHost::CreateBrowserSync(window_info, client, windowCreate.url, settings, extra_info, nullptr);
     }
 
     return client;
@@ -1360,6 +1362,7 @@ CefRefPtr<Client> HandleWindowCreateInternal(PacketReader& reader, PacketWriter&
     std::optional<bool> modifyRequestBody = reader.read<bool>();
     std::optional<bool> proxyRequests = reader.read<bool>();
     std::optional<bool> logConsole = reader.read<bool>();
+    std::optional<bool> bridgeEnabled = reader.read<bool>();
     std::optional<int32_t> minimumWidth = reader.read<int32_t>();
     std::optional<int32_t> minimumHeight = reader.read<int32_t>();
     std::optional<int32_t> preferredWidth = reader.read<int32_t>();
@@ -1367,8 +1370,10 @@ CefRefPtr<Client> HandleWindowCreateInternal(PacketReader& reader, PacketWriter&
     std::optional<std::string> url = reader.readSizePrefixedString();
     std::optional<std::string> title = reader.readSizePrefixedString();
     std::optional<std::string> iconPath = reader.readSizePrefixedString();
+    std::optional<std::string> appId = reader.readSizePrefixedString();
     if (!resizable || !frameless || !fullscreen || !centered || !shown || !contextMenuEnable || !developerToolsEnabled || !modifyRequests
-        || !modifyRequestBody || !proxyRequests || !logConsole || !minimumWidth || !minimumHeight || !preferredWidth || !preferredHeight || !url) {
+        || !modifyRequestBody || !proxyRequests || !logConsole || !bridgeEnabled || !minimumWidth || !minimumHeight || !preferredWidth
+        || !preferredHeight || !url) {
 
         LOG(ERROR) << "HandleWindowCreate called without valid data. Ignored.";
         return nullptr;
@@ -1386,6 +1391,7 @@ CefRefPtr<Client> HandleWindowCreateInternal(PacketReader& reader, PacketWriter&
     windowCreate.modifyRequestBody = *modifyRequestBody;
     windowCreate.proxyRequests = *proxyRequests;
     windowCreate.logConsole = *logConsole;
+    windowCreate.bridgeEnabled = *bridgeEnabled;
     windowCreate.minimumWidth = *minimumWidth;
     windowCreate.minimumHeight = *minimumHeight;
     windowCreate.preferredWidth = *preferredWidth;
@@ -1393,6 +1399,7 @@ CefRefPtr<Client> HandleWindowCreateInternal(PacketReader& reader, PacketWriter&
     windowCreate.url = *url;
     windowCreate.title = title;
     windowCreate.iconPath = iconPath;
+    windowCreate.appId = appId;
     return CreateBrowserWindow(windowCreate);
 }
 
