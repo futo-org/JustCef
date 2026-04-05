@@ -1,0 +1,69 @@
+diff --git a/include/cef_v8.h b/include/cef_v8.h
+index 151f46e..ff16955 100644
+--- a/include/cef_v8.h
++++ b/include/cef_v8.h
+@@ -757,6 +757,16 @@ class CefV8Value : public virtual CefBaseRefCounted {
+   /*--cef()--*/
+   virtual CefString GetStringValue() = 0;
+ 
++#if CEF_API_ADDED(CEF_EXPERIMENTAL)
++  ///
++  /// Returns the filesystem path for a DOM File object. Returns an empty
++  /// string if this value is not a File object or if the File is not backed by
++  /// a path on disk.
++  ///
++  /*--cef(added=experimental)--*/
++  virtual CefString GetPathForFile() = 0;
++#endif
++
+   /// OBJECT METHODS - These methods are only available on objects. Arrays and
+   /// functions are also objects. String- and integer-based keys can be used
+   /// interchangably with the framework converting between them as necessary.
+diff --git a/libcef/renderer/v8_impl.cc b/libcef/renderer/v8_impl.cc
+index 4f68331..7a35f51 100644
+--- a/libcef/renderer/v8_impl.cc
++++ b/libcef/renderer/v8_impl.cc
+@@ -40,6 +40,8 @@
+ #include "cef/libcef/renderer/v8_impl.h"
+ #include "third_party/abseil-cpp/absl/base/attributes.h"
+ #include "third_party/blink/public/web/blink.h"
++#include "third_party/blink/renderer/bindings/core/v8/v8_file.h"
++#include "third_party/blink/renderer/core/fileapi/file.h"
+ #include "third_party/blink/public/web/web_frame.h"
+ #include "third_party/blink/public/web/web_local_frame.h"
+ #include "third_party/blink/public/web/web_script_controller.h"
+@@ -1924,6 +1926,22 @@ CefString CefV8ValueImpl::GetStringValue() {
+   return rv;
+ }
+ 
++CefString CefV8ValueImpl::GetPathForFile() {
++  CefString rv;
++  CEF_V8_REQUIRE_MLT_RETURN(rv);
++  if (type_ != TYPE_OBJECT || !CEF_V8_HANDLE_IS_VALID()) {
++    return rv;
++  }
++
++  v8::HandleScope handle_scope(handle_->isolate());
++  auto value = handle_->GetNewV8Handle(false);
++  if (auto* file = blink::V8File::ToWrappable(handle_->isolate(), value);
++      file && file->HasBackingFile()) {
++    rv = file->GetPath().Utf8();
++  }
++  return rv;
++}
++
+ bool CefV8ValueImpl::IsUserCreated() {
+   CEF_V8_REQUIRE_OBJECT_RETURN(false);
+ 
+diff --git a/libcef/renderer/v8_impl.h b/libcef/renderer/v8_impl.h
+index c8a031a..4d3d09a 100644
+--- a/libcef/renderer/v8_impl.h
++++ b/libcef/renderer/v8_impl.h
+@@ -245,6 +245,7 @@ class CefV8ValueImpl : public CefV8Value {
+   double GetDoubleValue() override;
+   CefBaseTime GetDateValue() override;
+   CefString GetStringValue() override;
++  CefString GetPathForFile() override;
+   bool IsUserCreated() override;
+   bool HasException() override;
+   CefRefPtr<CefV8Exception> GetException() override;

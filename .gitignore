@@ -81,3 +81,8 @@ _deps
 /native/tools/buildtools/linux64/clang-format
 /native/tools/buildtools/mac/clang-format
 /native/tools/buildtools/win/clang-format.exe
+
+# Terraform local state and provider cache
+.terraform/
+*.tfstate
+*.tfstate.*
