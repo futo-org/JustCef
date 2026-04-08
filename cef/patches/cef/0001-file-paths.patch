@@ -1,11 +1,24 @@
+diff --git a/BUILD.gn b/BUILD.gn
+index 53053ea..9bcebdb 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -984,6 +984,7 @@ source_set("libcef_static") {
+     "//third_party/blink/public:blink",
+     "//third_party/brotli:dec",
+     "//third_party/cld_3/src/src:cld_3",
++    "//third_party/highway:libhwy",
+     "//third_party/crashpad/crashpad/handler",
+     "//third_party/hunspell",
+     "//third_party/leveldatabase",
 diff --git a/include/cef_v8.h b/include/cef_v8.h
-index 151f46e..ff16955 100644
+index be77ff3..bfa95ea 100644
 --- a/include/cef_v8.h
 +++ b/include/cef_v8.h
-@@ -757,6 +757,16 @@ class CefV8Value : public virtual CefBaseRefCounted {
+@@ -1027,6 +1027,16 @@ class CefV8Value : public virtual CefBaseRefCounted {
+   ///
    /*--cef()--*/
-   virtual CefString GetStringValue() = 0;
- 
+   virtual bool RejectPromise(const CefString& errorMsg) = 0;
++
 +#if CEF_API_ADDED(CEF_EXPERIMENTAL)
 +  ///
 +  /// Returns the filesystem path for a DOM File object. Returns an empty
@@ -15,12 +28,11 @@ index 151f46e..ff16955 100644
 +  /*--cef(added=experimental)--*/
 +  virtual CefString GetPathForFile() = 0;
 +#endif
-+
-   /// OBJECT METHODS - These methods are only available on objects. Arrays and
-   /// functions are also objects. String- and integer-based keys can be used
-   /// interchangably with the framework converting between them as necessary.
+ };
+ 
+ ///
 diff --git a/libcef/renderer/v8_impl.cc b/libcef/renderer/v8_impl.cc
-index 4f68331..7a35f51 100644
+index 0bcf093..83d12c9 100644
 --- a/libcef/renderer/v8_impl.cc
 +++ b/libcef/renderer/v8_impl.cc
 @@ -40,6 +40,8 @@
@@ -32,7 +44,7 @@ index 4f68331..7a35f51 100644
  #include "third_party/blink/public/web/web_frame.h"
  #include "third_party/blink/public/web/web_local_frame.h"
  #include "third_party/blink/public/web/web_script_controller.h"
-@@ -1924,6 +1926,22 @@ CefString CefV8ValueImpl::GetStringValue() {
+@@ -2006,6 +2008,26 @@ CefString CefV8ValueImpl::GetStringValue() {
    return rv;
  }
  
@@ -47,7 +59,11 @@ index 4f68331..7a35f51 100644
 +  auto value = handle_->GetNewV8Handle(false);
 +  if (auto* file = blink::V8File::ToWrappable(handle_->isolate(), value);
 +      file && file->HasBackingFile()) {
-+    rv = file->GetPath().Utf8();
++    auto path = file->GetPath();
++    if (!path.empty()) {
++      path.Ensure16Bit();
++      rv = CefString(path.Span16().data(), path.length());
++    }
 +  }
 +  return rv;
 +}
@@ -56,14 +72,14 @@ index 4f68331..7a35f51 100644
    CEF_V8_REQUIRE_OBJECT_RETURN(false);
  
 diff --git a/libcef/renderer/v8_impl.h b/libcef/renderer/v8_impl.h
-index c8a031a..4d3d09a 100644
+index 1c5c146..7c4530d 100644
 --- a/libcef/renderer/v8_impl.h
 +++ b/libcef/renderer/v8_impl.h
-@@ -245,6 +245,7 @@ class CefV8ValueImpl : public CefV8Value {
-   double GetDoubleValue() override;
-   CefBaseTime GetDateValue() override;
-   CefString GetStringValue() override;
+@@ -286,6 +286,7 @@ class CefV8ValueImpl : public CefV8Value {
+ 
+   bool ResolvePromise(CefRefPtr<CefV8Value> arg) override;
+   bool RejectPromise(const CefString& errorMsg) override;
 +  CefString GetPathForFile() override;
-   bool IsUserCreated() override;
-   bool HasException() override;
-   CefRefPtr<CefV8Exception> GetException() override;
+ 
+  private:
+   // Test for and record any exception.

@@ -19,6 +19,7 @@
 #include <condition_variable>
 #include <optional>
 #include <stdint.h>
+#include <utility>
 
 class Client;
 
@@ -87,7 +88,8 @@ enum class OpcodeController : uint8_t {
     WindowRemoveDevToolsEventMethod = 52,
     WindowAddDomainToProxy = 53,
     WindowRemoveDomainToProxy = 54,
-    WindowGetZoom = 55
+    WindowGetZoom = 55,
+    WindowBridgeRpc = 56
 };
 
 //Notifications from controller
@@ -102,7 +104,8 @@ enum class OpcodeClient : uint8_t {
     Echo = 2,
     WindowProxyRequest = 3,
     WindowModifyRequest = 4,
-    StreamClose = 5
+    StreamClose = 5,
+    WindowBridgeRpc = 6
 };
 
 //Notifications from client
@@ -170,6 +173,13 @@ typedef struct _IPCProxyResponse
     std::shared_ptr<DataStream> bodyStream = nullptr;
 } IPCProxyResponse;
 
+typedef struct _IPCBridgeRpcResult
+{
+    bool success = false;
+    std::optional<std::string> result_json = std::nullopt;
+    std::optional<std::string> error = std::nullopt;
+} IPCBridgeRpcResult;
+
 typedef struct _IPCWindowCreate 
 {
     bool resizable = true;
@@ -220,6 +230,7 @@ public:
     void StreamClose(uint32_t identifier) { Call(OpcodeClient::StreamClose, (uint8_t*)&identifier, sizeof(uint32_t)); }
     void WindowModifyRequest(int32_t identifier, CefRefPtr<CefRequest> request, bool modifyRequestBody);
     std::unique_ptr<IPCProxyResponse> WindowProxyRequest(int32_t identifier, CefRefPtr<CefRequest> request);
+    IPCBridgeRpcResult WindowBridgeRpc(int32_t identifier, const std::string& method, const std::string& payload_json);
     
     void NotifyExit() { Notify(OpcodeClientNotification::Exit); }
     void NotifyReady() { Notify(OpcodeClientNotification::Ready); }
@@ -239,6 +250,7 @@ public:
     void NotifyWindowLoadEnd(CefRefPtr<CefBrowser> browser, const CefString& url);
     void NotifyWindowLoadError(CefRefPtr<CefBrowser> browser, cef_errorcode_t errorCode, const CefString& errorText, const CefString& url);
     void NotifyWindowDevToolsEvent(CefRefPtr<CefBrowser> browser, const CefString& method, const uint8_t* result, size_t result_size);
+    void QueueResponse(OpcodeController opcode, uint32_t requestId, const PacketWriter& writer);
 
     void QueueWork(std::function<void()> work) 
     {
@@ -246,6 +258,14 @@ public:
             return;
             
         _worker.EnqueueWork(work); 
+    }
+
+    void QueueBackgroundWork(std::function<void()> work)
+    {
+        if (!IsAvailable())
+            return;
+
+        _threadPool.Enqueue(std::move(work));
     }
 
     void CloseStream(uint32_t identifier);
@@ -262,8 +282,9 @@ private:
     std::vector<uint8_t> Call(OpcodeClient opcode, const uint8_t* body = nullptr, size_t size = 0);
     void Notify(OpcodeClientNotification opcode, const uint8_t* body = nullptr, size_t size = 0);
     void Notify(OpcodeClientNotification opcode, const PacketWriter& writer);
-    void HandleRequest(OpcodeController opcode, PacketReader& reader, PacketWriter& writer);
+    bool HandleRequest(uint32_t requestId, OpcodeController opcode, PacketReader& reader, PacketWriter& writer);
     void HandleNotification(OpcodeControllerNotification opcode, PacketReader& reader);
+    void WriteResponse(uint32_t requestId, uint8_t opcode, const uint8_t* body, size_t size);
 
     std::atomic<uint32_t> _requestIdCounter;
 
@@ -327,6 +348,7 @@ void HandleAddDevToolsEventMethod(PacketReader& reader, PacketWriter& writer);
 void HandleRemoveDevToolsEventMethod(PacketReader& reader, PacketWriter& writer);
 void HandleWindowSetZoom(PacketReader& reader, PacketWriter& writer);
 void HandleWindowGetZoom(PacketReader& reader, PacketWriter& writer);
+bool HandleWindowBridgeRpc(uint32_t requestId, PacketReader& reader, PacketWriter& writer);
 CefRefPtr<Client> CreateBrowserWindow(const IPCWindowCreate& windowCreate);
 
 #endif //IPC_H

@@ -135,8 +135,8 @@ int RunMain(HINSTANCE hInstance, LPTSTR /*lpCmdLine*/, int /*nCmdShow*/, void* s
         cachePath = std::filesystem::temp_directory_path() / ("justcef_" + std::to_string(ms));
     }
 
-    CefString(&settings.cache_path) = cachePath.u8string();
-    CefString(&settings.root_cache_path) = cachePath.u8string();
+    CefString(&settings.cache_path) = cachePath.string();
+    CefString(&settings.root_cache_path) = cachePath.string();
 
     if (!CefInitialize(main_args, settings, app, sandbox_info)) {
         return 1;
@@ -149,9 +149,9 @@ int RunMain(HINSTANCE hInstance, LPTSTR /*lpCmdLine*/, int /*nCmdShow*/, void* s
         std::error_code ec;
         const auto removedCount = std::filesystem::remove_all(cachePath, ec);
         if (ec) {
-            LOG(ERROR) << "Failed to delete cache path: " << cachePath.u8string() << ". Error: " << ec.message();
+            LOG(ERROR) << "Failed to delete cache path: " << cachePath.string() << ". Error: " << ec.message();
         } else {
-            LOG(INFO) << "Deleted " << removedCount << " items from cache path: " << cachePath.u8string();
+            LOG(INFO) << "Deleted " << removedCount << " items from cache path: " << cachePath.string();
         }
     }
 

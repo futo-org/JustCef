@@ -18,15 +18,17 @@ namespace JustCef
 
         private Func<JustCefWindow, IPCRequest, IPCRequest?>? _requestModifier;
         private Func<JustCefWindow, IPCRequest, Task<IPCResponse?>>? _requestProxy;
+        private Func<JustCefWindow, string, string?, Task<string?>>? _bridgeRpcHandler;
 
         private readonly TaskCompletionSource _closeCompletionSource = new TaskCompletionSource();
 
-        public JustCefWindow(JustCefProcess process, int identifier, Func<JustCefWindow, IPCRequest, IPCRequest?>? requestModifier, Func<JustCefWindow, IPCRequest, Task<IPCResponse?>>? requestProxy)
+        public JustCefWindow(JustCefProcess process, int identifier, Func<JustCefWindow, IPCRequest, IPCRequest?>? requestModifier, Func<JustCefWindow, IPCRequest, Task<IPCResponse?>>? requestProxy, Func<JustCefWindow, string, string?, Task<string?>>? bridgeRpcHandler)
         {
             _process = process;
             Identifier = identifier;
             _requestModifier = requestModifier;
             _requestProxy = requestProxy;
+            _bridgeRpcHandler = bridgeRpcHandler;
         }
 
         public async Task MaximizeAsync(CancellationToken cancellationToken = default) => await _process.WindowMaximizeAsync(Identifier, cancellationToken);
@@ -59,6 +61,8 @@ namespace JustCef
             => await _process.WindowSetDevelopmentToolsVisibleAsync(Identifier, developmentToolsVisible, cancellationToken);
         public async Task<(bool Success, byte[] Data)> ExecuteDevToolsMethodAsync(string methodName, string? json = null,  CancellationToken cancellationToken = default)
             => await _process.WindowExecuteDevToolsMethodAsync(Identifier, methodName, json, cancellationToken);
+        public async Task<string> CallBridgeRpcAsync(string method, string? json = null, CancellationToken cancellationToken = default)
+            => await _process.WindowBridgeRpcAsync(Identifier, method, json, cancellationToken);
         public async Task SetTitleAsync(string title, CancellationToken cancellationToken = default)
             => await _process.WindowSetTitleAsync(Identifier, title, cancellationToken);
         public async Task SetIconAsync(string iconPath, CancellationToken cancellationToken = default)
@@ -92,6 +96,11 @@ namespace JustCef
         public void SetRequestProxy(Func<JustCefWindow, IPCRequest, Task<IPCResponse?>>? requestProxy)
         {
             _requestProxy = requestProxy;
+        }
+
+        public void SetBridgeRpcHandler(Func<JustCefWindow, string, string?, Task<string?>>? bridgeRpcHandler)
+        {
+            _bridgeRpcHandler = bridgeRpcHandler;
         }
 
         public async Task SetModifyRequestsAsync(bool modifyRequests, bool modifyBody, CancellationToken cancellationToken = default)
@@ -181,6 +190,14 @@ namespace JustCef
                 });
                 return request;
             }
+        }
+
+        internal async Task<string?> InvokeBridgeRpcAsync(string method, string? json)
+        {
+            if (_bridgeRpcHandler == null)
+                throw new InvalidOperationException("No bridge RPC handler is registered for this window.");
+
+            return await _bridgeRpcHandler(this, method, json);
         }
     }
 }

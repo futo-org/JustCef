@@ -7,6 +7,7 @@
 #include "ipc.h"
 
 #include <future>
+#include <unordered_map>
 #include <unordered_set>
 
 #define DEFAULT_DEDEUPE_INPUT_MS 120
@@ -83,16 +84,21 @@ class Client : public CefClient,
     void RemoveUrlToModify(const std::string& url);
     void AddDevToolsEventMethod(CefRefPtr<CefBrowser> browser, const std::string& method);
     void RemoveDevToolsEventMethod(CefRefPtr<CefBrowser> browser, const std::string& method);
+    void StartBridgeRpcCall(CefRefPtr<CefBrowser> browser, const std::string& method, const std::string& payload_json, uint32_t controllerRequestId);
 
     IPCWindowCreate settings;
  private:
     void SetTitle(CefRefPtr<CefBrowser> browser, const std::string& title);
     bool EnsureDevToolsRegistration(CefRefPtr<CefBrowser> browser);
+    void CompleteBridgeRpcCall(int32_t request_id, bool success, const std::optional<std::string>& result_json, const std::optional<std::string>& error);
+    void FailAllBridgeRpcCalls(const std::string& error);
 
     std::map<int32_t, std::shared_ptr<std::promise<std::optional<IPCDevToolsMethodResult>>>> _devToolsMethodResults; 
+    std::unordered_map<int32_t, uint32_t> _bridgeRpcResults;
     CefRefPtr<CefRegistration> _devToolsRegistration = nullptr;
     int _identifier = 0;
     int _messageIdGenerator = 0;
+    int _bridgeRpcRequestIdGenerator = 0;
     std::unordered_set<int> _modifiedRequests;
     std::mutex _modifiedRequestsMutex;
     std::string _titleOverride;
@@ -108,6 +114,7 @@ class Client : public CefClient,
     std::unordered_set<std::string> _modifyRequestsSet;
     std::mutex _devToolsEventMethodsSetMutex;
     std::unordered_set<std::string> _devToolsEventMethodsSet;
+    std::mutex _bridgeRpcResultsMutex;
 
     bool _dedupeInput = false;
     int _dedupeInputMs = DEFAULT_DEDEUPE_INPUT_MS;

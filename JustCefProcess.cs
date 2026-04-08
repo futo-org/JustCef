@@ -81,7 +81,8 @@ namespace JustCef
             WindowRemoveDevToolsEventMethod = 52,
             WindowAddDomainToProxy = 53,
             WindowRemoveDomainToProxy = 54,
-            WindowGetZoom = 55
+            WindowGetZoom = 55,
+            WindowBridgeRpc = 56
         }
 
         public enum OpcodeControllerNotification : byte
@@ -96,7 +97,8 @@ namespace JustCef
             Echo = 2,
             WindowProxyRequest = 3,
             WindowModifyRequest = 4,
-            StreamClose = 5
+            StreamClose = 5,
+            WindowBridgeRpc = 6
         }
 
         public enum OpcodeClientNotification : byte
@@ -466,6 +468,9 @@ namespace JustCef
                             }
                         }
                         break;
+                    case OpcodeClient.WindowBridgeRpc:
+                        await HandleWindowBridgeRpcAsync(reader, writer);
+                        break;
                     default:
                         Logger.Warning<JustCefProcess>($"Received unhandled opcode {opcode}.");
                         break;
@@ -745,6 +750,44 @@ namespace JustCef
                 }
                 else if (element is IPCProxyBodyElementFile f)
                     writer.WriteSizePrefixedString(f.FileName);
+            }
+        }
+
+        private async Task HandleWindowBridgeRpcAsync(PacketReader reader, PacketWriter writer)
+        {
+            int identifier = reader.Read<int>();
+            var window = GetWindow(identifier);
+            if (window == null)
+            {
+                writer.Write(false);
+                writer.WriteSizePrefixedString("null");
+                writer.WriteSizePrefixedString("Bridge RPC target window no longer exists.");
+                return;
+            }
+
+            string? method = reader.ReadSizePrefixedString();
+            string? json = reader.ReadSizePrefixedString();
+            if (string.IsNullOrWhiteSpace(method))
+            {
+                writer.Write(false);
+                writer.WriteSizePrefixedString("null");
+                writer.WriteSizePrefixedString("Bridge RPC method must be a non-empty string.");
+                return;
+            }
+
+            try
+            {
+                string? resultJson = await window.InvokeBridgeRpcAsync(method, json);
+                writer.Write(true);
+                writer.WriteSizePrefixedString(resultJson ?? "null");
+                writer.WriteSizePrefixedString(string.Empty);
+            }
+            catch (Exception e)
+            {
+                Logger.Error<JustCefProcess>("Exception occurred while processing bridge RPC", e);
+                writer.Write(false);
+                writer.WriteSizePrefixedString("null");
+                writer.WriteSizePrefixedString(e.Message);
             }
         }
 
@@ -1063,9 +1106,13 @@ namespace JustCef
         public async Task<JustCefWindow> CreateWindowAsync(string url, int minimumWidth, int minimumHeight, int preferredWidth = 0, int preferredHeight = 0,
             bool fullscreen = false, bool contextMenuEnable = false, bool shown = true, bool developerToolsEnabled = false, bool resizable = true, bool frameless = false,
             bool centered = true, bool proxyRequests = false, bool logConsole = false, Func<JustCefWindow, IPCRequest, Task<IPCResponse?>>? requestProxy = null, bool modifyRequests = false, Func<JustCefWindow, IPCRequest, IPCRequest?>? requestModifier = null, bool modifyRequestBody = false,
-            string? title = null, string? iconPath = null, string? appId = null, CancellationToken cancellationToken = default, bool bridgeEnabled = false)
+            string? title = null, string? iconPath = null, string? appId = null, CancellationToken cancellationToken = default, bool bridgeEnabled = false,
+            Func<JustCefWindow, string, string?, Task<string?>>? bridgeRpcHandler = null)
         {
             EnsureStarted();
+
+            if (bridgeRpcHandler != null && !bridgeEnabled)
+                throw new ArgumentException("When bridgeRpcHandler is provided, bridgeEnabled must be true.", nameof(bridgeRpcHandler));
 
             PacketWriter writer = new PacketWriter();
             writer.Write(resizable);
@@ -1094,7 +1141,7 @@ namespace JustCef
             writer.WriteSizePrefixedString(appId);
 
             var reader = await CallAsync(OpcodeController.WindowCreate, writer.Data, 0, writer.Size, cancellationToken);
-            var window = new JustCefWindow(this, reader.Read<int>(), requestModifier, requestProxy);
+            var window = new JustCefWindow(this, reader.Read<int>(), requestModifier, requestProxy, bridgeRpcHandler);
             lock (_windows)
             {
                 _windows.Add(window);
@@ -1384,6 +1431,26 @@ namespace JustCef
             var resultSize = reader.Read<uint>();
             var result = reader.ReadBytes((int)resultSize);
             return (success, result);
+        }
+
+        public async Task<string> WindowBridgeRpcAsync(int identifier, string method, string? json = null, CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrWhiteSpace(method))
+                throw new ArgumentException("Bridge RPC method must be a non-empty string.", nameof(method));
+
+            var writer = new PacketWriter();
+            writer.Write(identifier);
+            writer.WriteSizePrefixedString(method);
+            writer.WriteSizePrefixedString(json ?? "null");
+
+            var reader = await CallAsync(OpcodeController.WindowBridgeRpc, writer, cancellationToken);
+            bool success = reader.Read<bool>();
+            string resultJson = reader.ReadSizePrefixedString() ?? "null";
+            string error = reader.ReadSizePrefixedString() ?? "Bridge RPC failed.";
+            if (!success)
+                throw new InvalidOperationException(error);
+
+            return resultJson;
         }
 
         public async Task WindowSetTitleAsync(int identifier, string title, CancellationToken cancellationToken = default)

@@ -62,8 +62,8 @@ namespace shared {
           }
           std::filesystem::path workingDir = commandPath.parent_path();
 
-          std::string commandStr = commandPath.u8string();
-          int result = chdir(workingDir.u8string().c_str());
+          std::string commandStr = commandPath.string();
+          int result = chdir(workingDir.string().c_str());
           if (result == 0) {
             result = system(commandStr.c_str());
             if (result != 0) {
@@ -72,7 +72,7 @@ namespace shared {
             }
             return 0;
           } else {
-            std::cerr << "Failed to change working directory to: " << workingDir.u8string() << std::endl;
+            std::cerr << "Failed to change working directory to: " << workingDir.string() << std::endl;
             return 1;
           }
         }
@@ -186,9 +186,9 @@ namespace shared {
       cachePath = std::filesystem::temp_directory_path() / ("justcef_" + uniqueIdentifier);
     }
 
-    LOG(INFO) << "Cache path: " << cachePath.u8string();
-    CefString(&settings.cache_path) = cachePath.u8string();
-    CefString(&settings.root_cache_path) = cachePath.u8string();
+    LOG(INFO) << "Cache path: " << cachePath.string();
+    CefString(&settings.cache_path) = cachePath.string();
+    CefString(&settings.root_cache_path) = cachePath.string();
 
     // Initialize the CEF browser process. The first browser instance will be
     // created in CefBrowserProcessHandler::OnContextInitialized() after CEF has
@@ -212,9 +212,9 @@ namespace shared {
       std::error_code ec;
       auto removedCount = std::filesystem::remove_all(cachePath, ec);
       if (ec) {
-        LOG(ERROR) << "Failed to delete cache path: " << cachePath.u8string() << ". Error: " << ec.message();
+        LOG(ERROR) << "Failed to delete cache path: " << cachePath.string() << ". Error: " << ec.message();
       } else {
-        LOG(INFO) << "Deleted " << removedCount << " items from cache path: " << cachePath.u8string();
+        LOG(INFO) << "Deleted " << removedCount << " items from cache path: " << cachePath.string();
       }
     }
 

@@ -146,6 +146,14 @@ inline bool EndsWith(const std::string& str, const std::string& suffix) {
     return str.size() >= suffix.size() && str.compare(str.size() - suffix.size(), suffix.size(), suffix) == 0;
 }
 
+void QueueClientBridgeRpcResponse(uint32_t controller_request_id, bool success, const std::string& result_json, const std::string& error) {
+    PacketWriter writer;
+    writer.write<bool>(success);
+    writer.writeSizePrefixedString(result_json);
+    writer.writeSizePrefixedString(error);
+    IPC::Singleton.QueueResponse(OpcodeController::WindowBridgeRpc, controller_request_id, writer);
+}
+
 std::string ExtractHostFromURL(const std::string& url) 
 {
     // Find scheme
@@ -370,6 +378,7 @@ void Client::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
     for (auto& itr : _devToolsMethodResults)
         itr.second->set_value(std::nullopt);
     _devToolsMethodResults.clear();
+    FailAllBridgeRpcCalls("Bridge RPC failed because the browser is closing.");
 
     _identifier = 0;
 
@@ -957,6 +966,70 @@ void Client::RemoveDevToolsEventMethod(CefRefPtr<CefBrowser> browser, const std:
     }
 }
 
+void Client::StartBridgeRpcCall(CefRefPtr<CefBrowser> browser, const std::string& method, const std::string& payload_json, uint32_t controllerRequestId)
+{
+    CEF_REQUIRE_UI_THREAD();
+
+    if (!settings.bridgeEnabled) {
+        QueueClientBridgeRpcResponse(controllerRequestId, false, "null", "Bridge RPC is not enabled for this window.");
+        return;
+    }
+
+    if (!browser) {
+        QueueClientBridgeRpcResponse(controllerRequestId, false, "null", "Bridge RPC browser is not available.");
+        return;
+    }
+
+    CefRefPtr<CefFrame> frame = browser->GetMainFrame();
+    if (!frame) {
+        QueueClientBridgeRpcResponse(controllerRequestId, false, "null", "Bridge RPC main frame is not available.");
+        return;
+    }
+
+    const int32_t request_id = ++_bridgeRpcRequestIdGenerator;
+    {
+        std::lock_guard<std::mutex> lk(_bridgeRpcResultsMutex);
+        _bridgeRpcResults[request_id] = controllerRequestId;
+    }
+
+    CefRefPtr<CefProcessMessage> message = CefProcessMessage::Create(kBridgeRpcCallJsMessageName);
+    CefRefPtr<CefListValue> arguments = message->GetArgumentList();
+    arguments->SetInt(0, request_id);
+    arguments->SetString(1, method);
+    arguments->SetString(2, payload_json);
+    frame->SendProcessMessage(PID_RENDERER, message);
+}
+
+void Client::CompleteBridgeRpcCall(int32_t request_id, bool success, const std::optional<std::string>& result_json, const std::optional<std::string>& error)
+{
+    uint32_t controller_request_id = 0;
+    {
+        std::lock_guard<std::mutex> lk(_bridgeRpcResultsMutex);
+        auto it = _bridgeRpcResults.find(request_id);
+        if (it == _bridgeRpcResults.end()) {
+            return;
+        }
+
+        controller_request_id = it->second;
+        _bridgeRpcResults.erase(it);
+    }
+
+    QueueClientBridgeRpcResponse(controller_request_id, success, result_json.value_or("null"), error.value_or(""));
+}
+
+void Client::FailAllBridgeRpcCalls(const std::string& error)
+{
+    std::unordered_map<int32_t, uint32_t> pending_calls;
+    {
+        std::lock_guard<std::mutex> lk(_bridgeRpcResultsMutex);
+        pending_calls.swap(_bridgeRpcResults);
+    }
+
+    for (auto& entry : pending_calls) {
+        QueueClientBridgeRpcResponse(entry.second, false, "null", error);
+    }
+}
+
 bool Client::OnConsoleMessage(CefRefPtr<CefBrowser> browser, cef_log_severity_t level, const CefString& message, const CefString& source, int line)
 {
     if (settings.logConsole)
@@ -965,29 +1038,93 @@ bool Client::OnConsoleMessage(CefRefPtr<CefBrowser> browser, cef_log_severity_t 
 }
 
 bool Client::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefProcessId source_process, CefRefPtr<CefProcessMessage> message) {
-    if (message->GetName() != kOskMsg) return false;
+    const std::string message_name = message->GetName();
+    if (message_name == kOskMsg) {
+        LOG(INFO) << "OnProcessMessageReceived (name = " << message_name << ", size = " << message->GetArgumentList()->GetSize() << ").";
+        const int show = message->GetArgumentList()->GetInt(0);
+        if (!show) {
+            LOG(INFO) << "Steam dismiss OSK.";
+            Steam::Instance().DismissOsk();
+            return true;
+        }
 
-    LOG(INFO) << "OnProcessMessageReceived (name = " << message->GetName() << ", size = " << message->GetArgumentList()->GetSize() << ").";
-    const int show = message->GetArgumentList()->GetInt(0);
-    if (!show) {
-        LOG(INFO) << "Steam dismiss OSK.";
-        Steam::Instance().DismissOsk();
+        LOG(INFO) << "Steam show OSK.";
+
+        const int x = message->GetArgumentList()->GetInt(1), y = message->GetArgumentList()->GetInt(2);
+        const int w = message->GetArgumentList()->GetInt(3), h = message->GetArgumentList()->GetInt(4);
+        const auto mode = static_cast<EFloatingGamepadTextInputMode>(message->GetArgumentList()->GetInt(5));
+        if (Steam::Instance().ShouldShowOsk()) {
+            LOG(INFO) << "Steam show OSK (x = " << x << ", y = " << y << ", w = " << w << ", h = " << h << ", mode = " << mode << ").";
+            Steam::Instance().ShowOsk(x, y, w, h, mode);
+        } else {
+            LOG(INFO) << "Steam show OSK failed because should show osk is false (x = " << x << ", y = " << y << ", w = " << w << ", h = " << h << ", mode = " << mode << ").";
+        }
+
         return true;
     }
 
-    LOG(INFO) << "Steam show OSK.";
+    if (message_name == kBridgeRpcCallHostMessageName) {
+        CefRefPtr<CefListValue> arguments = message->GetArgumentList();
+        if (!arguments || arguments->GetSize() < 3 || arguments->GetType(0) != VTYPE_INT ||
+            arguments->GetType(1) != VTYPE_STRING || arguments->GetType(2) != VTYPE_STRING) {
+            return true;
+        }
 
-    const int x = message->GetArgumentList()->GetInt(1), y = message->GetArgumentList()->GetInt(2);
-    const int w = message->GetArgumentList()->GetInt(3), h = message->GetArgumentList()->GetInt(4);
-    const auto mode = static_cast<EFloatingGamepadTextInputMode>(message->GetArgumentList()->GetInt(5));
-    if (Steam::Instance().ShouldShowOsk()) {
-        LOG(INFO) << "Steam show OSK (x = " << x << ", y = " << y << ", w = " << w << ", h = " << h << ", mode = " << mode << ").";
-        Steam::Instance().ShowOsk(x, y, w, h, mode);
-    } else {
-        LOG(INFO) << "Steam show OSK failed because should show osk is false (x = " << x << ", y = " << y << ", w = " << w << ", h = " << h << ", mode = " << mode << ").";
+        const int32_t request_id = arguments->GetInt(0);
+        const std::string method = arguments->GetString(1);
+        const std::string payload_json = arguments->GetString(2);
+        const int32_t browser_identifier = browser ? browser->GetIdentifier() : 0;
+
+        IPC::Singleton.QueueBackgroundWork([request_id, method, payload_json, browser_identifier]() {
+            IPCBridgeRpcResult result =
+                IPC::Singleton.WindowBridgeRpc(browser_identifier, method, payload_json);
+
+            CefPostTask(TID_UI, base::BindOnce(
+                [](int32_t browser_identifier, int32_t request_id, IPCBridgeRpcResult result) {
+                    CefRefPtr<CefBrowser> browser = ClientManager::GetInstance()->AcquirePointer(browser_identifier);
+                    if (!browser) {
+                        return;
+                    }
+
+                    CefRefPtr<CefFrame> frame = browser->GetMainFrame();
+                    if (!frame) {
+                        return;
+                    }
+
+                    CefRefPtr<CefProcessMessage> message = CefProcessMessage::Create(kBridgeRpcCallHostResultMessageName);
+                    CefRefPtr<CefListValue> arguments = message->GetArgumentList();
+                    arguments->SetInt(0, request_id);
+                    arguments->SetBool(1, result.success);
+                    arguments->SetString(2, result.success
+                        ? result.result_json.value_or("null")
+                        : result.error.value_or("Bridge RPC failed."));
+                    frame->SendProcessMessage(PID_RENDERER, message);
+                },
+                browser_identifier,
+                request_id,
+                result));
+        });
+
+        return true;
     }
 
-    return true;
+    if (message_name == kBridgeRpcCallJsResultMessageName) {
+        CefRefPtr<CefListValue> arguments = message->GetArgumentList();
+        if (!arguments || arguments->GetSize() < 3 || arguments->GetType(0) != VTYPE_INT ||
+            arguments->GetType(1) != VTYPE_BOOL || arguments->GetType(2) != VTYPE_STRING) {
+            return true;
+        }
+
+        CompleteBridgeRpcCall(arguments->GetInt(0), arguments->GetBool(1), arguments->GetBool(1) ? std::optional<std::string>(arguments->GetString(2)) : std::optional<std::string>("null"), arguments->GetBool(1) ? std::optional<std::string>("") : std::optional<std::string>(arguments->GetString(2)));
+        return true;
+    }
+
+    if (message_name == kBridgeRpcContextReleasedMessageName) {
+        FailAllBridgeRpcCalls("Bridge RPC failed because the JavaScript context was released.");
+        return true;
+    }
+
+    return false;
 }
 
 //TODO: Implement Minimized, Maximized, Restored, KeyboardEvent, Resized, Moved

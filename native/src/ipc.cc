@@ -31,6 +31,24 @@ std::string optionalToString(std::optional<T>& opt) {
     return std::string(*opt);
 }
 
+namespace {
+
+IPCBridgeRpcResult MakeBridgeRpcResult(bool success, const std::string& result_json, const std::string& error) {
+    IPCBridgeRpcResult result;
+    result.success = success;
+    result.result_json = result_json;
+    result.error = error;
+    return result;
+}
+
+void WriteBridgeRpcResult(PacketWriter& writer, bool success, const std::string& result_json, const std::string& error) {
+    writer.write<bool>(success);
+    writer.writeSizePrefixedString(result_json);
+    writer.writeSizePrefixedString(error);
+}
+
+}  // namespace
+
 IPC IPC::Singleton;
 
 IPC::IPC() : _readBufferPool(MAXIMUM_IPC_SIZE, 4)
@@ -246,34 +264,13 @@ void IPC::Run()
             {
                 PacketReader reader(readBuffer->data(), bodySize);
                 PacketWriter writer;
-                HandleRequest((OpcodeController)header.opcode, reader, writer);
+                bool should_write_response = HandleRequest(header.requestId, (OpcodeController)header.opcode, reader, writer);
                 _readBufferPool.ReturnBuffer(readBuffer);
-
-                {
-                    std::lock_guard<std::mutex> lk(_writeMutex);
-
-                    size_t packetLength = sizeof(IPCPacketHeader) + writer.size();
-                    if (_sendBuffer.capacity() < packetLength)
-                        _sendBuffer.resize(packetLength);
-
-                    IPCPacketHeader* pHeader = (IPCPacketHeader*)_sendBuffer.data();
-                    pHeader->size = (uint32_t)(packetLength - sizeof(uint32_t));
-                    pHeader->opcode = header.opcode;
-                    pHeader->packetType = PacketType::Response;
-                    pHeader->requestId = header.requestId;
-
-                    LOG(INFO) << "Sent response (packetType = " << (int)pHeader->packetType << ", opcode = " << (int)pHeader->opcode << ")"; 
-
-                    if (writer.size() > 0)
-                        memcpy(_sendBuffer.data() + sizeof(IPCPacketHeader), writer.data(), writer.size());
-
-                    if (_pipe.Write(_sendBuffer.data(), packetLength, true) != packetLength)
-                    {
-                        LOG(INFO) << "Failed to write entire response packet.";
-                        CloseEverything();
-                        return;
-                    }
+                if (!should_write_response) {
+                    return;
                 }
+
+                WriteResponse(header.requestId, header.opcode, writer.data(), writer.size());
             };
 
             OpcodeController opcode = (OpcodeController)header.opcode;
@@ -299,6 +296,7 @@ void IPC::Run()
             {
                 PacketReader reader(readBuffer->data(), bodySize);
                 HandleNotification((OpcodeControllerNotification)header.opcode, reader);
+                _readBufferPool.ReturnBuffer(readBuffer);
             });
         }
         else
@@ -403,89 +401,133 @@ void IPC::Notify(OpcodeClientNotification opcode, const uint8_t* body, size_t si
     _pipe.Write(_sendBuffer.data(), packetLength, true);
 }
 
-void IPC::HandleRequest(OpcodeController opcode, PacketReader& reader, PacketWriter& writer)
+void IPC::QueueResponse(OpcodeController opcode, uint32_t requestId, const PacketWriter& writer)
+{
+    std::shared_ptr<std::vector<uint8_t>> body = std::make_shared<std::vector<uint8_t>>();
+    body->resize(writer.size());
+    if (writer.size() > 0) {
+        memcpy(body->data(), writer.data(), writer.size());
+    }
+
+    QueueBackgroundWork([this, opcode, requestId, body] () {
+        WriteResponse(requestId, (uint8_t)opcode, body->data(), body->size());
+    });
+}
+
+void IPC::WriteResponse(uint32_t requestId, uint8_t opcode, const uint8_t* body, size_t size)
+{
+    if (!IsAvailable())
+        return;
+
+    std::lock_guard<std::mutex> lk(_writeMutex);
+
+    size_t packetLength = sizeof(IPCPacketHeader) + size;
+    if (_sendBuffer.capacity() < packetLength)
+        _sendBuffer.resize(packetLength);
+
+    IPCPacketHeader* pHeader = (IPCPacketHeader*)_sendBuffer.data();
+    pHeader->size = (uint32_t)(packetLength - sizeof(uint32_t));
+    pHeader->opcode = opcode;
+    pHeader->packetType = PacketType::Response;
+    pHeader->requestId = requestId;
+
+    LOG(INFO) << "Sent response (packetType = " << (int)pHeader->packetType
+              << ", opcode = " << (int)pHeader->opcode << ")";
+
+    if (body && size > 0)
+        memcpy(_sendBuffer.data() + sizeof(IPCPacketHeader), body, size);
+
+    if (_pipe.Write(_sendBuffer.data(), packetLength, true) != packetLength)
+    {
+        LOG(INFO) << "Failed to write entire response packet.";
+        CloseEverything();
+    }
+}
+
+bool IPC::HandleRequest(uint32_t requestId, OpcodeController opcode, PacketReader& reader, PacketWriter& writer)
 {
     switch (opcode)
     {
         case OpcodeController::Ping:
-            break;
+            return true;
         case OpcodeController::Print:
         {
             std::optional<std::string> str = reader.readString((uint32_t)reader.remainingSize());
             if (str)
                 LOG(INFO) << *str;
-            break;
+            return true;
         }
         case OpcodeController::Echo:
             reader.copyTo([&writer] (const uint8_t* data, size_t size) {
                 return writer.writeBytes(data, size);
             }, reader.remainingSize());
-            break;
+            return true;
         case OpcodeController::WindowCreate:
-            return HandleWindowCreate(reader, writer);
+            HandleWindowCreate(reader, writer);
+            return true;
         case OpcodeController::WindowMaximize:
             HandleWindowMaximize(reader, writer);
-            break;
+            return true;
         case OpcodeController::WindowMinimize:
             HandleWindowMinimize(reader, writer);
-            break;
+            return true;
         case OpcodeController::WindowRestore:
             HandleWindowRestore(reader, writer);
-            break;
+            return true;
         case OpcodeController::WindowShow:
             HandleWindowShow(reader, writer);
-            break;
+            return true;
         case OpcodeController::WindowHide:
             HandleWindowHide(reader, writer);
-            break;
+            return true;
         case OpcodeController::WindowActivate:
             HandleWindowActivate(reader, writer);
-            break;
+            return true;
         case OpcodeController::WindowBringToTop:
             HandleWindowBringToTop(reader, writer);
-            break;
+            return true;
         case OpcodeController::WindowSetAlwaysOnTop:
             HandleWindowSetAlwaysOnTop(reader, writer);
-            break;
+            return true;
         case OpcodeController::WindowSetFullscreen:
             HandleWindowSetFullscreen(reader, writer);
-            break;
+            return true;
         case OpcodeController::WindowCenterSelf:
             HandleWindowCenterSelf(reader, writer);
-            break;
+            return true;
         case OpcodeController::WindowSetProxyRequests:
             HandleWindowSetProxyRequests(reader, writer);
-            break;
+            return true;
         case OpcodeController::WindowSetPosition:
             HandleWindowSetPosition(reader, writer);
-            break;
+            return true;
         case OpcodeController::WindowGetPosition:
             HandleWindowGetPosition(reader, writer);
-            break;
+            return true;
         case OpcodeController::WindowSetDevelopmentToolsEnabled:
             HandleWindowSetDevelopmentToolsEnabled(reader, writer);
-            break;
+            return true;
         case OpcodeController::WindowSetDevelopmentToolsVisible:
             HandleWindowSetDevelopmentToolsVisible(reader, writer);
-            break;
+            return true;
         case OpcodeController::WindowClose:
             HandleWindowClose(reader, writer);
-            break;
+            return true;
         case OpcodeController::WindowLoadUrl:
             HandleWindowLoadUrl(reader, writer);
-            break;
+            return true;
         case OpcodeController::WindowSetZoom:
             HandleWindowSetZoom(reader, writer);
-            break;
+            return true;
         case OpcodeController::WindowGetZoom:
             HandleWindowGetZoom(reader, writer);
-            break;
+            return true;
         case OpcodeController::WindowRequestFocus:
             HandleWindowRequestFocus(reader, writer);
-            break;
+            return true;
         case OpcodeController::WindowSetModifyRequests:
             HandleWindowSetModifyRequests(reader, writer);
-            break;
+            return true;
         case OpcodeController::StreamOpen:
         {
             std::lock_guard<std::mutex> lk(_dataStreamsMutex);
@@ -499,7 +541,7 @@ void IPC::HandleRequest(OpcodeController opcode, PacketReader& reader, PacketWri
                 else
                     LOG(INFO) << "Stream not opened, was already open (via open packet) " << *identifier;
             }
-            break;
+            return true;
         }
         case OpcodeController::StreamData:
         {
@@ -529,7 +571,7 @@ void IPC::HandleRequest(OpcodeController opcode, PacketReader& reader, PacketWri
                     writer.write<bool>(false);
             }
 
-            break;
+            return true;
         }
         case OpcodeController::StreamClose:
         {
@@ -545,59 +587,61 @@ void IPC::HandleRequest(OpcodeController opcode, PacketReader& reader, PacketWri
                     _dataStreams.erase(itr);
                 }
             }
-            break;
+            return true;
         }
         case OpcodeController::PickDirectory:
             HandleWindowOpenDirectoryPicker(reader, writer);
-            break;
+            return true;
         case OpcodeController::PickFile:
             HandleWindowOpenFilePicker(reader, writer);
-            break;
+            return true;
         case OpcodeController::SaveFile:
             HandleWindowSaveFilePicker(reader, writer);
-            break;
+            return true;
         case OpcodeController::WindowExecuteDevToolsMethod:
             HandleWindowExecuteDevToolsMethod(reader, writer);
-            break;
+            return true;
         case OpcodeController::WindowSetTitle:
             HandleWindowSetTitle(reader, writer);
-            break;
+            return true;
         case OpcodeController::WindowSetIcon:
             HandleWindowSetIcon(reader, writer);
-            break;
+            return true;
         case OpcodeController::WindowAddUrlToProxy:
             HandleAddUrlToProxy(reader, writer);
-            break;
+            return true;
         case OpcodeController::WindowRemoveUrlToProxy:
             HandleRemoveUrlToProxy(reader, writer);
-            break;
+            return true;
         case OpcodeController::WindowAddDomainToProxy:
             HandleAddDomainToProxy(reader, writer);
-            break;
+            return true;
         case OpcodeController::WindowRemoveDomainToProxy:
             HandleRemoveDomainToProxy(reader, writer);
-            break;
+            return true;
         case OpcodeController::WindowAddUrlToModify:
             HandleAddUrlToModify(reader, writer);
-            break;
+            return true;
         case OpcodeController::WindowRemoveUrlToModify:
             HandleRemoveUrlToModify(reader, writer);
-            break;
+            return true;
         case OpcodeController::WindowGetSize:
             HandleWindowGetSize(reader, writer);
-            break;
+            return true;
         case OpcodeController::WindowSetSize:
             HandleWindowSetSize(reader, writer);
-            break;
+            return true;
         case OpcodeController::WindowAddDevToolsEventMethod:
             HandleAddDevToolsEventMethod(reader, writer);
-            break;
+            return true;
         case OpcodeController::WindowRemoveDevToolsEventMethod:
             HandleRemoveDevToolsEventMethod(reader, writer);
-            break;
+            return true;
+        case OpcodeController::WindowBridgeRpc:
+            return HandleWindowBridgeRpc(requestId, reader, writer);
         default:
             LOG(ERROR) << "Unknown opcode " << (uint32_t)opcode << ".";
-            break;
+            return true;
     }
 }
 
@@ -982,6 +1026,33 @@ void IPC::WindowModifyRequest(int32_t identifier, CefRefPtr<CefRequest> request,
         request->SetURL(*url);
         request->SetHeaderMap(headers);
     }
+}
+
+IPCBridgeRpcResult IPC::WindowBridgeRpc(int32_t identifier, const std::string& method, const std::string& payload_json)
+{
+    if (!IsAvailable()) {
+        return MakeBridgeRpcResult(false, "null", "IPC is not available.");
+    }
+
+    PacketWriter writer;
+    writer.write<int32_t>(identifier);
+    writer.writeSizePrefixedString(method);
+    writer.writeSizePrefixedString(payload_json);
+
+    std::vector<uint8_t> response = Call(OpcodeClient::WindowBridgeRpc, writer.data(), writer.size());
+    if (response.empty()) {
+        return MakeBridgeRpcResult(false, "null", "Bridge RPC returned an empty response.");
+    }
+
+    PacketReader reader(response.data(), response.size());
+    std::optional<bool> success = reader.read<bool>();
+    std::optional<std::string> result_json = reader.readSizePrefixedString();
+    std::optional<std::string> error = reader.readSizePrefixedString();
+    if (!success || !result_json || !error) {
+        return MakeBridgeRpcResult(false, "null", "Failed to parse the bridge RPC response.");
+    }
+
+    return MakeBridgeRpcResult(*success, *result_json, *error);
 }
 
 void IPC::NotifyWindowOpened(CefRefPtr<CefBrowser> browser)
@@ -1408,6 +1479,48 @@ void HandleWindowCreate(PacketReader& reader, PacketWriter& writer)
     CefRefPtr<Client> client = HandleWindowCreateInternal(reader, writer);
     LOG(INFO) << "Client created with identifier " << client->GetIdentifier();
     writer.write<int32_t>(client->GetIdentifier());
+}
+
+bool HandleWindowBridgeRpc(uint32_t requestId, PacketReader& reader, PacketWriter& writer)
+{
+    std::optional<int32_t> identifier = reader.read<int32_t>();
+    std::optional<std::string> method = reader.readSizePrefixedString();
+    std::optional<std::string> payload_json = reader.readSizePrefixedString();
+    if (!identifier || !method || !payload_json) {
+        WriteBridgeRpcResult(writer, false, "null", "WindowBridgeRpc called without valid data.");
+        return true;
+    }
+
+    if (CefCurrentlyOn(TID_UI)) {
+        WriteBridgeRpcResult(writer, false, "null", "WindowBridgeRpc cannot block the CEF UI thread.");
+        return true;
+    }
+
+    if (!CefPostTask(TID_UI, 
+        base::BindOnce([](uint32_t requestId, int32_t identifier, std::string method, std::string payload_json) {
+            PacketWriter writer;
+            CefRefPtr<CefBrowser> browser = ClientManager::GetInstance()->AcquirePointer(identifier);
+            if (!browser) {
+                WriteBridgeRpcResult(writer, false, "null", "HandleWindowBridgeRpc called while the browser is already closed.");
+                IPC::Singleton.QueueResponse(OpcodeController::WindowBridgeRpc, requestId, writer);
+                return;
+            }
+
+            CefRefPtr<CefClient> cef_client = browser->GetHost()->GetClient();
+            Client* client = static_cast<Client*>(cef_client.get());
+            if (!client) {
+                WriteBridgeRpcResult(writer, false, "null", "HandleWindowBridgeRpc failed to acquire the client.");
+                IPC::Singleton.QueueResponse(OpcodeController::WindowBridgeRpc, requestId, writer);
+                return;
+            }
+
+            client->StartBridgeRpcCall(browser, method, payload_json, requestId);
+        }, requestId, *identifier, *method, *payload_json))
+    ) {
+        WriteBridgeRpcResult(writer, false, "null", "WindowBridgeRpc failed to post work to the CEF UI thread.");
+        return true;
+    }
+    return false;
 }
 
 void HandleWindowMaximize(PacketReader& reader, PacketWriter& writer)

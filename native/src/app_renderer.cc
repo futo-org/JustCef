@@ -26,6 +26,7 @@ public:
         }
 
         bridge_enabled_browsers_.erase(browser->GetIdentifier());
+        ClearBridgeState(browser);
     }
 
     void OnContextCreated(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefRefPtr<CefV8Context> context) override {
@@ -38,6 +39,26 @@ public:
         }
 
         InstallBridge(context);
+    }
+
+    void OnContextReleased(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefRefPtr<CefV8Context> context) override {
+        if (!browser || !frame || !frame->IsMain()) {
+            return;
+        }
+
+        if (bridge_enabled_browsers_.find(browser->GetIdentifier()) == bridge_enabled_browsers_.end()) {
+            return;
+        }
+
+        ReleaseBridgeContext(browser, frame, context);
+    }
+
+    bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefProcessId source_process, CefRefPtr<CefProcessMessage> message) override {
+        if (HandleBridgeProcessMessage(browser, frame, message)) {
+            return true;
+        }
+
+        return false;
     }
 
     void OnFocusedNodeChanged(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefRefPtr<CefDOMNode> node) override {
