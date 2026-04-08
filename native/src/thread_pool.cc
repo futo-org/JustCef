@@ -34,16 +34,17 @@ void ThreadPool::AddWorkers(size_t count)
     }
 }
 
-void ThreadPool::Enqueue(std::function<void()> task) 
+bool ThreadPool::Enqueue(std::function<void()> task)
 {
     {
         std::unique_lock<std::mutex> lock(_queue_mutex);
         if (_stop)
-            return;
+            return false;
             
         _tasks.emplace(std::move(task));
     }
     _condition.notify_one();
+    return true;
 }
 
 void ThreadPool::Stop()
@@ -63,4 +64,3 @@ void ThreadPool::Stop()
         }
     }*/
 }
-

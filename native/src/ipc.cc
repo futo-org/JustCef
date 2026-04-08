@@ -51,7 +51,7 @@ void WriteBridgeRpcResult(PacketWriter& writer, bool success, const std::string&
 
 IPC IPC::Singleton;
 
-IPC::IPC() : _readBufferPool(MAXIMUM_IPC_SIZE, 4)
+IPC::IPC() : _ipcBufferPool(sizeof(IPCPacketHeader) + MAXIMUM_IPC_SIZE, 4)
 {
     _requestIdCounter = 0;
     _readBuffer.resize(4096);
@@ -215,7 +215,7 @@ void IPC::Run()
             return;
         }
 
-        if (_readBuffer.capacity() < bodySize)
+        if (_readBuffer.size() < bodySize)
             _readBuffer.resize(bodySize);
         
         size_t bodyBytesRead = _pipe.Read(_readBuffer.data(), bodySize, true);
@@ -251,10 +251,10 @@ void IPC::Run()
         }
         else if (header.packetType == PacketType::Request)
         {
-            std::shared_ptr<std::vector<uint8_t>> readBuffer = _readBufferPool.GetBuffer();
+            std::shared_ptr<std::vector<uint8_t>> readBuffer = _ipcBufferPool.GetBuffer();
             if (readBuffer->size() < bodySize)
             {
-                LOG(WARNING) << "Skipped packet that is too large for read buffer pool.";
+                LOG(WARNING) << "Skipped packet that is too large for IPC buffer pool.";
                 continue;
             }
 
@@ -265,7 +265,7 @@ void IPC::Run()
                 PacketReader reader(readBuffer->data(), bodySize);
                 PacketWriter writer;
                 bool should_write_response = HandleRequest(header.requestId, (OpcodeController)header.opcode, reader, writer);
-                _readBufferPool.ReturnBuffer(readBuffer);
+                _ipcBufferPool.ReturnBuffer(readBuffer);
                 if (!should_write_response) {
                     return;
                 }
@@ -283,10 +283,10 @@ void IPC::Run()
         }
         else if (header.packetType == PacketType::Notification)
         {
-            std::shared_ptr<std::vector<uint8_t>> readBuffer = _readBufferPool.GetBuffer();
+            std::shared_ptr<std::vector<uint8_t>> readBuffer = _ipcBufferPool.GetBuffer();
             if (readBuffer->size() < bodySize)
             {
-                LOG(WARNING) << "Skipped packet that is too large for read buffer pool.";
+                LOG(WARNING) << "Skipped packet that is too large for IPC buffer pool.";
                 continue;
             }
 
@@ -296,7 +296,7 @@ void IPC::Run()
             {
                 PacketReader reader(readBuffer->data(), bodySize);
                 HandleNotification((OpcodeControllerNotification)header.opcode, reader);
-                _readBufferPool.ReturnBuffer(readBuffer);
+                _ipcBufferPool.ReturnBuffer(readBuffer);
             });
         }
         else
@@ -334,7 +334,7 @@ std::vector<uint8_t> IPC::Call(OpcodeClient opcode, const uint8_t* body, size_t 
         std::lock_guard<std::mutex> lk(_writeMutex);
 
         size_t packetLength = sizeof(IPCPacketHeader) + size;
-        if (_sendBuffer.capacity() < packetLength)
+        if (_sendBuffer.size() < packetLength)
             _sendBuffer.resize(packetLength);
 
         IPCPacketHeader* pHeader = (IPCPacketHeader*)_sendBuffer.data();
@@ -384,7 +384,7 @@ void IPC::Notify(OpcodeClientNotification opcode, const uint8_t* body, size_t si
     std::lock_guard<std::mutex> lk(_writeMutex);
 
     size_t packetLength = sizeof(IPCPacketHeader) + size;
-    if (_sendBuffer.capacity() < packetLength)
+    if (_sendBuffer.size() < packetLength)
         _sendBuffer.resize(packetLength);
 
     IPCPacketHeader* pHeader = (IPCPacketHeader*)_sendBuffer.data();
@@ -403,15 +403,33 @@ void IPC::Notify(OpcodeClientNotification opcode, const uint8_t* body, size_t si
 
 void IPC::QueueResponse(OpcodeController opcode, uint32_t requestId, const PacketWriter& writer)
 {
-    std::shared_ptr<std::vector<uint8_t>> body = std::make_shared<std::vector<uint8_t>>();
-    body->resize(writer.size());
-    if (writer.size() > 0) {
-        memcpy(body->data(), writer.data(), writer.size());
+    if (!IsAvailable())
+        return;
+
+    size_t packetLength = sizeof(IPCPacketHeader) + writer.size();
+    std::shared_ptr<std::vector<uint8_t>> packet = _ipcBufferPool.GetBuffer();
+    if (packet->size() < packetLength) {
+        LOG(ERROR) << "Queued response packet exceeds buffer pool capacity.";
+        _ipcBufferPool.ReturnBuffer(packet);
+        return;
     }
 
-    QueueBackgroundWork([this, opcode, requestId, body] () {
-        WriteResponse(requestId, (uint8_t)opcode, body->data(), body->size());
-    });
+    IPCPacketHeader* pHeader = reinterpret_cast<IPCPacketHeader*>(packet->data());
+    pHeader->size = static_cast<uint32_t>(packetLength - sizeof(uint32_t));
+    pHeader->opcode = static_cast<uint8_t>(opcode);
+    pHeader->packetType = PacketType::Response;
+    pHeader->requestId = requestId;
+
+    if (writer.size() > 0) {
+        memcpy(packet->data() + sizeof(IPCPacketHeader), writer.data(), writer.size());
+    }
+
+    if (!QueueBackgroundWork([this, packet, packetLength] () {
+        WriteQueuedResponsePacket(packet->data(), packetLength);
+        _ipcBufferPool.ReturnBuffer(packet);
+    })) {
+        _ipcBufferPool.ReturnBuffer(packet);
+    }
 }
 
 void IPC::WriteResponse(uint32_t requestId, uint8_t opcode, const uint8_t* body, size_t size)
@@ -422,7 +440,7 @@ void IPC::WriteResponse(uint32_t requestId, uint8_t opcode, const uint8_t* body,
     std::lock_guard<std::mutex> lk(_writeMutex);
 
     size_t packetLength = sizeof(IPCPacketHeader) + size;
-    if (_sendBuffer.capacity() < packetLength)
+    if (_sendBuffer.size() < packetLength)
         _sendBuffer.resize(packetLength);
 
     IPCPacketHeader* pHeader = (IPCPacketHeader*)_sendBuffer.data();
@@ -440,6 +458,24 @@ void IPC::WriteResponse(uint32_t requestId, uint8_t opcode, const uint8_t* body,
     if (_pipe.Write(_sendBuffer.data(), packetLength, true) != packetLength)
     {
         LOG(INFO) << "Failed to write entire response packet.";
+        CloseEverything();
+    }
+}
+
+void IPC::WriteQueuedResponsePacket(const uint8_t* packet, size_t packetLength)
+{
+    if (!IsAvailable())
+        return;
+
+    std::lock_guard<std::mutex> lk(_writeMutex);
+
+    const IPCPacketHeader* pHeader = reinterpret_cast<const IPCPacketHeader*>(packet);
+    LOG(INFO) << "Sent queued response (packetType = " << static_cast<int>(pHeader->packetType)
+              << ", opcode = " << static_cast<int>(pHeader->opcode) << ")";
+
+    if (_pipe.Write(packet, packetLength, true) != packetLength)
+    {
+        LOG(INFO) << "Failed to write entire queued response packet.";
         CloseEverything();
     }
 }

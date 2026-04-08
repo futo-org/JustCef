@@ -16,7 +16,7 @@ public:
     ~ThreadPool();
 
     void AddWorkers(size_t count);
-    void Enqueue(std::function<void()> task);
+    bool Enqueue(std::function<void()> task);
 
     void Stop();
 private:
@@ -29,4 +29,3 @@ private:
 };
 
 #endif //THREAD_POOL_H
-

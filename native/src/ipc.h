@@ -260,12 +260,12 @@ public:
         _worker.EnqueueWork(work); 
     }
 
-    void QueueBackgroundWork(std::function<void()> work)
+    bool QueueBackgroundWork(std::function<void()> work)
     {
         if (!IsAvailable())
-            return;
+            return false;
 
-        _threadPool.Enqueue(std::move(work));
+        return _threadPool.Enqueue(std::move(work));
     }
 
     void CloseStream(uint32_t identifier);
@@ -285,11 +285,12 @@ private:
     bool HandleRequest(uint32_t requestId, OpcodeController opcode, PacketReader& reader, PacketWriter& writer);
     void HandleNotification(OpcodeControllerNotification opcode, PacketReader& reader);
     void WriteResponse(uint32_t requestId, uint8_t opcode, const uint8_t* body, size_t size);
+    void WriteQueuedResponsePacket(const uint8_t* packet, size_t packetLength);
 
     std::atomic<uint32_t> _requestIdCounter;
 
-    bool _stopped = true;
-    bool _startCalled = false;
+    std::atomic<bool> _stopped = true;
+    std::atomic<bool> _startCalled = false;
     std::mutex _writeMutex;
     std::mutex _requestMapMutex;
     std::mutex _dataStreamsMutex;
@@ -304,7 +305,7 @@ private:
     WorkQueue _worker;
     ThreadPool _threadPool;
     WorkQueue _streamWorker;
-    BufferPool _readBufferPool;
+    BufferPool _ipcBufferPool;
     Pipe _pipe;
     //Exit fullscreen
 };
