@@ -1111,6 +1111,8 @@ if (options.nochromiumupdate and options.forceupdate):
   invalid_options_combination('--no-chromium-update', '--force-update')
 if (options.nocefupdate and options.forceupdate):
   invalid_options_combination('--no-cef-update', '--force-update')
+if (options.nocefupdate and options.forceclean):
+  invalid_options_combination('--no-cef-update', '--force-clean')
 if (options.nobuild and options.forcebuild):
   invalid_options_combination('--no-build', '--force-build')
 if (options.nodistrib and options.forcedistrib):
