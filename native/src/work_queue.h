@@ -55,13 +55,16 @@ public:
         LOG(INFO) << "Worker joined with " << _queue.size() << " queue items.";*/
     }
 
-    void EnqueueWork(std::function<void()> work) 
+    bool EnqueueWork(std::function<void()> work)
     {
         {
             std::unique_lock lock(_mutex);
+            if (_exitFlag)
+                return false;
             _queue.push(work);
         }
         _condition.notify_one();
+        return true;
     }
 
 private:
