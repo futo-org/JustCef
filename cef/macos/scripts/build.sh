@@ -31,7 +31,26 @@ CEF_BRANCH=$(tr -d '\r\n' < "${REPO_ROOT}/cef.branch")
 WORK_ROOT="${WORK_ROOT:-$HOME/code}"
 DOWNLOAD_DIR="${DOWNLOAD_DIR:-${WORK_ROOT}/chromium_git}"
 DEPOT_TOOLS_DIR="${DEPOT_TOOLS_DIR:-${WORK_ROOT}/depot_tools}"
+CEF_CHECKOUT_RAW="${CEF_CHECKOUT:-}"
+CEF_CHECKOUT=""
+CHECKOUT_ARG=""
 PYTHON="$(resolve_python)"
+
+if [ -n "${CEF_CHECKOUT_RAW}" ]; then
+  CEF_CHECKOUT="${CEF_CHECKOUT_RAW}"
+  case "${CEF_CHECKOUT}" in
+    *+g*+*)
+      CEF_CHECKOUT="${CEF_CHECKOUT#*+g}"
+      CEF_CHECKOUT="${CEF_CHECKOUT%%+*}"
+      ;;
+  esac
+  case "${CEF_CHECKOUT}" in
+    g[0-9A-Fa-f]*)
+      CEF_CHECKOUT="${CEF_CHECKOUT#g}"
+      ;;
+  esac
+  CHECKOUT_ARG="--checkout=${CEF_CHECKOUT}"
+fi
 
 export GN_DEFINES="${GN_DEFINES:-is_official_build=true proprietary_codecs=true ffmpeg_branding=Chrome symbol_level=1 is_cfi=false use_thin_lto=false is_component_ffmpeg=false enable_widevine=true enable_printing=true enable_cdm_host_verification=true angle_enable_vulkan_validation_layers=false dawn_enable_vulkan_validation_layers=false dawn_use_built_dxc=false}"
 export CEF_USE_GN=1
@@ -71,6 +90,9 @@ run_build() {
   esac
 
   echo "==> Starting macOS ${arch} build for branch ${CEF_BRANCH}"
+  if [ -n "${CEF_CHECKOUT_RAW}" ]; then
+    echo "==> Pinning CEF checkout to ${CEF_CHECKOUT} (from ${CEF_CHECKOUT_RAW})"
+  fi
   "${PYTHON}" "${REPO_ROOT}/automate/automate-git.py" \
     --branch="${CEF_BRANCH}" \
     --download-dir="${DOWNLOAD_DIR}" \
@@ -80,6 +102,7 @@ run_build() {
     --force-build \
     --with-pgo-profiles \
     --no-debug-build \
+    ${CHECKOUT_ARG:+${CHECKOUT_ARG}} \
     "${arch_arg}"
 }
 
@@ -118,4 +141,3 @@ fi
 if [ "$build_arm64" -eq 1 ]; then
   run_build arm64
 fi
-

@@ -8,6 +8,25 @@ usage() {
 
 REPO_ROOT=$(CDPATH= cd -- "$(dirname "$0")/../.." && pwd)
 CEF_BRANCH=$(tr -d '\r\n' < "${REPO_ROOT}/cef.branch")
+CEF_CHECKOUT_RAW="${CEF_CHECKOUT:-}"
+CEF_CHECKOUT=""
+CHECKOUT_ARG=""
+
+if [ -n "${CEF_CHECKOUT_RAW}" ]; then
+  CEF_CHECKOUT="${CEF_CHECKOUT_RAW}"
+  case "${CEF_CHECKOUT}" in
+    *+g*+*)
+      CEF_CHECKOUT="${CEF_CHECKOUT#*+g}"
+      CEF_CHECKOUT="${CEF_CHECKOUT%%+*}"
+      ;;
+  esac
+  case "${CEF_CHECKOUT}" in
+    g[0-9A-Fa-f]*)
+      CEF_CHECKOUT="${CEF_CHECKOUT#g}"
+      ;;
+  esac
+  CHECKOUT_ARG="--checkout=${CEF_CHECKOUT}"
+fi
 
 export GN_DEFINES="is_official_build=true proprietary_codecs=true ffmpeg_branding=Chrome use_sysroot=true symbol_level=1 is_cfi=false use_thin_lto=false is_component_ffmpeg=false enable_widevine=true enable_printing=true enable_cdm_host_verification=false angle_enable_vulkan_validation_layers=false dawn_enable_vulkan_validation_layers=false dawn_use_built_dxc=false"
 export CEF_USE_GN=1
@@ -46,6 +65,9 @@ run_build() {
   esac
 
   echo "==> Starting ${arch} build for branch ${CEF_BRANCH}"
+  if [ -n "${CEF_CHECKOUT_RAW}" ]; then
+    echo "==> Pinning CEF checkout to ${CEF_CHECKOUT} (from ${CEF_CHECKOUT_RAW})"
+  fi
   python3 "${REPO_ROOT}/automate/automate-git.py" \
     --branch="${CEF_BRANCH}" \
     --download-dir=/home/ubuntu/code/chromium_git \
@@ -56,6 +78,7 @@ run_build() {
     --force-build \
     --with-pgo-profiles \
     --no-debug-build \
+    ${CHECKOUT_ARG:+${CHECKOUT_ARG}} \
     "${arch_arg}"
 }
 

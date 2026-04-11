@@ -7,6 +7,15 @@ if not defined CEF_BRANCH (
   echo Failed to read CEF branch from "%REPO_ROOT%\cef.branch"
   exit /b 1
 )
+set "CHECKOUT_ARG="
+set "CEF_CHECKOUT_NORMALIZED="
+if defined CEF_CHECKOUT (
+  set "CEF_CHECKOUT_NORMALIZED=%CEF_CHECKOUT%"
+  call set "CEF_CHECKOUT_NORMALIZED=%%CEF_CHECKOUT_NORMALIZED:*+g=%%"
+  for /f "tokens=1 delims=+" %%J in ("%CEF_CHECKOUT_NORMALIZED%") do set "CEF_CHECKOUT_NORMALIZED=%%J"
+  if /I "%CEF_CHECKOUT_NORMALIZED:~0,1%"=="g" set "CEF_CHECKOUT_NORMALIZED=%CEF_CHECKOUT_NORMALIZED:~1%"
+  set "CHECKOUT_ARG=--checkout=%CEF_CHECKOUT_NORMALIZED%"
+)
 
 set "GYP_MSVS_VERSION=2022"
 set "CEF_ARCHIVE_FORMAT=tar.bz2"
@@ -73,7 +82,8 @@ if /I "%ARCH%"=="x64" (
 )
 
 echo ==^> Starting %ARCH% build for branch %CEF_BRANCH%
-python "%REPO_ROOT%\automate\automate-git.py" --branch=%CEF_BRANCH% --download-dir=c:\code\chromium_git --depot-tools-dir=c:\code\depot_tools --minimal-distrib-only --build-target=cefsimple --force-clean --force-build --with-pgo-profiles --no-debug-build %ARCH_ARG%
+if defined CEF_CHECKOUT echo ==^> Pinning CEF checkout to %CEF_CHECKOUT_NORMALIZED% ^(from %CEF_CHECKOUT%^)
+python "%REPO_ROOT%\automate\automate-git.py" --branch=%CEF_BRANCH% --download-dir=c:\code\chromium_git --depot-tools-dir=c:\code\depot_tools --minimal-distrib-only --build-target=cefsimple --force-clean --force-build --with-pgo-profiles --no-debug-build %ARCH_ARG% %CHECKOUT_ARG%
 set "RESULT=%ERRORLEVEL%"
 endlocal & exit /b %RESULT%
 

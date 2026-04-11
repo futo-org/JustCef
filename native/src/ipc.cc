@@ -276,9 +276,13 @@ void IPC::Run()
             OpcodeController opcode = (OpcodeController)header.opcode;
             if (opcode == OpcodeController::StreamOpen || opcode == OpcodeController::StreamData || opcode == OpcodeController::StreamClose) {
                 //Stream packets must always be handled in-order
-                _streamWorker.EnqueueWork(packetHandler);
+                if (!QueueStreamWork(std::move(packetHandler))) {
+                    _ipcBufferPool.ReturnBuffer(readBuffer);
+                }
             } else {
-                _threadPool.Enqueue(packetHandler);
+                if (!_threadPool.Enqueue(std::move(packetHandler))) {
+                    _ipcBufferPool.ReturnBuffer(readBuffer);
+                }
             }
         }
         else if (header.packetType == PacketType::Notification)
@@ -292,12 +296,14 @@ void IPC::Run()
 
             memcpy(readBuffer->data(), _readBuffer.data(), bodySize);
 
-            _threadPool.Enqueue([this, header, bodySize, readBuffer] ()
-            {
-                PacketReader reader(readBuffer->data(), bodySize);
-                HandleNotification((OpcodeControllerNotification)header.opcode, reader);
+            if (!_threadPool.Enqueue([this, header, bodySize, readBuffer] ()
+                {
+                    PacketReader reader(readBuffer->data(), bodySize);
+                    HandleNotification((OpcodeControllerNotification)header.opcode, reader);
+                    _ipcBufferPool.ReturnBuffer(readBuffer);
+                })) {
                 _ipcBufferPool.ReturnBuffer(readBuffer);
-            });
+            }
         }
         else
         {

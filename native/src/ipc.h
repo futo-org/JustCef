@@ -257,7 +257,7 @@ public:
         if (!IsAvailable())
             return;
             
-        _worker.EnqueueWork(work); 
+        _worker.EnqueueWork(std::move(work));
     }
 
     bool QueueBackgroundWork(std::function<void()> work)
@@ -270,12 +270,12 @@ public:
 
     void CloseStream(uint32_t identifier);
 private:
-    void QueueStreamWork(std::function<void()> work) 
+    bool QueueStreamWork(std::function<void()> work)
     { 
         if (!IsAvailable())
-            return;
+            return false;
             
-        _streamWorker.EnqueueWork(work); 
+        return _streamWorker.EnqueueWork(std::move(work));
     }
 
     void Run();
