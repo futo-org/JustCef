@@ -33,7 +33,7 @@ DOWNLOAD_DIR="${DOWNLOAD_DIR:-${WORK_ROOT}/chromium_git}"
 DEPOT_TOOLS_DIR="${DEPOT_TOOLS_DIR:-${WORK_ROOT}/depot_tools}"
 PYTHON="$(resolve_python)"
 
-export GN_DEFINES="${GN_DEFINES:-is_official_build=true proprietary_codecs=true ffmpeg_branding=Chrome symbol_level=1 is_cfi=false use_thin_lto=false is_component_ffmpeg=false enable_widevine=true enable_printing=true enable_cdm_host_verification=false angle_enable_vulkan_validation_layers=false dawn_enable_vulkan_validation_layers=false dawn_use_built_dxc=false}"
+export GN_DEFINES="${GN_DEFINES:-is_official_build=true proprietary_codecs=true ffmpeg_branding=Chrome symbol_level=1 is_cfi=false use_thin_lto=false is_component_ffmpeg=false enable_widevine=true enable_printing=true enable_cdm_host_verification=true angle_enable_vulkan_validation_layers=false dawn_enable_vulkan_validation_layers=false dawn_use_built_dxc=false}"
 export CEF_USE_GN=1
 export CEF_ARCHIVE_FORMAT=tar.bz2
 export CEF_CUSTOM_PATCH_SCRIPT="${REPO_ROOT}/patches/apply_cef_patches.py"
@@ -76,7 +76,6 @@ run_build() {
     --download-dir="${DOWNLOAD_DIR}" \
     --depot-tools-dir="${DEPOT_TOOLS_DIR}" \
     --minimal-distrib-only \
-    --build-target=cefsimple \
     --force-clean \
     --force-build \
     --with-pgo-profiles \
