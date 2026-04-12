@@ -149,6 +149,7 @@ namespace JustCef
 
         private const int MaxIPCSize = 10 * 1024 * 1024;
         private const int HeaderSize = 4 + 4 + 1 + 1;
+        private const int InlineResponseBodyFramingSize = sizeof(byte) + sizeof(uint);
         private readonly AnonymousPipeServerStream _writer;
         private readonly AnonymousPipeServerStream _reader;
         private readonly Dictionary<uint, PendingRequest> _pendingRequests = new Dictionary<uint, PendingRequest>();
@@ -372,7 +373,16 @@ namespace JustCef
                                 {
                                     var packetReader = new PacketReader(rentedBodyBuffer != null ? rentedBodyBuffer.Value.Buffer : Array.Empty<byte>(), rentedBodyBuffer != null ? rentedBodyBuffer.Value.Length : 0);
                                     var packetWriter = new PacketWriter();
-                                    await HandleRequestAsync((OpcodeClient)opcode, packetReader, packetWriter);
+                                    try
+                                    {
+                                        await HandleRequestAsync((OpcodeClient)opcode, packetReader, packetWriter);
+                                    }
+                                    catch (Exception e)
+                                    {
+                                        Logger.Error<JustCefProcess>($"An exception occurred in the IPC while handling request packet", e);
+                                        packetWriter = new PacketWriter();
+                                    }
+
                                     int packetSize = HeaderSize + packetWriter.Size;
                                     using var rentedBuffer = new RentedBuffer<byte>(BufferPool, packetSize);
 
@@ -438,48 +448,40 @@ namespace JustCef
 
         private async Task HandleRequestAsync(OpcodeClient opcode, PacketReader reader, PacketWriter writer)
         {
-            try
+            switch (opcode)
             {
-                switch (opcode)
-                {
-                    case OpcodeClient.Ping:
-                        break;
-                    case OpcodeClient.Print:
-                        Logger.Info<JustCefProcess>(reader.ReadString(reader.RemainingSize));
-                        break;
-                    case OpcodeClient.Echo:
-                        writer.WriteBytes(reader.ReadBytes(reader.RemainingSize));
-                        break;
-                    case OpcodeClient.WindowProxyRequest:
-                        await HandleWindowProxyRequestAsync(reader, writer);
-                        break;
-                    case OpcodeClient.WindowModifyRequest:
-                        HandleWindowModifyRequest(reader, writer);
-                        break;
-                    case OpcodeClient.StreamClose:
-                        uint identifier = reader.Read<uint>();
-                        lock (_streamCancellationTokens)
+                case OpcodeClient.Ping:
+                    break;
+                case OpcodeClient.Print:
+                    Logger.Info<JustCefProcess>(reader.ReadString(reader.RemainingSize));
+                    break;
+                case OpcodeClient.Echo:
+                    writer.WriteBytes(reader.ReadBytes(reader.RemainingSize));
+                    break;
+                case OpcodeClient.WindowProxyRequest:
+                    await HandleWindowProxyRequestAsync(reader, writer);
+                    break;
+                case OpcodeClient.WindowModifyRequest:
+                    HandleWindowModifyRequest(reader, writer);
+                    break;
+                case OpcodeClient.StreamClose:
+                    uint identifier = reader.Read<uint>();
+                    lock (_streamCancellationTokens)
+                    {
+                        //Console.WriteLine($"Stream closed {identifier}.");
+                        if (_streamCancellationTokens.TryGetValue(identifier, out var token))
                         {
-                            //Console.WriteLine($"Stream closed {identifier}.");
-                            if (_streamCancellationTokens.TryGetValue(identifier, out var token))
-                            {
-                                token.Cancel();
-                                _streamCancellationTokens.Remove(identifier);
-                            }
+                            token.Cancel();
+                            _streamCancellationTokens.Remove(identifier);
                         }
-                        break;
-                    case OpcodeClient.WindowBridgeRpc:
-                        await HandleWindowBridgeRpcAsync(reader, writer);
-                        break;
-                    default:
-                        Logger.Warning<JustCefProcess>($"Received unhandled opcode {opcode}.");
-                        break;
-                }
-            }
-            catch (Exception e)
-            {
-                Logger.Error<JustCefProcess>($"Exception occurred while processing call", e);
-                Debugger.Break();
+                    }
+                    break;
+                case OpcodeClient.WindowBridgeRpc:
+                    await HandleWindowBridgeRpcAsync(reader, writer);
+                    break;
+                default:
+                    Logger.Warning<JustCefProcess>($"Received unhandled opcode {opcode}.");
+                    break;
             }
         }
 
@@ -545,49 +547,50 @@ namespace JustCef
             if (response == null)
                 return;
 
-            var responseHeaders = new Dictionary<string, List<string>>(response.Headers.Where(header =>
-            {
-                if (string.Equals(header.Key, "transfer-encoding", StringComparison.InvariantCultureIgnoreCase) && header.Value.Any(v => string.Equals(v, "chunked", StringComparison.InvariantCultureIgnoreCase)))
-                {
-                    return false;
-                }
-
-                return true;
-            }), StringComparer.OrdinalIgnoreCase);
+            var responseHeaders = response.Headers
+                .SelectMany(header => header.Value
+                    .Where(value =>
+                        !(string.Equals(header.Key, "transfer-encoding", StringComparison.InvariantCultureIgnoreCase) &&
+                          string.Equals(value, "chunked", StringComparison.InvariantCultureIgnoreCase)))
+                    .Select(value => new KeyValuePair<string, string>(header.Key, value)))
+                .ToList();
 
             writer.Write((uint)response.StatusCode);
             writer.WriteSizePrefixedString(response.StatusText);
 
             // Serialize headers
-            writer.Write(responseHeaders.Count());
+            writer.Write(responseHeaders.Count);
             foreach (var header in responseHeaders)
             {
-                //Do not add transfer-encoding header
-                if (string.Equals(header.Key, "transfer-encoding", StringComparison.InvariantCultureIgnoreCase) && header.Value.Any(v => string.Equals(v, "chunked", StringComparison.InvariantCultureIgnoreCase)))
-                    continue;
-
                 writer.WriteSizePrefixedString(header.Key);
-                writer.WriteSizePrefixedString(string.Join(", ", header.Value));
+                writer.WriteSizePrefixedString(header.Value);
             }
 
-            bool hasContentType = responseHeaders.ContainsKey("content-type");
-            bool isHead = string.Compare(method, "head", true) == 0;
-            int? contentLength = response.Headers.TryGetValue("content-length", out var contentLengths) && contentLengths.Count > 0 ? int.Parse(contentLengths[0]) : null;
+            long? contentLength = null;
+            if (response.Headers.TryGetValue("content-length", out var contentLengths) &&
+                contentLengths.Count > 0 &&
+                long.TryParse(contentLengths[0], out long parsedContentLength) &&
+                parsedContentLength >= 0)
+            {
+                contentLength = parsedContentLength;
+            }
 
             if (response.BodyStream != null)
             {
                 if (contentLength != null)
                 {
-                    if (contentLength < (int)(MaxIPCSize - writer.Size))
+                    long maxInlineBodySize = MaxIPCSize - writer.Size - InlineResponseBodyFramingSize;
+                    if (contentLength.Value <= maxInlineBodySize)
                     {
+                        int inlineBodySize = checked((int)contentLength.Value);
                         writer.Write((byte)1);
-                        writer.Write((uint)contentLength.Value);
+                        writer.Write((uint)inlineBodySize);
 
-                        byte[] buffer = ArrayPool<byte>.Shared.Rent(contentLength.Value);
+                        byte[] buffer = ArrayPool<byte>.Shared.Rent(inlineBodySize);
                         try
                         {
-                            await response.BodyStream.ReadExactlyAsync(buffer, 0, contentLength.Value);
-                            writer.WriteBytes(buffer, 0, contentLength.Value);
+                            await response.BodyStream.ReadExactlyAsync(buffer, 0, inlineBodySize);
+                            writer.WriteBytes(buffer, 0, inlineBodySize);
                         }
                         finally
                         {
@@ -728,14 +731,15 @@ namespace JustCef
             writer.WriteSizePrefixedString(modifiedRequest.Url);
 
             // Serialize headers
-            writer.Write(modifiedRequest.Headers.Count);
-            foreach (var header in modifiedRequest.Headers)
+            var modifiedHeaders = modifiedRequest.Headers
+                .SelectMany(header => header.Value.Select(value => new KeyValuePair<string, string>(header.Key, value)))
+                .ToList();
+
+            writer.Write(modifiedHeaders.Count);
+            foreach (var header in modifiedHeaders)
             {
-                foreach (var v in header.Value)
-                {
-                    writer.WriteSizePrefixedString(header.Key);
-                    writer.WriteSizePrefixedString(v);
-                }
+                writer.WriteSizePrefixedString(header.Key);
+                writer.WriteSizePrefixedString(header.Value);
             }
 
             // Serialize elements

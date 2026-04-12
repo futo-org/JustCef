@@ -5,24 +5,28 @@ namespace JustCef;
 public class PacketReader
 {
     private byte[] _data;
+    private int _size;
     private int _position;
 
-    public int RemainingSize => _data.Length - _position;
+    public int RemainingSize => _size - _position;
 
     public PacketReader(byte[] data) : this(data, data.Length) { }
     public PacketReader(byte[] data, int size) 
     {
+        if (size < 0)
+            throw new ArgumentOutOfRangeException(nameof(size));
         if (size > data.Length)
             throw new ArgumentException("Size must be less than data size.");
 
         _data = data;
+        _size = size;
         _position = 0;
     }
 
     public unsafe T Read<T>() where T : unmanaged 
     {
         int sizeOfT = sizeof(T);
-        if (_position + sizeOfT > _data.Length)
+        if (_position + sizeOfT > _size)
             throw new InvalidOperationException("Reading past the end of the data buffer.");
 
         T value;
@@ -36,7 +40,7 @@ public class PacketReader
 
     public string ReadString(int size)
     {
-        if (_position + size > _data.Length)
+        if (_position + size > _size)
             throw new InvalidOperationException("Reading past the end of the data buffer.");
 
         string result = Encoding.UTF8.GetString(_data, _position, size);
@@ -46,7 +50,7 @@ public class PacketReader
 
     public byte[] ReadBytes(int size)
     {
-        if (_position + size > _data.Length)
+        if (_position + size > _size)
             throw new InvalidOperationException("Reading past the end of the data buffer.");
 
         byte[] result = _data.AsSpan().Slice(_position, size).ToArray();
@@ -64,7 +68,7 @@ public class PacketReader
 
     public void Skip(int size)
     {
-        if (_position + size > _data.Length)
+        if (_position + size > _size)
             throw new InvalidOperationException("Skipping past the end of the data buffer.");
 
         _position += size;
@@ -72,6 +76,6 @@ public class PacketReader
 
     public bool HasAvailable(int size)
     {
-        return _position + size <= _data.Length;
+        return _position + size <= _size;
     }
 }
