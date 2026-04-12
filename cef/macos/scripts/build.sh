@@ -52,7 +52,7 @@ if [ -n "${CEF_CHECKOUT_RAW}" ]; then
   CHECKOUT_ARG="--checkout=${CEF_CHECKOUT}"
 fi
 
-export GN_DEFINES="${GN_DEFINES:-is_official_build=true proprietary_codecs=true ffmpeg_branding=Chrome symbol_level=1 is_cfi=false use_thin_lto=false is_component_ffmpeg=false enable_widevine=true enable_printing=true enable_cdm_host_verification=false angle_enable_vulkan_validation_layers=false dawn_enable_vulkan_validation_layers=false dawn_use_built_dxc=false}"
+GN_DEFINES_BASE="${GN_DEFINES:-is_official_build=true proprietary_codecs=true ffmpeg_branding=Chrome symbol_level=1 is_cfi=false use_thin_lto=false is_component_ffmpeg=false enable_widevine=true enable_printing=true enable_cdm_host_verification=true angle_enable_vulkan_validation_layers=false dawn_enable_vulkan_validation_layers=false dawn_use_built_dxc=false}"
 export CEF_USE_GN=1
 export CEF_ARCHIVE_FORMAT=tar.bz2
 export CEF_CUSTOM_PATCH_SCRIPT="${REPO_ROOT}/patches/apply_cef_patches.py"
@@ -80,25 +80,33 @@ run_build() {
   case "$arch" in
     x64)
       arch_arg="--x64-build"
+      target_cpu="x64"
+      cef_enable_amd64=1
       ;;
     arm64)
       arch_arg="--arm64-build"
+      target_cpu="arm64"
+      cef_enable_amd64=
       ;;
     *)
       usage
       ;;
   esac
 
+  gn_defines_arch="${GN_DEFINES_BASE} target_cpu=\"${target_cpu}\""
+
   echo "==> Starting macOS ${arch} build for branch ${CEF_BRANCH}"
   if [ -n "${CEF_CHECKOUT_RAW}" ]; then
     echo "==> Pinning CEF checkout to ${CEF_CHECKOUT} (from ${CEF_CHECKOUT_RAW})"
   fi
+
+  CEF_ENABLE_AMD64="${cef_enable_amd64}" \
+  GN_DEFINES="${gn_defines_arch}" \
   "${PYTHON}" "${REPO_ROOT}/automate/automate-git.py" \
     --branch="${CEF_BRANCH}" \
     --download-dir="${DOWNLOAD_DIR}" \
     --depot-tools-dir="${DEPOT_TOOLS_DIR}" \
     --minimal-distrib-only \
-    --build-target=cefsimple \
     --force-clean \
     --force-build \
     --with-pgo-profiles \
