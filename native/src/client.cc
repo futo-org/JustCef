@@ -677,6 +677,9 @@ public:
                 bytes_read = (int)bytesRead;
                 return true;
             }
+
+            IPC::Singleton.ReleaseIncomingStream(_response->bodyStream->GetIdentifier());
+            _response->bodyStream = nullptr;
         }
 
         return false;
@@ -689,6 +692,7 @@ public:
             LOG(INFO) << "Closing stream " << _response->bodyStream->GetIdentifier() << ".";
             _response->bodyStream->Close();
             IPC::Singleton.CloseStream(_response->bodyStream->GetIdentifier());
+            _response->bodyStream = nullptr;
         }
     }
 private:

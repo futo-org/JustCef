@@ -1,25 +1,65 @@
 namespace JustCef;
 
-public enum IPCProxyBodyElementType
+internal enum IPCProxyBodyElementType
 {
-    Empty = 0,
     Bytes = 1,
-    File = 2
+    File = 2,
+    Stream = 3
 }
 
-public class IPCProxyBodyElement
+public abstract class IPCProxyBodyElement
 {
-    public required IPCProxyBodyElementType Type { get; init; }
 }
 
-public class IPCProxyBodyElementBytes : IPCProxyBodyElement
+public sealed class IPCProxyBodyElementBytes : IPCProxyBodyElement
 {
-    public required byte[] Data { get; init; }
+    public IPCProxyBodyElementBytes(byte[] data)
+    {
+        ArgumentNullException.ThrowIfNull(data);
+        Data = data;
+    }
+
+    public byte[] Data { get; }
 }
 
-public class IPCProxyBodyElementFile : IPCProxyBodyElement
+public sealed class IPCProxyBodyElementStreamedBytes : IPCProxyBodyElement
 {
-    public required string FileName { get; init; }
+    public IPCProxyBodyElementStreamedBytes(DataStream bodyStream, long? length = null)
+    {
+        ArgumentNullException.ThrowIfNull(bodyStream);
+        BodyStream = bodyStream;
+        Length = length;
+    }
+
+    public DataStream BodyStream { get; }
+    public long? Length { get; }
+
+    public async Task<byte[]> ReadAllBytesAsync(CancellationToken cancellationToken = default)
+    {
+        using MemoryStream memoryStream = new MemoryStream();
+        byte[] buffer = new byte[64 * 1024];
+        while (true)
+        {
+            int bytesRead = await BodyStream.ReadAsync(buffer, 0, buffer.Length, cancellationToken);
+            if (bytesRead <= 0)
+                break;
+
+            memoryStream.Write(buffer, 0, bytesRead);
+        }
+
+        return memoryStream.ToArray();
+    }
+}
+
+public sealed class IPCProxyBodyElementFile : IPCProxyBodyElement
+{
+    public IPCProxyBodyElementFile(string fileName)
+    {
+        ArgumentNullException.ThrowIfNull(fileName);
+        FileName = fileName;
+    }
+
+    public string FileName { get; }
 }
 
 public class IPCRequest

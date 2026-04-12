@@ -15,9 +15,11 @@
 #include <mutex>
 #include <atomic>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <condition_variable>
 #include <optional>
+#include <queue>
 #include <stdint.h>
 #include <utility>
 
@@ -71,25 +73,26 @@ enum class OpcodeController : uint8_t {
     StreamOpen = 35,
     StreamClose = 36,
     StreamData = 37,
-    PickFile = 38,
-    PickDirectory = 39,
-    SaveFile = 40,
-    WindowExecuteDevToolsMethod = 41,
-    WindowSetDevelopmentToolsVisible = 42,
-    WindowSetTitle = 43,
-    WindowSetIcon = 44,
-    WindowAddUrlToProxy = 45,
-    WindowRemoveUrlToProxy = 46,
-    WindowAddUrlToModify = 47,
-    WindowRemoveUrlToModify = 48,
-    WindowGetSize = 49,
-    WindowSetSize = 50,
-    WindowAddDevToolsEventMethod = 51,
-    WindowRemoveDevToolsEventMethod = 52,
-    WindowAddDomainToProxy = 53,
-    WindowRemoveDomainToProxy = 54,
-    WindowGetZoom = 55,
-    WindowBridgeRpc = 56
+    StreamCancel = 38,
+    PickFile = 39,
+    PickDirectory = 40,
+    SaveFile = 41,
+    WindowExecuteDevToolsMethod = 42,
+    WindowSetDevelopmentToolsVisible = 43,
+    WindowSetTitle = 44,
+    WindowSetIcon = 45,
+    WindowAddUrlToProxy = 46,
+    WindowRemoveUrlToProxy = 47,
+    WindowAddUrlToModify = 48,
+    WindowRemoveUrlToModify = 49,
+    WindowGetSize = 50,
+    WindowSetSize = 51,
+    WindowAddDevToolsEventMethod = 52,
+    WindowRemoveDevToolsEventMethod = 53,
+    WindowAddDomainToProxy = 54,
+    WindowRemoveDomainToProxy = 55,
+    WindowGetZoom = 56,
+    WindowBridgeRpc = 57
 };
 
 //Notifications from controller
@@ -104,8 +107,11 @@ enum class OpcodeClient : uint8_t {
     Echo = 2,
     WindowProxyRequest = 3,
     WindowModifyRequest = 4,
-    StreamClose = 5,
-    WindowBridgeRpc = 6
+    StreamOpen = 5,
+    StreamData = 6,
+    StreamClose = 7,
+    StreamCancel = 8,
+    WindowBridgeRpc = 9
 };
 
 //Notifications from client
@@ -227,7 +233,7 @@ public:
     void Ping();
     void Print(const char* message, size_t size);
     void Print(const std::string& message);
-    void StreamClose(uint32_t identifier) { Call(OpcodeClient::StreamClose, (uint8_t*)&identifier, sizeof(uint32_t)); }
+    void StreamCancel(uint32_t identifier) { Call(OpcodeClient::StreamCancel, (uint8_t*)&identifier, sizeof(uint32_t)); }
     void WindowModifyRequest(int32_t identifier, CefRefPtr<CefRequest> request, bool modifyRequestBody);
     std::unique_ptr<IPCProxyResponse> WindowProxyRequest(int32_t identifier, CefRefPtr<CefRequest> request);
     IPCBridgeRpcResult WindowBridgeRpc(int32_t identifier, const std::string& method, const std::string& payload_json);
@@ -269,42 +275,58 @@ public:
     }
 
     void CloseStream(uint32_t identifier);
+    void ReleaseIncomingStream(uint32_t identifier);
 private:
-    bool QueueStreamWork(std::function<void()> work)
-    { 
-        if (!IsAvailable())
-            return false;
-            
-        return _streamWorker.EnqueueWork(std::move(work));
-    }
+    struct IncomingStreamDispatcher {
+        std::mutex mutex;
+        std::queue<std::function<void()>> queue;
+        bool running = false;
+    };
 
     void Run();
-    std::vector<uint8_t> Call(OpcodeClient opcode, const uint8_t* body = nullptr, size_t size = 0);
+    std::vector<uint8_t> Call(OpcodeClient opcode, const uint8_t* body = nullptr, size_t size = 0, std::function<void()> afterWrite = nullptr);
     void Notify(OpcodeClientNotification opcode, const uint8_t* body = nullptr, size_t size = 0);
     void Notify(OpcodeClientNotification opcode, const PacketWriter& writer);
     bool HandleRequest(uint32_t requestId, OpcodeController opcode, PacketReader& reader, PacketWriter& writer);
     void HandleNotification(OpcodeControllerNotification opcode, PacketReader& reader);
     void WriteResponse(uint32_t requestId, uint8_t opcode, const uint8_t* body, size_t size);
     void WriteQueuedResponsePacket(const uint8_t* packet, size_t packetLength);
+    bool QueueIncomingStreamWork(uint32_t identifier, std::function<void()> work);
+    void ProcessIncomingStreamDispatcher(uint32_t identifier, std::shared_ptr<IncomingStreamDispatcher> dispatcher);
+    std::shared_ptr<DataStream> FindIncomingStream(uint32_t identifier);
+    std::shared_ptr<DataStream> GetOrCreateIncomingStream(uint32_t identifier);
+    void QueueDeferredStreamWriters(std::vector<std::function<void()>> streamWriters);
+    bool OpenClientStream(uint32_t identifier);
+    bool StreamClientData(uint32_t identifier, const uint8_t* data, size_t size);
+    void CloseClientStream(uint32_t identifier);
+    std::shared_ptr<std::atomic<bool>> RegisterOutgoingStream(uint32_t identifier);
+    std::shared_ptr<std::atomic<bool>> GetOutgoingStreamCancelFlag(uint32_t identifier);
+    void RemoveOutgoingStream(uint32_t identifier);
+    bool SerializePostData(PacketWriter& writer, CefRefPtr<CefPostData> postData, std::vector<std::function<void()>>& streamWriters);
 
     std::atomic<uint32_t> _requestIdCounter;
+    std::atomic<uint32_t> _streamIdentifierCounter;
 
     std::atomic<bool> _stopped = true;
     std::atomic<bool> _startCalled = false;
     std::mutex _writeMutex;
     std::mutex _requestMapMutex;
     std::mutex _dataStreamsMutex;
+    std::mutex _incomingStreamDispatchersMutex;
+    std::mutex _outgoingStreamsMutex;
     std::vector<uint8_t> _sendBuffer;
     std::vector<uint8_t> _readBuffer;
     std::unordered_map<uint32_t, std::shared_ptr<IPCPendingRequest>> _pendingRequests;
     std::map<uint32_t, std::shared_ptr<DataStream>> _dataStreams;
+    std::unordered_set<uint32_t> _canceledIncomingStreams;
+    std::unordered_map<uint32_t, std::shared_ptr<IncomingStreamDispatcher>> _incomingStreamDispatchers;
+    std::unordered_map<uint32_t, std::shared_ptr<std::atomic<bool>>> _outgoingStreams;
     std::thread _thread;
 #if _WIN32
     DWORD _readThreadId = 0;
 #endif
     WorkQueue _worker;
     ThreadPool _threadPool;
-    WorkQueue _streamWorker;
     BufferPool _ipcBufferPool;
     Pipe _pipe;
     //Exit fullscreen

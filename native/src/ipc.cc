@@ -19,6 +19,7 @@
 #include <iostream>
 #include <sstream>
 #include <iomanip>
+#include <limits>
 #include <optional>
 #include <include/cef_app.h>
 
@@ -32,6 +33,11 @@ std::string optionalToString(std::optional<T>& opt) {
 }
 
 namespace {
+
+constexpr uint8_t kIPCProxyBodyElementStream = 3;
+constexpr size_t kInlineBodyElementFramingSize = sizeof(uint8_t) + sizeof(uint32_t);
+constexpr size_t kStreamBodyElementFramingSize = sizeof(uint8_t) + sizeof(int64_t) + sizeof(uint32_t);
+constexpr size_t kStreamChunkSize = 65536;
 
 IPCBridgeRpcResult MakeBridgeRpcResult(bool success, const std::string& result_json, const std::string& error) {
     IPCBridgeRpcResult result;
@@ -54,6 +60,7 @@ IPC IPC::Singleton;
 IPC::IPC() : _ipcBufferPool(sizeof(IPCPacketHeader) + MAXIMUM_IPC_SIZE, 4)
 {
     _requestIdCounter = 0;
+    _streamIdentifierCounter = 0;
     _readBuffer.resize(4096);
     _sendBuffer.resize(4096);
 }
@@ -76,7 +83,6 @@ void IPC::Start()
     _stopped = false;
 
     _worker.Start();
-    _streamWorker.Start();
     _threadPool.AddWorkers(4);
     _thread = std::thread([this] () {
 #if _WIN32
@@ -123,9 +129,6 @@ void IPC::Stop()
     _worker.Stop();
     LOG(INFO) << "Stopped worker.";
 
-    _streamWorker.Stop();
-    LOG(INFO) << "Stopped stream worker.";
-
     _threadPool.Stop();
     LOG(INFO) << "Stopped thread pool.";
 
@@ -159,9 +162,33 @@ void IPC::Stop()
         for (auto& dataStream : _dataStreams)
             dataStream.second->Close();
         _dataStreams.clear();
+        _canceledIncomingStreams.clear();
     }
 
     LOG(INFO) << "Closed data streams.";
+
+    {
+        std::unordered_map<uint32_t, std::shared_ptr<IncomingStreamDispatcher>> incomingStreamDispatchers;
+
+        {
+            std::lock_guard<std::mutex> lk(_incomingStreamDispatchersMutex);
+            incomingStreamDispatchers.swap(_incomingStreamDispatchers);
+        }
+
+        for (auto& incomingStreamDispatcher : incomingStreamDispatchers)
+        {
+            std::lock_guard<std::mutex> lk(incomingStreamDispatcher.second->mutex);
+            std::queue<std::function<void()>> emptyQueue;
+            incomingStreamDispatcher.second->queue.swap(emptyQueue);
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> lk(_outgoingStreamsMutex);
+        for (auto& outgoingStream : _outgoingStreams)
+            outgoingStream.second->store(true);
+        _outgoingStreams.clear();
+    }
 
     /*LOG(INFO) << "Joining IPC threads...";
 
@@ -274,9 +301,11 @@ void IPC::Run()
             };
 
             OpcodeController opcode = (OpcodeController)header.opcode;
-            if (opcode == OpcodeController::StreamOpen || opcode == OpcodeController::StreamData || opcode == OpcodeController::StreamClose) {
-                //Stream packets must always be handled in-order
-                if (!QueueStreamWork(std::move(packetHandler))) {
+            if ((opcode == OpcodeController::StreamOpen || opcode == OpcodeController::StreamData || opcode == OpcodeController::StreamClose)
+                && bodySize >= sizeof(uint32_t)) {
+                uint32_t streamIdentifier;
+                memcpy(&streamIdentifier, readBuffer->data(), sizeof(uint32_t));
+                if (!QueueIncomingStreamWork(streamIdentifier, std::move(packetHandler))) {
                     _ipcBufferPool.ReturnBuffer(readBuffer);
                 }
             } else {
@@ -316,7 +345,93 @@ void IPC::Run()
     LOG(INFO) << "IPC stopped.";
 }
 
-std::vector<uint8_t> IPC::Call(OpcodeClient opcode, const uint8_t* body, size_t size)
+bool IPC::QueueIncomingStreamWork(uint32_t identifier, std::function<void()> work)
+{
+    if (!IsAvailable()) {
+        return false;
+    }
+
+    std::shared_ptr<IncomingStreamDispatcher> dispatcher;
+    {
+        std::lock_guard<std::mutex> lk(_incomingStreamDispatchersMutex);
+        auto& existingDispatcher = _incomingStreamDispatchers[identifier];
+        if (!existingDispatcher) {
+            existingDispatcher = std::make_shared<IncomingStreamDispatcher>();
+        }
+
+        dispatcher = existingDispatcher;
+    }
+
+    bool shouldSchedule = false;
+    {
+        std::lock_guard<std::mutex> lk(dispatcher->mutex);
+        dispatcher->queue.push(std::move(work));
+        if (!dispatcher->running) {
+            dispatcher->running = true;
+            shouldSchedule = true;
+        }
+    }
+
+    if (!shouldSchedule) {
+        return true;
+    }
+
+    if (_threadPool.Enqueue([this, identifier, dispatcher] {
+            ProcessIncomingStreamDispatcher(identifier, dispatcher);
+        })) {
+        return true;
+    }
+
+    {
+        std::lock_guard<std::mutex> lk(dispatcher->mutex);
+        if (!dispatcher->queue.empty()) {
+            dispatcher->queue.pop();
+        }
+        dispatcher->running = false;
+    }
+
+    std::lock_guard<std::mutex> dispatchersLock(_incomingStreamDispatchersMutex);
+    auto dispatcherItr = _incomingStreamDispatchers.find(identifier);
+    if (dispatcherItr != _incomingStreamDispatchers.end() && dispatcherItr->second == dispatcher) {
+        std::lock_guard<std::mutex> dispatcherLock(dispatcher->mutex);
+        if (!dispatcher->running && dispatcher->queue.empty()) {
+            _incomingStreamDispatchers.erase(dispatcherItr);
+        }
+    }
+
+    return false;
+}
+
+void IPC::ProcessIncomingStreamDispatcher(uint32_t identifier, std::shared_ptr<IncomingStreamDispatcher> dispatcher)
+{
+    while (true)
+    {
+        std::function<void()> work;
+        {
+            std::lock_guard<std::mutex> lk(dispatcher->mutex);
+            if (dispatcher->queue.empty()) {
+                dispatcher->running = false;
+                break;
+            }
+
+            work = std::move(dispatcher->queue.front());
+            dispatcher->queue.pop();
+        }
+
+        work();
+    }
+
+    std::lock_guard<std::mutex> dispatchersLock(_incomingStreamDispatchersMutex);
+    auto dispatcherItr = _incomingStreamDispatchers.find(identifier);
+    if (dispatcherItr != _incomingStreamDispatchers.end() && dispatcherItr->second == dispatcher) {
+        std::lock_guard<std::mutex> dispatcherLock(dispatcher->mutex);
+        if (!dispatcher->running && dispatcher->queue.empty()) {
+            _incomingStreamDispatchers.erase(dispatcherItr);
+        }
+    }
+}
+
+std::vector<uint8_t> IPC::Call(OpcodeClient opcode, const uint8_t* body, size_t size, std::function<void()> afterWrite)
 {
     if (!IsAvailable())
         return std::vector<uint8_t>();
@@ -356,6 +471,10 @@ std::vector<uint8_t> IPC::Call(OpcodeClient opcode, const uint8_t* body, size_t 
             memcpy(_sendBuffer.data() + sizeof(IPCPacketHeader), body, size);
 
         _pipe.Write(_sendBuffer.data(), packetLength, true);
+    }
+
+    if (afterWrite) {
+        afterWrite();
     }
 
     {
@@ -486,6 +605,35 @@ void IPC::WriteQueuedResponsePacket(const uint8_t* packet, size_t packetLength)
     }
 }
 
+std::shared_ptr<DataStream> IPC::FindIncomingStream(uint32_t identifier)
+{
+    std::lock_guard<std::mutex> lk(_dataStreamsMutex);
+    auto itr = _dataStreams.find(identifier);
+    return itr != _dataStreams.end() ? itr->second : nullptr;
+}
+
+std::shared_ptr<DataStream> IPC::GetOrCreateIncomingStream(uint32_t identifier)
+{
+    std::lock_guard<std::mutex> lk(_dataStreamsMutex);
+    auto itr = _dataStreams.find(identifier);
+    if (itr != _dataStreams.end()) {
+        return itr->second;
+    }
+
+    std::shared_ptr<DataStream> stream = std::make_shared<DataStream>(identifier);
+    _dataStreams[identifier] = stream;
+    return stream;
+}
+
+void IPC::QueueDeferredStreamWriters(std::vector<std::function<void()>> streamWriters)
+{
+    for (auto& streamWriter : streamWriters) {
+        if (!QueueBackgroundWork(std::move(streamWriter))) {
+            LOG(ERROR) << "Failed to queue deferred stream writer.";
+        }
+    }
+}
+
 bool IPC::HandleRequest(uint32_t requestId, OpcodeController opcode, PacketReader& reader, PacketWriter& writer)
 {
     switch (opcode)
@@ -572,16 +720,18 @@ bool IPC::HandleRequest(uint32_t requestId, OpcodeController opcode, PacketReade
             return true;
         case OpcodeController::StreamOpen:
         {
-            std::lock_guard<std::mutex> lk(_dataStreamsMutex);
             std::optional<uint32_t> identifier = reader.read<uint32_t>();
             if (identifier)
             {
+                {
+                    std::lock_guard<std::mutex> lk(_dataStreamsMutex);
+                    if (_canceledIncomingStreams.find(*identifier) != _canceledIncomingStreams.end()) {
+                        return true;
+                    }
+                }
+
                 LOG(INFO) << "Stream opened with identifier (via open packet) " << *identifier;
-                auto itr = _dataStreams.find(*identifier);
-                if (itr == _dataStreams.end())
-                    _dataStreams[*identifier] = std::make_shared<DataStream>(*identifier);
-                else
-                    LOG(INFO) << "Stream not opened, was already open (via open packet) " << *identifier;
+                GetOrCreateIncomingStream(*identifier);
             }
             return true;
         }
@@ -591,16 +741,15 @@ bool IPC::HandleRequest(uint32_t requestId, OpcodeController opcode, PacketReade
             std::optional<uint32_t> identifier = reader.read<uint32_t>();
             if (identifier)
             {
-                std::shared_ptr<DataStream> dataStream = nullptr;
-
                 {
                     std::lock_guard<std::mutex> lk(_dataStreamsMutex);
-
-                    auto itr = _dataStreams.find(*identifier);
-                    if (itr != _dataStreams.end())
-                        dataStream = (*itr).second;
+                    if (_canceledIncomingStreams.find(*identifier) != _canceledIncomingStreams.end()) {
+                        writer.write<bool>(false);
+                        return true;
+                    }
                 }
 
+                std::shared_ptr<DataStream> dataStream = FindIncomingStream(*identifier);
                 if (dataStream)
                 {
                     reader.copyTo([dataStream] (const uint8_t* data, size_t size) {
@@ -617,17 +766,32 @@ bool IPC::HandleRequest(uint32_t requestId, OpcodeController opcode, PacketReade
         }
         case OpcodeController::StreamClose:
         {
-            std::lock_guard<std::mutex> lk(_dataStreamsMutex);
             std::optional<uint32_t> identifier = reader.read<uint32_t>();
             if (identifier)
             {
-                LOG(INFO) << "Stream closed with identifier " << *identifier;
-                auto itr = _dataStreams.find(*identifier);
-                if (itr != _dataStreams.end())
                 {
-                    (*itr).second->Close();
-                    _dataStreams.erase(itr);
+                    std::lock_guard<std::mutex> lk(_dataStreamsMutex);
+                    if (_canceledIncomingStreams.erase(*identifier) > 0) {
+                        _dataStreams.erase(*identifier);
+                        return true;
+                    }
                 }
+
+                LOG(INFO) << "Stream closed with identifier " << *identifier;
+                std::shared_ptr<DataStream> dataStream = FindIncomingStream(*identifier);
+                if (dataStream)
+                    dataStream->Close();
+            }
+            return true;
+        }
+        case OpcodeController::StreamCancel:
+        {
+            std::optional<uint32_t> identifier = reader.read<uint32_t>();
+            if (identifier)
+            {
+                std::shared_ptr<std::atomic<bool>> cancelFlag = GetOutgoingStreamCancelFlag(*identifier);
+                if (cancelFlag)
+                    cancelFlag->store(true);
             }
             return true;
         }
@@ -701,6 +865,156 @@ void IPC::HandleNotification(OpcodeControllerNotification opcode, PacketReader& 
     }
 }
 
+bool IPC::OpenClientStream(uint32_t identifier)
+{
+    if (!IsAvailable()) {
+        return false;
+    }
+
+    Call(OpcodeClient::StreamOpen, reinterpret_cast<uint8_t*>(&identifier), sizeof(uint32_t));
+    return true;
+}
+
+bool IPC::StreamClientData(uint32_t identifier, const uint8_t* data, size_t size)
+{
+    std::vector<uint8_t> packet(sizeof(uint32_t) + size);
+    memcpy(packet.data(), &identifier, sizeof(uint32_t));
+    if (size > 0)
+        memcpy(packet.data() + sizeof(uint32_t), data, size);
+
+    std::vector<uint8_t> response = Call(OpcodeClient::StreamData, packet.data(), packet.size());
+    if (response.empty()) {
+        return false;
+    }
+
+    PacketReader reader(response.data(), response.size());
+    std::optional<bool> accepted = reader.read<bool>();
+    return accepted && *accepted;
+}
+
+void IPC::CloseClientStream(uint32_t identifier)
+{
+    Call(OpcodeClient::StreamClose, reinterpret_cast<uint8_t*>(&identifier), sizeof(uint32_t));
+}
+
+std::shared_ptr<std::atomic<bool>> IPC::RegisterOutgoingStream(uint32_t identifier)
+{
+    auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
+    std::lock_guard<std::mutex> lk(_outgoingStreamsMutex);
+    _outgoingStreams[identifier] = cancelFlag;
+    return cancelFlag;
+}
+
+std::shared_ptr<std::atomic<bool>> IPC::GetOutgoingStreamCancelFlag(uint32_t identifier)
+{
+    std::lock_guard<std::mutex> lk(_outgoingStreamsMutex);
+    auto itr = _outgoingStreams.find(identifier);
+    return itr != _outgoingStreams.end() ? itr->second : nullptr;
+}
+
+void IPC::RemoveOutgoingStream(uint32_t identifier)
+{
+    std::lock_guard<std::mutex> lk(_outgoingStreamsMutex);
+    _outgoingStreams.erase(identifier);
+}
+
+bool IPC::SerializePostData(PacketWriter& writer, CefRefPtr<CefPostData> postData, std::vector<std::function<void()>>& streamWriters)
+{
+    if (!postData.get()) {
+        return writer.write<int32_t>(0);
+    }
+
+    size_t elementCount = postData->GetElementCount();
+    if (!writer.write<int32_t>(static_cast<int32_t>(elementCount))) {
+        return false;
+    }
+
+    if (elementCount == 0) {
+        return true;
+    }
+
+    std::vector<CefRefPtr<CefPostDataElement>> elements;
+    postData->GetElements(elements);
+    for (auto& element : elements)
+    {
+        uint8_t elementType = static_cast<uint8_t>(element->GetType());
+        if (elementType == CefPostDataElement::Type::PDE_TYPE_BYTES)
+        {
+            size_t dataSize = element->GetBytesCount();
+            bool fitsInline = dataSize <= static_cast<size_t>(std::numeric_limits<uint32_t>::max()) &&
+                writer.size() + kInlineBodyElementFramingSize + dataSize <= MAXIMUM_IPC_SIZE;
+
+            if (fitsInline)
+            {
+                std::vector<uint8_t> data(dataSize);
+                element->GetBytes(dataSize, data.data());
+                uint32_t dataSize32 = static_cast<uint32_t>(dataSize);
+                if (!writer.write<uint8_t>(elementType) ||
+                    !writer.write<uint32_t>(dataSize32) ||
+                    !writer.writeBytes(data.data(), data.size())) {
+                    return false;
+                }
+            }
+            else
+            {
+                std::shared_ptr<std::vector<uint8_t>> data = std::make_shared<std::vector<uint8_t>>(dataSize);
+                element->GetBytes(dataSize, data->data());
+
+                uint32_t streamIdentifier = ++_streamIdentifierCounter;
+                std::shared_ptr<std::atomic<bool>> cancelFlag = RegisterOutgoingStream(streamIdentifier);
+
+                if (!writer.write<uint8_t>(kIPCProxyBodyElementStream) ||
+                    !writer.write<int64_t>(static_cast<int64_t>(dataSize)) ||
+                    !writer.write<uint32_t>(streamIdentifier)) {
+                    RemoveOutgoingStream(streamIdentifier);
+                    return false;
+                }
+
+                streamWriters.push_back([this, streamIdentifier, cancelFlag, data]()
+                {
+                    if (cancelFlag->load()) {
+                        RemoveOutgoingStream(streamIdentifier);
+                        return;
+                    }
+
+                    if (!OpenClientStream(streamIdentifier)) {
+                        RemoveOutgoingStream(streamIdentifier);
+                        return;
+                    }
+
+                    size_t offset = 0;
+                    while (offset < data->size() && IsAvailable() && !cancelFlag->load())
+                    {
+                        size_t chunkSize = std::min(kStreamChunkSize, data->size() - offset);
+                        if (!StreamClientData(streamIdentifier, data->data() + offset, chunkSize)) {
+                            break;
+                        }
+
+                        offset += chunkSize;
+                    }
+
+                    RemoveOutgoingStream(streamIdentifier);
+                    CloseClientStream(streamIdentifier);
+                });
+            }
+        }
+        else if (elementType == CefPostDataElement::Type::PDE_TYPE_FILE)
+        {
+            if (!writer.write<uint8_t>(elementType) ||
+                !writer.writeSizePrefixedString(element->GetFile())) {
+                return false;
+            }
+        }
+        else
+        {
+            LOG(ERROR) << "Unsupported post data element type " << static_cast<int>(elementType) << ".";
+            return false;
+        }
+    }
+
+    return true;
+}
+
 std::vector<uint8_t> IPC::Echo(const uint8_t* data, size_t size)
 {
     return Call(OpcodeClient::Echo, data, size);
@@ -725,19 +1039,46 @@ void IPC::CloseStream(uint32_t identifier)
 {
     LOG(INFO) << "Closed stream with identifier " << identifier;
 
-    std::lock_guard<std::mutex> lk(_dataStreamsMutex);
-    auto itr = _dataStreams.find(identifier);
-    if (itr != _dataStreams.end())
+    std::shared_ptr<DataStream> dataStream = nullptr;
     {
-        (*itr).second->Close();
-        _dataStreams.erase(itr);
+        std::lock_guard<std::mutex> lk(_dataStreamsMutex);
+        auto itr = _dataStreams.find(identifier);
+        if (itr != _dataStreams.end())
+        {
+            dataStream = (*itr).second;
+            _dataStreams.erase(itr);
+        }
+
+        _canceledIncomingStreams.insert(identifier);
+    }
+
+    if (dataStream) {
+        dataStream->Close();
     }
     
     if (!IsAvailable()) {
         return;
     }
 
-    StreamClose(identifier);
+    StreamCancel(identifier);
+}
+
+void IPC::ReleaseIncomingStream(uint32_t identifier)
+{
+    std::shared_ptr<DataStream> dataStream = nullptr;
+    {
+        std::lock_guard<std::mutex> lk(_dataStreamsMutex);
+        auto itr = _dataStreams.find(identifier);
+        if (itr != _dataStreams.end())
+        {
+            dataStream = (*itr).second;
+            _dataStreams.erase(itr);
+        }
+    }
+
+    if (dataStream) {
+        dataStream->Close();
+    }
 }
 
 std::unique_ptr<IPCProxyResponse> IPC::WindowProxyRequest(int32_t identifier, CefRefPtr<CefRequest> request)
@@ -747,6 +1088,7 @@ std::unique_ptr<IPCProxyResponse> IPC::WindowProxyRequest(int32_t identifier, Ce
     }
 
     PacketWriter writer;
+    std::vector<std::function<void()>> streamWriters;
     writer.write<int32_t>(identifier);
     writer.writeSizePrefixedString(request->GetMethod());
     writer.writeSizePrefixedString(request->GetURL());
@@ -761,36 +1103,16 @@ std::unique_ptr<IPCProxyResponse> IPC::WindowProxyRequest(int32_t identifier, Ce
     }
 
     CefRefPtr<CefPostData> postData = request->GetPostData();
-    if (postData.get()) //TODO: Is postData ever nullptr ?
-    {
-        writer.write<int32_t>((int32_t)postData->GetElementCount());
-
-        if (postData->GetElementCount())
-        {
-            std::vector<CefRefPtr<CefPostDataElement>> elements;
-            postData->GetElements(elements);
-            for (auto& element : elements)
-            {
-                uint8_t elementType = static_cast<uint8_t>(element->GetType());
-                writer.write<uint8_t>(elementType);
-                if (elementType == CefPostDataElement::Type::PDE_TYPE_BYTES) 
-                {
-                    size_t dataSize = element->GetBytesCount();
-                    std::vector<uint8_t> data(dataSize);
-                    element->GetBytes(dataSize, data.data());
-                    uint32_t dataSize32 = static_cast<uint32_t>(dataSize);
-                    writer.write<uint32_t>(dataSize32);
-                    writer.writeBytes(data.data(), data.size());
-                } 
-                else if (elementType == CefPostDataElement::Type::PDE_TYPE_FILE) 
-                    writer.writeSizePrefixedString(element->GetFile());
-            }
-        }
+    if (!SerializePostData(writer, postData, streamWriters)) {
+        LOG(ERROR) << "Failed to serialize proxy request post data.";
+        return nullptr;
     }
-    else
-        writer.write<int32_t>(0);
 
-    std::vector<uint8_t> response = Call(OpcodeClient::WindowProxyRequest, writer.data(), writer.size());
+    std::vector<uint8_t> response = Call(OpcodeClient::WindowProxyRequest, writer.data(), writer.size(),
+        [this, streamWriters = std::move(streamWriters)] () mutable
+        {
+            QueueDeferredStreamWriters(std::move(streamWriters));
+        });
     std::unique_ptr<IPCProxyResponse> result = nullptr;
 
     if (!response.empty())
@@ -884,15 +1206,7 @@ std::unique_ptr<IPCProxyResponse> IPC::WindowProxyRequest(int32_t identifier, Ce
                 return nullptr;
             }
 
-            std::lock_guard<std::mutex> lk(_dataStreamsMutex);
-            auto itr = _dataStreams.find(*streamId);
-            if (itr != _dataStreams.end()) {
-                bodyStream = (*itr).second;
-            } else {
-                LOG(INFO) << "Stream opened with identifier (was not opened via open packet)" << *streamId;
-                bodyStream = std::make_shared<DataStream>(*streamId);
-                _dataStreams[*streamId] = bodyStream;
-            }
+            bodyStream = GetOrCreateIncomingStream(*streamId);
         }
 
         result = std::unique_ptr<IPCProxyResponse>(new IPCProxyResponse());
@@ -918,6 +1232,7 @@ void IPC::WindowModifyRequest(int32_t identifier, CefRefPtr<CefRequest> request,
     std::vector<uint8_t> response;
     {
         PacketWriter writer;
+        std::vector<std::function<void()>> streamWriters;
         writer.write<int32_t>(identifier);
         writer.writeSizePrefixedString(request->GetMethod());
         writer.writeSizePrefixedString(request->GetURL());
@@ -932,37 +1247,21 @@ void IPC::WindowModifyRequest(int32_t identifier, CefRefPtr<CefRequest> request,
         }
 
         CefRefPtr<CefPostData> postData = request->GetPostData();
-        if (modifyRequestBody && postData.get()) //TODO: Is postData ever nullptr ?
-        {
-            writer.write<int32_t>((int32_t)postData->GetElementCount());
-
-            if (postData->GetElementCount())
-            {
-                std::vector<CefRefPtr<CefPostDataElement>> elements;
-                postData->GetElements(elements);
-                for (auto& element : elements)
-                {
-                    uint8_t elementType = static_cast<uint8_t>(element->GetType());
-                    writer.write<uint8_t>(elementType);
-                    if (elementType == CefPostDataElement::Type::PDE_TYPE_BYTES) 
-                    {
-                        size_t dataSize = element->GetBytesCount();
-                        std::vector<uint8_t> data(dataSize);
-                        element->GetBytes(dataSize, data.data());
-                        uint32_t dataSize32 = static_cast<uint32_t>(dataSize);
-
-                        writer.write<uint32_t>(dataSize32);
-                        writer.writeBytes(data.data(), data.size());
-                    } 
-                    else if (elementType == CefPostDataElement::Type::PDE_TYPE_FILE) 
-                        writer.writeSizePrefixedString(element->GetFile());
-                }
+        if (modifyRequestBody) {
+            if (!SerializePostData(writer, postData, streamWriters)) {
+                LOG(ERROR) << "Failed to serialize modify request post data.";
+                return;
             }
+        } else if (!writer.write<int32_t>(0)) {
+            LOG(ERROR) << "Failed to serialize empty modify request body.";
+            return;
         }
-        else
-            writer.write<int32_t>(0);
 
-        response = Call(OpcodeClient::WindowModifyRequest, writer.data(), writer.size());
+        response = Call(OpcodeClient::WindowModifyRequest, writer.data(), writer.size(),
+            [this, streamWriters = std::move(streamWriters)] () mutable
+            {
+                QueueDeferredStreamWriters(std::move(streamWriters));
+            });
     }
     
     if (!response.empty())
@@ -1053,6 +1352,53 @@ void IPC::WindowModifyRequest(int32_t identifier, CefRefPtr<CefRequest> request,
                     CefRefPtr<CefPostDataElement> element = CefPostDataElement::Create();
                     element->SetToFile(*fileName);
                     postData->AddElement(element);
+                }
+                else if (*elementType == kIPCProxyBodyElementStream)
+                {
+                    std::optional<int64_t> dataSize = reader.read<int64_t>();
+                    if (!dataSize) {
+                        LOG(ERROR) << "Failed to read stream data size.";
+                        return;
+                    }
+
+                    std::optional<uint32_t> streamId = reader.read<uint32_t>();
+                    if (!streamId) {
+                        LOG(ERROR) << "Failed to read stream id.";
+                        return;
+                    }
+
+                    std::shared_ptr<DataStream> bodyStream = GetOrCreateIncomingStream(*streamId);
+
+                    std::vector<uint8_t> data;
+                    if (*dataSize > 0)
+                        data.reserve(static_cast<size_t>(*dataSize));
+
+                    uint8_t buffer[kStreamChunkSize];
+                    int64_t remaining = *dataSize;
+                    while (remaining < 0 || remaining > 0)
+                    {
+                        size_t requestedBytes = remaining >= 0
+                            ? std::min(static_cast<size_t>(remaining), sizeof(buffer))
+                            : sizeof(buffer);
+                        size_t bytesRead = bodyStream->Read(buffer, requestedBytes);
+                        if (bytesRead == 0)
+                            break;
+
+                        data.insert(data.end(), buffer, buffer + bytesRead);
+                        if (remaining >= 0)
+                            remaining -= static_cast<int64_t>(bytesRead);
+                    }
+
+                    if (*dataSize >= 0 && remaining > 0) {
+                        ReleaseIncomingStream(*streamId);
+                        LOG(ERROR) << "Failed to fully read streamed request body element.";
+                        return;
+                    }
+
+                    CefRefPtr<CefPostDataElement> element = CefPostDataElement::Create();
+                    element->SetToBytes(data.size(), data.empty() ? nullptr : data.data());
+                    postData->AddElement(element);
+                    ReleaseIncomingStream(*streamId);
                 }
             }
 
