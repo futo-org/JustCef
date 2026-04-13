@@ -1,3 +1,5 @@
+#define HARDCODED_PATHS
+
 using System.Buffers;
 using System.Buffers.Binary;
 using System.Diagnostics;
@@ -8,6 +10,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Text;
+
 namespace JustCef
 {
     public class JustCefProcess : IDisposable
@@ -121,23 +124,18 @@ namespace JustCef
             WindowDevToolsEvent = 16
         }
 
+        private enum BridgeRpcPayloadEncoding : byte
+        {
+            Inline = 0,
+            Stream = 1
+        }
+
         private sealed class IncomingStreamDispatcher
         {
             public readonly object SyncRoot = new();
-            public readonly Queue<(PacketType PacketType, uint RequestId, byte Opcode, RentedBuffer<byte>? BodyBuffer)> Queue = new();
+            public readonly Queue<Func<Task>> Queue = new();
             public bool Running;
-
-            public void Drain()
-            {
-                lock (SyncRoot)
-                {
-                    while (Queue.Count > 0)
-                    {
-                        var work = Queue.Dequeue();
-                        work.BodyBuffer?.Dispose();
-                    }
-                }
-            }
+            public Task? WorkerTask;
         }
 
         private static ArrayPool<byte> BufferPool = ArrayPool<byte>.Create();
@@ -149,6 +147,7 @@ namespace JustCef
         private const int StreamChunkSize = 65536;
         private const int StreamElementFramingSize = sizeof(byte) + sizeof(long) + sizeof(uint);
         private const int ByteElementFramingSize = sizeof(byte) + sizeof(uint);
+        private const int BridgeRpcInlinePayloadFramingSize = sizeof(byte) + sizeof(uint);
         private const long UnknownStreamLength = -1;
         private readonly AnonymousPipeServerStream _writer;
         private readonly AnonymousPipeServerStream _reader;
@@ -350,14 +349,108 @@ namespace JustCef
                         if (bodySize > 0)
                         {
                             var rb = new RentedBuffer<byte>(BufferPool, bodySize);
-                            await _reader.ReadExactlyAsync(rb.Buffer, 0, bodySize, _cancellationTokenSource.Token);
-                            rentedBodyBuffer = rb;
+                            try
+                            {
+                                await _reader.ReadExactlyAsync(rb.Buffer, 0, bodySize, _cancellationTokenSource.Token);
+                                rentedBodyBuffer = rb;
+                            }
+                            catch
+                            {
+                                rb.Dispose();
+                                throw;
+                            }
                         }
 
-                        if (packetType == PacketType.Request && RequiresOrderedIncomingStreamDispatch((OpcodeClient)opcode) && TryGetOrderedIncomingStreamIdentifier(rentedBodyBuffer, out var streamIdentifier))
-                            EnqueueOrderedIncomingPacket(streamIdentifier, packetType, requestId, opcode, rentedBodyBuffer);
+                        async Task RunPacket()
+                        {
+                            try
+                            {
+                                if (_cancellationTokenSource.IsCancellationRequested)
+                                    return;
+
+                                if (packetType == PacketType.Response)
+                                {
+                                    bool foundPendingRequest;
+                                    TaskCompletionSource<byte[]>? pendingRequest;
+                                    lock (_pendingRequests)
+                                    {
+                                        foundPendingRequest = _pendingRequests.TryGetValue(requestId, out pendingRequest);
+                                    }
+
+                                    if (foundPendingRequest && pendingRequest != null)
+                                        pendingRequest.SetResult(rentedBodyBuffer != null ? rentedBodyBuffer.Buffer.AsSpan().Slice(0, rentedBodyBuffer.Length).ToArray() : Array.Empty<byte>());
+                                    else
+                                        Logger.Error<JustCefProcess>($"Received a packet response for a request that no longer has an awaiter (request id = {requestId}).");
+                                }
+                                else if (packetType == PacketType.Request)
+                                {
+                                    var packetReader = new PacketReader(rentedBodyBuffer != null ? rentedBodyBuffer.Buffer : Array.Empty<byte>(), rentedBodyBuffer != null ? rentedBodyBuffer.Length : 0);
+                                    var packetWriter = new PacketWriter();
+                                    var deferredOutgoingStreams = new List<(Action Start, Action Cleanup)>();
+                                    try
+                                    {
+                                        await HandleRequestAsync((OpcodeClient)opcode, packetReader, packetWriter, deferredOutgoingStreams, rentedBodyBuffer);
+                                    }
+                                    catch (Exception e)
+                                    {
+                                        Logger.Error<JustCefProcess>($"An exception occurred in the IPC while handling request packet", e);
+                                        CleanupDeferredOutgoingStreams(deferredOutgoingStreams);
+                                        deferredOutgoingStreams.Clear();
+                                        packetWriter = new PacketWriter();
+                                    }
+
+                                    int packetSize = HeaderSize + packetWriter.Size;
+                                    using var rentedBuffer = new RentedBuffer<byte>(BufferPool, packetSize);
+
+                                    using (var stream = new MemoryStream(rentedBuffer.Buffer, 0, packetSize))
+                                    using (var writer = new BinaryWriter(stream))
+                                    {
+                                        writer.Write((uint)(packetSize - 4));
+                                        writer.Write(requestId);
+                                        writer.Write((byte)PacketType.Response);
+                                        writer.Write((byte)opcode);
+
+                                        if (packetWriter.Size > 0)
+                                            writer.Write(packetWriter.Data, 0, packetWriter.Size);
+                                    }
+
+                                    try
+                                    {
+                                        await WritePacketAsync(rentedBuffer.Buffer, 0, packetSize, _cancellationTokenSource.Token);
+                                    }
+                                    catch
+                                    {
+                                        CleanupDeferredOutgoingStreams(deferredOutgoingStreams);
+                                        throw;
+                                    }
+
+                                    StartDeferredOutgoingStreams(deferredOutgoingStreams);
+                                }
+                                else if (packetType == PacketType.Notification)
+                                {
+                                    var packetReader = new PacketReader(rentedBodyBuffer != null ? rentedBodyBuffer.Buffer : Array.Empty<byte>(), rentedBodyBuffer != null ? rentedBodyBuffer.Length : 0);
+                                    HandleNotification((OpcodeClientNotification)opcode, packetReader);
+                                }
+                            }
+                            catch (Exception e)
+                            {
+                                Logger.Error<JustCefProcess>($"An exception occurred in the IPC while handling a packet", e);
+                            }
+                            finally
+                            {
+                                rentedBodyBuffer?.Dispose();
+                            }
+                        }
+                        if (packetType == PacketType.Request
+                            && ((OpcodeClient)opcode == OpcodeClient.StreamOpen || (OpcodeClient)opcode == OpcodeClient.StreamData || (OpcodeClient)opcode == OpcodeClient.StreamClose)
+                            && rentedBodyBuffer != null
+                            && rentedBodyBuffer.Length >= sizeof(uint))
+                        {
+                            uint streamIdentifier = BinaryPrimitives.ReadUInt32LittleEndian(rentedBodyBuffer.Buffer.AsSpan(0, sizeof(uint)));
+                            QueueIncomingStreamWork(streamIdentifier, RunPacket);
+                        }
                         else
-                            _ = Task.Run(() => HandleIncomingPacketAsync(packetType, requestId, opcode, rentedBodyBuffer));
+                            _ = Task.Run(RunPacket);
                     }
                 }
                 catch (OperationCanceledException) when (_cancellationTokenSource.IsCancellationRequested)
@@ -411,7 +504,7 @@ namespace JustCef
                     HandleClientStreamCancel(reader);
                     break;
                 case OpcodeClient.WindowBridgeRpc:
-                    await HandleWindowBridgeRpcAsync(reader, writer);
+                    await HandleWindowBridgeRpcAsync(reader, writer, deferredOutgoingStreams);
                     break;
                 default:
                     Logger.Warning<JustCefProcess>($"Received unhandled opcode {opcode}.");
@@ -419,86 +512,64 @@ namespace JustCef
             }
         }
 
-        private static bool RequiresOrderedIncomingStreamDispatch(OpcodeClient opcode)
-            => opcode == OpcodeClient.StreamOpen || opcode == OpcodeClient.StreamData || opcode == OpcodeClient.StreamClose;
-
-        private static bool TryGetOrderedIncomingStreamIdentifier(RentedBuffer<byte>? bodyBuffer, out uint identifier)
+        private void QueueIncomingStreamWork(uint identifier, Func<Task> workItem)
         {
-            if (bodyBuffer != null && bodyBuffer.Value.Length >= sizeof(uint))
+            if (_cancellationTokenSource.IsCancellationRequested)
             {
-                identifier = BinaryPrimitives.ReadUInt32LittleEndian(bodyBuffer.Value.Buffer.AsSpan(0, sizeof(uint)));
-                return true;
+                _ = workItem();
+                return;
             }
 
-            identifier = 0;
-            return false;
-        }
+            IncomingStreamDispatcher dispatcher;
+            lock (_incomingStreamDispatchers)
+            {
+                if (!_incomingStreamDispatchers.TryGetValue(identifier, out dispatcher!))
+                {
+                    dispatcher = new IncomingStreamDispatcher();
+                    _incomingStreamDispatchers[identifier] = dispatcher;
+                }
+            }
 
-        private void EnqueueOrderedIncomingPacket(uint identifier, PacketType packetType, uint requestId, byte opcode, RentedBuffer<byte>? bodyBuffer)
-        {
-            if (QueueOrderedIncomingPacket(identifier, (packetType, requestId, opcode, bodyBuffer)))
-                return;
-
-            bodyBuffer?.Dispose();
-
-            if (_cancellationTokenSource.IsCancellationRequested)
-                return;
-
-            throw new InvalidOperationException($"Incoming stream worker {identifier} is not accepting packets.");
-        }
-
-        private bool QueueOrderedIncomingPacket(uint identifier, (PacketType PacketType, uint RequestId, byte Opcode, RentedBuffer<byte>? BodyBuffer) packet)
-        {
-            var dispatcher = GetOrCreateIncomingStreamDispatcher(identifier);
             bool shouldSchedule;
             lock (dispatcher.SyncRoot)
             {
-                dispatcher.Queue.Enqueue(packet);
+                dispatcher.Queue.Enqueue(workItem);
                 shouldSchedule = !dispatcher.Running;
                 if (shouldSchedule)
                     dispatcher.Running = true;
             }
 
             if (!shouldSchedule)
-                return true;
+                return;
 
-            _ = Task.Run(() => ProcessIncomingStreamDispatcherAsync(identifier, dispatcher));
-            return true;
+            var workerTask = Task.Run(() => ProcessIncomingStreamDispatcherAsync(identifier, dispatcher));
+            lock (dispatcher.SyncRoot)
+                dispatcher.WorkerTask = workerTask;
         }
 
-        private IncomingStreamDispatcher GetOrCreateIncomingStreamDispatcher(uint identifier)
+        private void WaitForIncomingStreamDispatchers(int millisecondsTimeout)
         {
+            Task[] tasks;
             lock (_incomingStreamDispatchers)
             {
-                if (_incomingStreamDispatchers.TryGetValue(identifier, out var dispatcher))
-                    return dispatcher;
-
-                dispatcher = new IncomingStreamDispatcher();
-                _incomingStreamDispatchers[identifier] = dispatcher;
-                return dispatcher;
+                tasks = _incomingStreamDispatchers.Values
+                    .Select(dispatcher => dispatcher.WorkerTask)
+                    .Where(task => task != null)
+                    .Cast<Task>()
+                    .Distinct()
+                    .ToArray();
             }
-        }
 
-        private void RemoveIncomingStreamDispatcher(uint identifier, IncomingStreamDispatcher dispatcher)
-        {
-            lock (_incomingStreamDispatchers)
+            if (tasks.Length == 0)
+                return;
+
+            try
             {
-                if (_incomingStreamDispatchers.TryGetValue(identifier, out var existingDispatcher) && ReferenceEquals(existingDispatcher, dispatcher))
-                    _incomingStreamDispatchers.Remove(identifier);
+                Task.WaitAll(tasks, millisecondsTimeout);
             }
-        }
-
-        private void DrainIncomingStreamDispatchers()
-        {
-            IncomingStreamDispatcher[] dispatchers;
-            lock (_incomingStreamDispatchers)
+            catch
             {
-                dispatchers = _incomingStreamDispatchers.Values.ToArray();
-                _incomingStreamDispatchers.Clear();
             }
-
-            foreach (var dispatcher in dispatchers)
-                dispatcher.Drain();
         }
 
         private async Task ProcessIncomingStreamDispatcherAsync(uint identifier, IncomingStreamDispatcher dispatcher)
@@ -507,7 +578,7 @@ namespace JustCef
             {
                 while (true)
                 {
-                    (PacketType PacketType, uint RequestId, byte Opcode, RentedBuffer<byte>? BodyBuffer) packet;
+                    Func<Task> workItem;
                     lock (dispatcher.SyncRoot)
                     {
                         if (dispatcher.Queue.Count == 0)
@@ -516,10 +587,10 @@ namespace JustCef
                             break;
                         }
 
-                        packet = dispatcher.Queue.Dequeue();
+                        workItem = dispatcher.Queue.Dequeue();
                     }
 
-                    await HandleIncomingPacketAsync(packet.PacketType, packet.RequestId, packet.Opcode, packet.BodyBuffer);
+                    await workItem();
                 }
             }
             catch (OperationCanceledException) when (_cancellationTokenSource.IsCancellationRequested)
@@ -531,112 +602,41 @@ namespace JustCef
             }
             finally
             {
-                dispatcher.Drain();
-                RemoveIncomingStreamDispatcher(identifier, dispatcher);
-            }
-        }
+                lock (dispatcher.SyncRoot)
+                    dispatcher.WorkerTask = null;
 
-        private async Task HandleIncomingPacketAsync(PacketType packetType, uint requestId, byte opcode, RentedBuffer<byte>? rentedBodyBuffer)
-        {
-            try
-            {
-                if (packetType == PacketType.Response)
+                lock (_incomingStreamDispatchers)
                 {
-                    bool foundPendingRequest;
-                    TaskCompletionSource<byte[]>? pendingRequest;
-                    lock (_pendingRequests)
-                    {
-                        foundPendingRequest = _pendingRequests.TryGetValue(requestId, out pendingRequest);
-                    }
-
-                    if (foundPendingRequest && pendingRequest != null)
-                        pendingRequest.SetResult(rentedBodyBuffer != null ? rentedBodyBuffer.Value.Buffer.AsSpan().Slice(0, rentedBodyBuffer.Value.Length).ToArray() : Array.Empty<byte>());
-                    else
-                        Logger.Error<JustCefProcess>($"Received a packet response for a request that no longer has an awaiter (request id = {requestId}).");
+                    if (_incomingStreamDispatchers.TryGetValue(identifier, out var existingDispatcher) && ReferenceEquals(existingDispatcher, dispatcher))
+                        _incomingStreamDispatchers.Remove(identifier);
                 }
-                else if (packetType == PacketType.Request)
-                {
-                    var packetReader = new PacketReader(rentedBodyBuffer != null ? rentedBodyBuffer.Value.Buffer : Array.Empty<byte>(), rentedBodyBuffer != null ? rentedBodyBuffer.Value.Length : 0);
-                    var packetWriter = new PacketWriter();
-                    var deferredOutgoingStreams = new List<(Action Start, Action Cleanup)>();
-                    try
-                    {
-                        await HandleRequestAsync((OpcodeClient)opcode, packetReader, packetWriter, deferredOutgoingStreams, rentedBodyBuffer);
-                    }
-                    catch (Exception e)
-                    {
-                        Logger.Error<JustCefProcess>($"An exception occurred in the IPC while handling request packet", e);
-                        CleanupDeferredOutgoingStreams(deferredOutgoingStreams);
-                        deferredOutgoingStreams.Clear();
-                        packetWriter = new PacketWriter();
-                    }
-
-                    int packetSize = HeaderSize + packetWriter.Size;
-                    using var rentedBuffer = new RentedBuffer<byte>(BufferPool, packetSize);
-
-                    using (var stream = new MemoryStream(rentedBuffer.Buffer, 0, packetSize))
-                    using (var writer = new BinaryWriter(stream))
-                    {
-                        writer.Write((uint)(packetSize - 4));
-                        writer.Write(requestId);
-                        writer.Write((byte)PacketType.Response);
-                        writer.Write((byte)opcode);
-
-                        if (packetWriter.Size > 0)
-                            writer.Write(packetWriter.Data, 0, packetWriter.Size);
-                    }
-
-                    try
-                    {
-                        await WritePacketAsync(rentedBuffer.Buffer, 0, packetSize, _cancellationTokenSource.Token);
-                    }
-                    catch
-                    {
-                        CleanupDeferredOutgoingStreams(deferredOutgoingStreams);
-                        throw;
-                    }
-
-                    StartDeferredOutgoingStreams(deferredOutgoingStreams);
-                }
-                else if (packetType == PacketType.Notification)
-                {
-                    var packetReader = new PacketReader(rentedBodyBuffer != null ? rentedBodyBuffer.Value.Buffer : Array.Empty<byte>(), rentedBodyBuffer != null ? rentedBodyBuffer.Value.Length : 0);
-                    HandleNotification((OpcodeClientNotification)opcode, packetReader);
-                }
-            }
-            catch (Exception e)
-            {
-                Logger.Error<JustCefProcess>($"An exception occurred in the IPC while handling a packet", e);
-            }
-            finally
-            {
-                rentedBodyBuffer?.Dispose();
             }
         }
 
         private void HandleClientStreamOpen(PacketReader reader)
         {
             uint identifier = reader.Read<uint>();
-            if (IsIncomingStreamCanceled(identifier))
-                return;
+            lock (_incomingStreams)
+            {
+                if (_canceledIncomingStreams.Contains(identifier))
+                    return;
 
-            _ = GetOrCreateIncomingStream(identifier);
+                if (!_incomingStreams.ContainsKey(identifier))
+                    _incomingStreams[identifier] = new DataStream(identifier, OnIncomingStreamDisposed);
+            }
         }
 
         private void HandleClientStreamData(PacketReader reader, PacketWriter writer, RentedBuffer<byte>? rentedBodyBuffer)
         {
             uint identifier = reader.Read<uint>();
-            if (IsIncomingStreamCanceled(identifier))
+            DataStream? stream;
+            lock (_incomingStreams)
             {
-                writer.Write(false);
-                return;
-            }
-
-            var stream = TryGetIncomingStream(identifier);
-            if (stream == null)
-            {
-                writer.Write(false);
-                return;
+                if (_canceledIncomingStreams.Contains(identifier) || !_incomingStreams.TryGetValue(identifier, out stream))
+                {
+                    writer.Write(false);
+                    return;
+                }
             }
 
             int dataSize = reader.RemainingSize;
@@ -648,8 +648,8 @@ namespace JustCef
 
             if (rentedBodyBuffer != null)
             {
-                int dataOffset = rentedBodyBuffer.Value.Length - dataSize;
-                writer.Write(stream.WriteData(rentedBodyBuffer.Value.Buffer, dataOffset, dataSize));
+                int dataOffset = rentedBodyBuffer.Length - dataSize;
+                writer.Write(stream.WriteData(rentedBodyBuffer.Buffer, dataOffset, dataSize));
                 return;
             }
 
@@ -660,10 +660,19 @@ namespace JustCef
         private void HandleClientStreamClose(PacketReader reader)
         {
             uint identifier = reader.Read<uint>();
-            if (ClearIncomingStreamCanceled(identifier))
-                return;
+            DataStream? stream = null;
+            lock (_incomingStreams)
+            {
+                if (_canceledIncomingStreams.Remove(identifier))
+                {
+                    _incomingStreams.Remove(identifier);
+                    return;
+                }
 
-            TryGetIncomingStream(identifier)?.CloseFromRemote();
+                _incomingStreams.TryGetValue(identifier, out stream);
+            }
+
+            stream?.CloseFromRemote();
         }
 
         private void HandleClientStreamCancel(PacketReader reader)
@@ -682,18 +691,21 @@ namespace JustCef
         private void OnIncomingStreamDisposed(uint identifier, bool notifyRemote)
         {
             bool removed;
+            bool shouldNotifyRemote;
             lock (_incomingStreams)
             {
                 removed = _incomingStreams.Remove(identifier);
+                shouldNotifyRemote = removed && notifyRemote && !_cancellationTokenSource.IsCancellationRequested;
+                if (shouldNotifyRemote)
+                    _canceledIncomingStreams.Add(identifier);
             }
 
             if (!removed)
                 return;
 
-            if (!notifyRemote || _cancellationTokenSource.IsCancellationRequested)
+            if (!shouldNotifyRemote)
                 return;
 
-            MarkIncomingStreamCanceled(identifier);
             QueueBackgroundStreamTask(async () =>
             {
                 try
@@ -747,17 +759,6 @@ namespace JustCef
             }
         }
 
-        private DataStream? TryGetIncomingStream(uint identifier)
-        {
-            lock (_incomingStreams)
-            {
-                if (_incomingStreams.TryGetValue(identifier, out var stream))
-                    return stream;
-            }
-
-            return null;
-        }
-
         private DataStream GetOrCreateIncomingStream(uint identifier)
         {
             lock (_incomingStreams)
@@ -771,22 +772,16 @@ namespace JustCef
             }
         }
 
-        private bool IsIncomingStreamCanceled(uint identifier)
+        private void ReleaseIncomingStream(uint identifier)
         {
-            lock (_canceledIncomingStreams)
-                return _canceledIncomingStreams.Contains(identifier);
-        }
+            DataStream? stream = null;
+            lock (_incomingStreams)
+            {
+                if (_incomingStreams.TryGetValue(identifier, out stream))
+                    _incomingStreams.Remove(identifier);
+            }
 
-        private void MarkIncomingStreamCanceled(uint identifier)
-        {
-            lock (_canceledIncomingStreams)
-                _canceledIncomingStreams.Add(identifier);
-        }
-
-        private bool ClearIncomingStreamCanceled(uint identifier)
-        {
-            lock (_canceledIncomingStreams)
-                return _canceledIncomingStreams.Remove(identifier);
+            stream?.CloseFromRemote();
         }
 
         private async Task HandleWindowProxyRequestAsync(PacketReader reader, PacketWriter writer, List<(Action Start, Action Cleanup)> deferredOutgoingStreams)
@@ -834,7 +829,8 @@ namespace JustCef
                 if (response.Body != null && response.BodyStream != null)
                     throw new InvalidOperationException("IPCResponse cannot define both Body and BodyStream.");
 
-                transferredStreams = CollectTransferredStreams(response.BodyStream);
+                if (response.BodyStream != null)
+                    transferredStreams = new HashSet<DataStream>(ReferenceEqualityComparer.Instance) { response.BodyStream };
 
                 var responseHeaders = response.Headers
                     .SelectMany(header => header.Value
@@ -932,13 +928,10 @@ namespace JustCef
 
         private void HandleLargeBufferedContent(byte[] body, PacketWriter writer, List<(Action Start, Action Cleanup)> deferredOutgoingStreams)
         {
-            var outgoingStream = ReserveOutgoingStream();
-            WriteReservedOutgoingStreamIdentifier(writer, outgoingStream.Identifier, outgoingStream.Cleanup);
-            deferredOutgoingStreams.Add(CreateDeferredOutgoingTransfer(
-                outgoingStream.Identifier,
-                outgoingStream.CancellationTokenSource,
-                outgoingStream.Cleanup,
-                async cancellationToken =>
+            AddDeferredOutgoingStream(
+                writer,
+                deferredOutgoingStreams,
+                async (identifier, cancellationToken) =>
                 {
                     int remaining = body.Length;
                     int offset = 0;
@@ -948,24 +941,21 @@ namespace JustCef
                         cancellationToken.ThrowIfCancellationRequested();
 
                         int chunkSize = Math.Min(StreamChunkSize, remaining);
-                        if (!await StreamDataAsync(outgoingStream.Identifier, body, offset, chunkSize, cancellationToken))
+                        if (!await StreamDataAsync(identifier, body, offset, chunkSize, cancellationToken))
                             throw new Exception("Stream closed.");
 
                         remaining -= chunkSize;
                         offset += chunkSize;
                     }
-                }));
+                });
         }
 
         private void HandleLargeOrChunkedContent(DataStream stream, PacketWriter writer, List<(Action Start, Action Cleanup)> deferredOutgoingStreams, long? contentLength = null)
         {
-            var outgoingStream = ReserveOutgoingStream(() => DisposeQuietly(stream));
-            WriteReservedOutgoingStreamIdentifier(writer, outgoingStream.Identifier, outgoingStream.Cleanup);
-            deferredOutgoingStreams.Add(CreateDeferredOutgoingTransfer(
-                outgoingStream.Identifier,
-                outgoingStream.CancellationTokenSource,
-                outgoingStream.Cleanup,
-                async cancellationToken =>
+            AddDeferredOutgoingStream(
+                writer,
+                deferredOutgoingStreams,
+                async (identifier, cancellationToken) =>
                 {
                     byte[] buffer = new byte[StreamChunkSize];
                     long totalBytesRead = 0;
@@ -985,12 +975,13 @@ namespace JustCef
 
                         cancellationToken.ThrowIfCancellationRequested();
 
-                        if (!await StreamDataAsync(outgoingStream.Identifier, buffer, 0, bytesRead, cancellationToken))
+                        if (!await StreamDataAsync(identifier, buffer, 0, bytesRead, cancellationToken))
                             throw new Exception("Stream closed.");
 
                         totalBytesRead += bytesRead;
                     }
-                }));
+                },
+                () => DisposeQuietly(stream));
         }
 
         private static void ThrowIfEndedBeforeExpectedLength(long totalBytesRead, long? expectedLength, string description)
@@ -1011,6 +1002,93 @@ namespace JustCef
                     throw new EndOfStreamException($"Data stream ended after {totalRead} bytes, expected {count}.");
 
                 totalRead += bytesRead;
+            }
+        }
+
+        private void SerializeBridgeRpcPayload(PacketWriter writer, string payload, List<(Action Start, Action Cleanup)> deferredOutgoingStreams, CancellationToken cancellationToken = default)
+        {
+            byte[] payloadBytes = Encoding.UTF8.GetBytes(payload);
+            if (payloadBytes.Length <= MaxIPCSize - writer.Size - BridgeRpcInlinePayloadFramingSize)
+            {
+                writer.Write((byte)BridgeRpcPayloadEncoding.Inline);
+                writer.Write((uint)payloadBytes.Length);
+                writer.WriteBytes(payloadBytes);
+                return;
+            }
+
+            writer.Write((byte)BridgeRpcPayloadEncoding.Stream);
+            writer.Write((uint)payloadBytes.Length);
+
+            CancellationTokenRegistration cancellationRegistration = default;
+            AddDeferredOutgoingStream(
+                writer,
+                deferredOutgoingStreams,
+                async (identifier, transferCancellationToken) =>
+                {
+                    int remaining = payloadBytes.Length;
+                    int offset = 0;
+
+                    while (remaining > 0)
+                    {
+                        transferCancellationToken.ThrowIfCancellationRequested();
+
+                        int chunkSize = Math.Min(StreamChunkSize, remaining);
+                        if (!await StreamDataAsync(identifier, payloadBytes, offset, chunkSize, transferCancellationToken))
+                            throw new Exception("Stream closed.");
+
+                        remaining -= chunkSize;
+                        offset += chunkSize;
+                    }
+                },
+                () => cancellationRegistration.Dispose(),
+                cancellationTokenSource =>
+                {
+                    if (cancellationToken.CanBeCanceled)
+                    {
+                        cancellationRegistration = cancellationToken.Register(
+                            static state => ((CancellationTokenSource)state!).Cancel(),
+                            cancellationTokenSource);
+                    }
+                });
+        }
+
+        private async Task<string> DeserializeBridgeRpcPayloadAsync(PacketReader reader, string description, CancellationToken cancellationToken = default)
+        {
+            BridgeRpcPayloadEncoding encoding = (BridgeRpcPayloadEncoding)reader.Read<byte>();
+            uint payloadByteLength = reader.Read<uint>();
+            switch (encoding)
+            {
+                case BridgeRpcPayloadEncoding.Inline:
+                    return reader.ReadString(checked((int)payloadByteLength));
+                case BridgeRpcPayloadEncoding.Stream:
+                {
+                    uint streamIdentifier = reader.Read<uint>();
+                    DataStream stream = GetOrCreateIncomingStream(streamIdentifier);
+                    bool releaseStream = false;
+                    try
+                    {
+                        byte[] payloadBytes = new byte[checked((int)payloadByteLength)];
+                        if (payloadBytes.Length > 0)
+                            await ReadExactlyAsync(stream, payloadBytes, 0, payloadBytes.Length, cancellationToken);
+
+                        string payload = Encoding.UTF8.GetString(payloadBytes);
+                        releaseStream = true;
+                        return payload;
+                    }
+                    catch (EndOfStreamException e)
+                    {
+                        throw new EndOfStreamException($"Data stream for {description} ended before the declared payload length.", e);
+                    }
+                    finally
+                    {
+                        if (releaseStream)
+                            ReleaseIncomingStream(streamIdentifier);
+                        else
+                            DisposeQuietly(stream);
+                    }
+                }
+                default:
+                    throw new InvalidOperationException($"Unsupported bridge RPC payload encoding '{encoding}'.");
             }
         }
 
@@ -1061,13 +1139,10 @@ namespace JustCef
                     case IPCProxyBodyElementBytes bytesElement:
                         writer.Write((byte)IPCProxyBodyElementType.Stream);
                         writer.Write((long)bytesElement.Data.Length);
-                        var outgoingBytes = ReserveOutgoingStream();
-                        WriteReservedOutgoingStreamIdentifier(writer, outgoingBytes.Identifier, outgoingBytes.Cleanup);
-                        deferredOutgoingStreams.Add(CreateDeferredOutgoingTransfer(
-                            outgoingBytes.Identifier,
-                            outgoingBytes.CancellationTokenSource,
-                            outgoingBytes.Cleanup,
-                            async cancellationToken =>
+                        AddDeferredOutgoingStream(
+                            writer,
+                            deferredOutgoingStreams,
+                            async (identifier, cancellationToken) =>
                             {
                                 int remaining = bytesElement.Data.Length;
                                 int offset = 0;
@@ -1076,13 +1151,13 @@ namespace JustCef
                                     cancellationToken.ThrowIfCancellationRequested();
 
                                     int chunkSize = Math.Min(StreamChunkSize, remaining);
-                                    if (!await StreamDataAsync(outgoingBytes.Identifier, bytesElement.Data, offset, chunkSize, cancellationToken))
+                                    if (!await StreamDataAsync(identifier, bytesElement.Data, offset, chunkSize, cancellationToken))
                                         throw new Exception("Stream closed.");
 
                                     remaining -= chunkSize;
                                     offset += chunkSize;
                                 }
-                            }));
+                            });
                         break;
                     case IPCProxyBodyElementFile fileElement:
                         writer.Write((byte)IPCProxyBodyElementType.File);
@@ -1093,13 +1168,10 @@ namespace JustCef
                         writer.Write((byte)IPCProxyBodyElementType.Stream);
                         long? streamLength = streamedBytesElement.Length;
                         writer.Write(streamLength ?? UnknownStreamLength);
-                        var outgoingStream = ReserveOutgoingStream(() => DisposeQuietly(bodyStream));
-                        WriteReservedOutgoingStreamIdentifier(writer, outgoingStream.Identifier, outgoingStream.Cleanup);
-                        deferredOutgoingStreams.Add(CreateDeferredOutgoingTransfer(
-                            outgoingStream.Identifier,
-                            outgoingStream.CancellationTokenSource,
-                            outgoingStream.Cleanup,
-                            async cancellationToken =>
+                        AddDeferredOutgoingStream(
+                            writer,
+                            deferredOutgoingStreams,
+                            async (identifier, cancellationToken) =>
                             {
                                 byte[] buffer = new byte[StreamChunkSize];
                                 long totalBytesRead = 0;
@@ -1119,12 +1191,13 @@ namespace JustCef
 
                                     cancellationToken.ThrowIfCancellationRequested();
 
-                                    if (!await StreamDataAsync(outgoingStream.Identifier, buffer, 0, bytesRead, cancellationToken))
+                                    if (!await StreamDataAsync(identifier, buffer, 0, bytesRead, cancellationToken))
                                         throw new Exception("Stream closed.");
 
                                     totalBytesRead += bytesRead;
                                 }
-                            }));
+                            },
+                            () => DisposeQuietly(bodyStream));
                         break;
                     default:
                         throw new InvalidOperationException($"Unsupported proxy body element type '{element.GetType().Name}'.");
@@ -1132,7 +1205,12 @@ namespace JustCef
             }
         }
 
-        private (uint Identifier, CancellationTokenSource CancellationTokenSource, Action Cleanup) ReserveOutgoingStream(Action? additionalCleanup = null)
+        private void AddDeferredOutgoingStream(
+            PacketWriter writer,
+            List<(Action Start, Action Cleanup)> deferredOutgoingStreams,
+            Func<uint, CancellationToken, Task> transferAsync,
+            Action? additionalCleanup = null,
+            Action<CancellationTokenSource>? configureCancellationTokenSource = null)
         {
             uint streamIdentifier = Interlocked.Increment(ref _streamIdentifierGenerator);
             CancellationTokenSource cancellationTokenSource = new CancellationTokenSource();
@@ -1166,29 +1244,22 @@ namespace JustCef
                 cancellationTokenSource.Dispose();
             }
 
-            return (streamIdentifier, cancellationTokenSource, Cleanup);
-        }
-
-        private static void WriteReservedOutgoingStreamIdentifier(PacketWriter writer, uint identifier, Action cleanup)
-        {
             try
             {
-                writer.Write(identifier);
+                writer.Write(streamIdentifier);
+                configureCancellationTokenSource?.Invoke(cancellationTokenSource);
             }
             catch
             {
-                cleanup();
+                Cleanup();
                 throw;
             }
-        }
 
-        private (Action Start, Action Cleanup) CreateDeferredOutgoingTransfer(uint identifier, CancellationTokenSource cancellationTokenSource, Action cleanup, Func<CancellationToken, Task> transferAsync)
-        {
             void Start()
             {
                 if (cancellationTokenSource.IsCancellationRequested)
                 {
-                    cleanup();
+                    Cleanup();
                     return;
                 }
 
@@ -1197,9 +1268,9 @@ namespace JustCef
                     bool opened = false;
                     try
                     {
-                        await StreamOpenAsync(identifier, cancellationTokenSource.Token);
+                        await StreamOpenAsync(streamIdentifier, cancellationTokenSource.Token);
                         opened = true;
-                        await transferAsync(cancellationTokenSource.Token);
+                        await transferAsync(streamIdentifier, cancellationTokenSource.Token);
                     }
                     catch (OperationCanceledException) when (cancellationTokenSource.IsCancellationRequested || _cancellationTokenSource.IsCancellationRequested)
                     {
@@ -1217,23 +1288,23 @@ namespace JustCef
                         {
                             try
                             {
-                                await StreamCloseAsync(identifier);
+                                await StreamCloseAsync(streamIdentifier);
                             }
                             catch (Exception) when (_cancellationTokenSource.IsCancellationRequested)
                             {
                             }
                             catch (Exception e)
                             {
-                                Logger.Error<JustCefProcess>($"Failed to close outgoing stream {identifier}", e);
+                                Logger.Error<JustCefProcess>($"Failed to close outgoing stream {streamIdentifier}", e);
                             }
                         }
 
-                        cleanup();
+                        Cleanup();
                     }
                 });
             }
 
-            return (Start, cleanup);
+            deferredOutgoingStreams.Add((Start, Cleanup));
         }
 
         private void StartDeferredOutgoingStreams(IReadOnlyList<(Action Start, Action Cleanup)> deferredOutgoingStreams)
@@ -1267,29 +1338,6 @@ namespace JustCef
             catch
             {
             }
-        }
-
-        private static HashSet<DataStream>? CollectTransferredStreams(IEnumerable<IPCProxyBodyElement> elements)
-        {
-            HashSet<DataStream>? transferredStreams = null;
-            foreach (var element in elements)
-            {
-                if (element is not IPCProxyBodyElementStreamedBytes streamedBytesElement)
-                    continue;
-
-                transferredStreams ??= new HashSet<DataStream>(ReferenceEqualityComparer.Instance);
-                transferredStreams.Add(streamedBytesElement.BodyStream);
-            }
-
-            return transferredStreams;
-        }
-
-        private static HashSet<DataStream>? CollectTransferredStreams(DataStream? stream)
-        {
-            if (stream == null)
-                return null;
-
-            return new HashSet<DataStream>(ReferenceEqualityComparer.Instance) { stream };
         }
 
         private static void DisposeIncomingStreamElements(IEnumerable<IPCProxyBodyElement> elements, HashSet<DataStream>? transferredStreams = null)
@@ -1353,7 +1401,14 @@ namespace JustCef
                 if (modifiedRequest == null)
                     return;
 
-                transferredStreams = CollectTransferredStreams(modifiedRequest.Elements);
+                foreach (var element in modifiedRequest.Elements)
+                {
+                    if (element is not IPCProxyBodyElementStreamedBytes streamedBytesElement)
+                        continue;
+
+                    transferredStreams ??= new HashSet<DataStream>(ReferenceEqualityComparer.Instance);
+                    transferredStreams.Add(streamedBytesElement.BodyStream);
+                }
 
                 writer.WriteSizePrefixedString(modifiedRequest.Method);
                 writer.WriteSizePrefixedString(modifiedRequest.Url);
@@ -1378,41 +1433,37 @@ namespace JustCef
             }
         }
 
-        private async Task HandleWindowBridgeRpcAsync(PacketReader reader, PacketWriter writer)
+        private async Task HandleWindowBridgeRpcAsync(PacketReader reader, PacketWriter writer, List<(Action Start, Action Cleanup)> deferredOutgoingStreams)
         {
             int identifier = reader.Read<int>();
             var window = GetWindow(identifier);
             if (window == null)
             {
                 writer.Write(false);
-                writer.WriteSizePrefixedString("null");
-                writer.WriteSizePrefixedString("Bridge RPC target window no longer exists.");
+                SerializeBridgeRpcPayload(writer, "Bridge RPC target window no longer exists.", deferredOutgoingStreams, _cancellationTokenSource.Token);
                 return;
             }
 
             string? method = reader.ReadSizePrefixedString();
-            string? json = reader.ReadSizePrefixedString();
             if (string.IsNullOrWhiteSpace(method))
             {
                 writer.Write(false);
-                writer.WriteSizePrefixedString("null");
-                writer.WriteSizePrefixedString("Bridge RPC method must be a non-empty string.");
+                SerializeBridgeRpcPayload(writer, "Bridge RPC method must be a non-empty string.", deferredOutgoingStreams, _cancellationTokenSource.Token);
                 return;
             }
 
             try
             {
+                string json = await DeserializeBridgeRpcPayloadAsync(reader, "bridge RPC request payload", _cancellationTokenSource.Token);
                 string? resultJson = await window.InvokeBridgeRpcAsync(method, json);
                 writer.Write(true);
-                writer.WriteSizePrefixedString(resultJson ?? "null");
-                writer.WriteSizePrefixedString(string.Empty);
+                SerializeBridgeRpcPayload(writer, resultJson ?? "null", deferredOutgoingStreams, _cancellationTokenSource.Token);
             }
             catch (Exception e)
             {
                 Logger.Error<JustCefProcess>("Exception occurred while processing bridge RPC", e);
                 writer.Write(false);
-                writer.WriteSizePrefixedString("null");
-                writer.WriteSizePrefixedString(e.Message);
+                SerializeBridgeRpcPayload(writer, e.Message, deferredOutgoingStreams, _cancellationTokenSource.Token);
             }
         }
 
@@ -1502,7 +1553,7 @@ namespace JustCef
             }
         }
 
-        public static RentedBuffer<byte> RentedBytesFromStruct<TStruct>(TStruct s) where TStruct : struct
+        private static RentedBuffer<byte> RentedBytesFromStruct<TStruct>(TStruct s) where TStruct : struct
         {
             var span = MemoryMarshal.AsBytes(MemoryMarshal.CreateReadOnlySpan(ref s, 1));
             var buffer = new RentedBuffer<byte>(BufferPool, span.Length);
@@ -1518,6 +1569,11 @@ namespace JustCef
         public async Task<PacketReader> CallAsync(OpcodeController opcode, PacketWriter writer, CancellationToken cancellationToken = default)
         {
             return await CallAsync(opcode, writer.Data, 0, writer.Size, cancellationToken);
+        }
+
+        private async Task<PacketReader> CallAsync(OpcodeController opcode, PacketWriter writer, List<(Action Start, Action Cleanup)> deferredOutgoingStreams, CancellationToken cancellationToken = default)
+        {
+            return await CallAsync(opcode, writer.Data, 0, writer.Size, deferredOutgoingStreams, cancellationToken);
         }
 
         public async Task<PacketReader> CallAsync<TRequest>(OpcodeController opcode, TRequest request, CancellationToken cancellationToken = default)
@@ -1611,6 +1667,11 @@ namespace JustCef
 
         private async Task<PacketReader> CallAsync(OpcodeController opcode, byte[] body, int offset, int size, CancellationToken cancellationToken = default)
         {
+            return await CallAsync(opcode, body, offset, size, null, cancellationToken);
+        }
+
+        private async Task<PacketReader> CallAsync(OpcodeController opcode, byte[] body, int offset, int size, IReadOnlyList<(Action Start, Action Cleanup)>? deferredOutgoingStreams, CancellationToken cancellationToken = default)
+        {
             EnsureStarted();
 
             using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(_cancellationTokenSource.Token, cancellationToken);
@@ -1637,9 +1698,15 @@ namespace JustCef
                     writer.Write(body, offset, size);
             }
 
+            bool deferredStreamsStarted = false;
             try
             {
                 await WritePacketAsync(rentedBuffer.Buffer, 0, packetLength, linkedCts.Token);
+                if (deferredOutgoingStreams != null && deferredOutgoingStreams.Count > 0)
+                {
+                    StartDeferredOutgoingStreams(deferredOutgoingStreams);
+                    deferredStreamsStarted = true;
+                }
 
                 byte[] responseBody;
                 using (linkedCts.Token.Register(() => pendingRequest.TrySetCanceled()))
@@ -1648,6 +1715,13 @@ namespace JustCef
                 }
 
                 return new PacketReader(responseBody);
+            }
+            catch
+            {
+                if (!deferredStreamsStarted && deferredOutgoingStreams != null)
+                    CleanupDeferredOutgoingStreams(deferredOutgoingStreams);
+
+                throw;
             }
             finally
             {
@@ -2071,16 +2145,16 @@ namespace JustCef
             var writer = new PacketWriter();
             writer.Write(identifier);
             writer.WriteSizePrefixedString(method);
-            writer.WriteSizePrefixedString(json ?? "null");
+            var deferredOutgoingStreams = new List<(Action Start, Action Cleanup)>();
+            SerializeBridgeRpcPayload(writer, json ?? "null", deferredOutgoingStreams, cancellationToken);
 
-            var reader = await CallAsync(OpcodeController.WindowBridgeRpc, writer, cancellationToken);
+            var reader = await CallAsync(OpcodeController.WindowBridgeRpc, writer, deferredOutgoingStreams, cancellationToken);
             bool success = reader.Read<bool>();
-            string resultJson = reader.ReadSizePrefixedString() ?? "null";
-            string error = reader.ReadSizePrefixedString() ?? "Bridge RPC failed.";
+            string payload = await DeserializeBridgeRpcPayloadAsync(reader, success ? "bridge RPC response payload" : "bridge RPC error payload", cancellationToken);
             if (!success)
-                throw new InvalidOperationException(error);
+                throw new InvalidOperationException(payload);
 
-            return resultJson;
+            return payload;
         }
 
         public async Task WindowSetTitleAsync(int identifier, string title, CancellationToken cancellationToken = default)
@@ -2155,7 +2229,6 @@ namespace JustCef
 
         public void Dispose()
         {
-            DrainIncomingStreamDispatchers();
             _cancellationTokenSource.Cancel();
 
             SignalExited();
@@ -2187,16 +2260,18 @@ namespace JustCef
                 _streamCancellationTokens.Clear();
             }
 
+            DataStream[] streamsToDispose;
             lock (_incomingStreams)
             {
-                foreach (var stream in _incomingStreams.Values.ToArray())
-                    stream.Dispose();
+                streamsToDispose = _incomingStreams.Values.ToArray();
                 _incomingStreams.Clear();
+                _canceledIncomingStreams.Clear();
             }
 
-            lock (_canceledIncomingStreams)
-                _canceledIncomingStreams.Clear();
+            foreach (var stream in streamsToDispose)
+                stream.Dispose();
 
+            WaitForIncomingStreamDispatchers(1000);
             WaitForBackgroundStreamTasks(1000);
 
             _writer.Dispose();

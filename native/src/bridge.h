@@ -7,6 +7,8 @@
 #include "include/cef_values.h"
 #include "include/cef_v8.h"
 
+#include <string>
+
 constexpr char kBridgeEnabledExtraInfoKey[] = "bridgeEnabled";
 constexpr char kBridgeRpcCallHostMessageName[] = "JustCef.BridgeRpc.CallHost";
 constexpr char kBridgeRpcCallHostResultMessageName[] = "JustCef.BridgeRpc.CallHostResult";
@@ -17,6 +19,10 @@ constexpr char kBridgeRpcContextReleasedMessageName[] = "JustCef.BridgeRpc.Conte
 CefRefPtr<CefDictionaryValue> CreateBridgeExtraInfo(bool bridge_enabled, CefRefPtr<CefDictionaryValue> base_info = nullptr);
 bool IsBridgeEnabled(CefRefPtr<CefDictionaryValue> extra_info);
 void InstallBridge(CefRefPtr<CefV8Context> context);
+bool SendBridgeRpcCallMessage(CefRefPtr<CefFrame> frame, CefProcessId target_process, const char* message_name, int32_t request_id, const std::string& method, const std::string& payload_json);
+bool SendBridgeRpcResultMessage(CefRefPtr<CefFrame> frame, CefProcessId target_process, const char* message_name, int32_t request_id, bool success, const std::string& payload);
+bool ParseBridgeRpcCallMessage(CefRefPtr<CefProcessMessage> message, int32_t& request_id, std::string& method, std::string& payload_json);
+bool ParseBridgeRpcResultMessage(CefRefPtr<CefProcessMessage> message, int32_t& request_id, bool& success, std::string& payload);
 bool HandleBridgeProcessMessage(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefRefPtr<CefProcessMessage> message);
 void ReleaseBridgeContext(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefRefPtr<CefV8Context> context);
 void ClearBridgeState(CefRefPtr<CefBrowser> browser);

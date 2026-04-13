@@ -38,6 +38,12 @@ constexpr uint8_t kIPCProxyBodyElementStream = 3;
 constexpr size_t kInlineBodyElementFramingSize = sizeof(uint8_t) + sizeof(uint32_t);
 constexpr size_t kStreamBodyElementFramingSize = sizeof(uint8_t) + sizeof(int64_t) + sizeof(uint32_t);
 constexpr size_t kStreamChunkSize = 65536;
+constexpr size_t kBridgeRpcInlinePayloadFramingSize = sizeof(uint8_t) + sizeof(uint32_t);
+
+enum class BridgeRpcPayloadEncoding : uint8_t {
+    Inline = 0,
+    Stream = 1
+};
 
 IPCBridgeRpcResult MakeBridgeRpcResult(bool success, const std::string& result_json, const std::string& error) {
     IPCBridgeRpcResult result;
@@ -47,10 +53,15 @@ IPCBridgeRpcResult MakeBridgeRpcResult(bool success, const std::string& result_j
     return result;
 }
 
-void WriteBridgeRpcResult(PacketWriter& writer, bool success, const std::string& result_json, const std::string& error) {
-    writer.write<bool>(success);
-    writer.writeSizePrefixedString(result_json);
-    writer.writeSizePrefixedString(error);
+bool WriteInlineBridgeRpcPayload(PacketWriter& writer, const std::string& payload) {
+    return writer.write<uint8_t>(static_cast<uint8_t>(BridgeRpcPayloadEncoding::Inline)) &&
+        writer.write<uint32_t>(static_cast<uint32_t>(payload.size())) &&
+        writer.writeBytes(reinterpret_cast<const uint8_t*>(payload.data()), payload.size());
+}
+
+bool WriteInlineBridgeRpcResult(PacketWriter& writer, bool success, const std::string& payload) {
+    return writer.write<bool>(success) &&
+        WriteInlineBridgeRpcPayload(writer, payload);
 }
 
 }  // namespace
@@ -526,16 +537,23 @@ void IPC::Notify(OpcodeClientNotification opcode, const uint8_t* body, size_t si
     _pipe.Write(_sendBuffer.data(), packetLength, true);
 }
 
-void IPC::QueueResponse(OpcodeController opcode, uint32_t requestId, const PacketWriter& writer)
+void IPC::QueueResponse(OpcodeController opcode, uint32_t requestId, const PacketWriter& writer, std::function<void()> afterWrite, std::function<void()> onAbort)
 {
-    if (!IsAvailable())
+    if (!IsAvailable()) {
+        if (onAbort) {
+            onAbort();
+        }
         return;
+    }
 
     size_t packetLength = sizeof(IPCPacketHeader) + writer.size();
     std::shared_ptr<std::vector<uint8_t>> packet = _ipcBufferPool.GetBuffer();
     if (packet->size() < packetLength) {
         LOG(ERROR) << "Queued response packet exceeds buffer pool capacity.";
         _ipcBufferPool.ReturnBuffer(packet);
+        if (onAbort) {
+            onAbort();
+        }
         return;
     }
 
@@ -549,11 +567,17 @@ void IPC::QueueResponse(OpcodeController opcode, uint32_t requestId, const Packe
         memcpy(packet->data() + sizeof(IPCPacketHeader), writer.data(), writer.size());
     }
 
-    if (!QueueBackgroundWork([this, packet, packetLength] () {
+    if (!QueueBackgroundWork([this, packet, packetLength, afterWrite = std::move(afterWrite)] () mutable {
         WriteQueuedResponsePacket(packet->data(), packetLength);
+        if (afterWrite) {
+            afterWrite();
+        }
         _ipcBufferPool.ReturnBuffer(packet);
     })) {
         _ipcBufferPool.ReturnBuffer(packet);
+        if (onAbort) {
+            onAbort();
+        }
     }
 }
 
@@ -844,7 +868,7 @@ bool IPC::HandleRequest(uint32_t requestId, OpcodeController opcode, PacketReade
             HandleRemoveDevToolsEventMethod(reader, writer);
             return true;
         case OpcodeController::WindowBridgeRpc:
-            return HandleWindowBridgeRpc(requestId, reader, writer);
+            return HandleWindowBridgeRpcRequest(requestId, reader, writer);
         default:
             LOG(ERROR) << "Unknown opcode " << (uint32_t)opcode << ".";
             return true;
@@ -1013,6 +1037,146 @@ bool IPC::SerializePostData(PacketWriter& writer, CefRefPtr<CefPostData> postDat
     }
 
     return true;
+}
+
+bool IPC::SerializeBridgeRpcPayload(PacketWriter& writer, const std::string& payload, std::vector<std::function<void()>>& streamWriters, std::function<void()>* onAbort)
+{
+    if (payload.size() > std::numeric_limits<uint32_t>::max()) {
+        LOG(ERROR) << "Bridge RPC payload exceeds supported size.";
+        return false;
+    }
+
+    if (payload.size() <= MAXIMUM_IPC_SIZE - writer.size() - kBridgeRpcInlinePayloadFramingSize) {
+        if (onAbort) {
+            *onAbort = nullptr;
+        }
+
+        return WriteInlineBridgeRpcPayload(writer, payload);
+    }
+
+    if (!writer.write<uint8_t>(static_cast<uint8_t>(BridgeRpcPayloadEncoding::Stream)) ||
+        !writer.write<uint32_t>(static_cast<uint32_t>(payload.size()))) {
+        return false;
+    }
+
+    uint32_t streamIdentifier = ++_streamIdentifierCounter;
+    std::shared_ptr<std::atomic<bool>> cancelFlag = RegisterOutgoingStream(streamIdentifier);
+    if (!writer.write<uint32_t>(streamIdentifier)) {
+        RemoveOutgoingStream(streamIdentifier);
+        return false;
+    }
+
+    if (onAbort) {
+        *onAbort = [this, streamIdentifier]() {
+            RemoveOutgoingStream(streamIdentifier);
+        };
+    }
+
+    std::shared_ptr<std::string> sharedPayload = std::make_shared<std::string>(payload);
+    streamWriters.push_back([this, streamIdentifier, cancelFlag, sharedPayload]()
+    {
+        if (cancelFlag->load()) {
+            RemoveOutgoingStream(streamIdentifier);
+            return;
+        }
+
+        if (!OpenClientStream(streamIdentifier)) {
+            RemoveOutgoingStream(streamIdentifier);
+            return;
+        }
+
+        size_t offset = 0;
+        while (offset < sharedPayload->size() && IsAvailable() && !cancelFlag->load())
+        {
+            size_t chunkSize = std::min(kStreamChunkSize, sharedPayload->size() - offset);
+            if (!StreamClientData(streamIdentifier, reinterpret_cast<const uint8_t*>(sharedPayload->data()) + offset, chunkSize)) {
+                break;
+            }
+
+            offset += chunkSize;
+        }
+
+        RemoveOutgoingStream(streamIdentifier);
+        CloseClientStream(streamIdentifier);
+    });
+
+    return true;
+}
+
+bool IPC::DeserializeBridgeRpcPayload(PacketReader& reader, std::string& payload)
+{
+    std::optional<uint8_t> encoding = reader.read<uint8_t>();
+    std::optional<uint32_t> payloadSize = reader.read<uint32_t>();
+    if (!encoding || !payloadSize) {
+        return false;
+    }
+
+    if (*encoding == static_cast<uint8_t>(BridgeRpcPayloadEncoding::Inline)) {
+        std::optional<std::string> inlinePayload = reader.readString(*payloadSize);
+        if (!inlinePayload) {
+            return false;
+        }
+
+        payload = std::move(*inlinePayload);
+        return true;
+    }
+
+    if (*encoding == static_cast<uint8_t>(BridgeRpcPayloadEncoding::Stream)) {
+        std::optional<uint32_t> streamId = reader.read<uint32_t>();
+        if (!streamId) {
+            return false;
+        }
+
+        std::shared_ptr<DataStream> bodyStream = GetOrCreateIncomingStream(*streamId);
+        payload.resize(*payloadSize);
+
+        size_t totalRead = 0;
+        while (totalRead < payload.size())
+        {
+            size_t bytesRead = bodyStream->Read(
+                reinterpret_cast<uint8_t*>(payload.data()) + totalRead,
+                payload.size() - totalRead);
+            if (bytesRead == 0) {
+                break;
+            }
+
+            totalRead += bytesRead;
+        }
+
+        ReleaseIncomingStream(*streamId);
+        return totalRead == payload.size();
+    }
+
+    return false;
+}
+
+void IPC::QueueWindowBridgeRpcResponse(uint32_t requestId, bool success, const std::string& payload)
+{
+    PacketWriter writer;
+    std::vector<std::function<void()>> streamWriters;
+    std::function<void()> onAbort = nullptr;
+
+    if (!writer.write<bool>(success) ||
+        !SerializeBridgeRpcPayload(writer, payload, streamWriters, &onAbort)) {
+        streamWriters.clear();
+        onAbort = nullptr;
+        writer = PacketWriter();
+        WriteInlineBridgeRpcResult(writer, false, "Failed to serialize the bridge RPC response.");
+    }
+
+    if (streamWriters.empty()) {
+        QueueResponse(OpcodeController::WindowBridgeRpc, requestId, writer);
+        return;
+    }
+
+    QueueResponse(
+        OpcodeController::WindowBridgeRpc,
+        requestId,
+        writer,
+        [this, streamWriters = std::move(streamWriters)]() mutable {
+            QueueDeferredStreamWriters(std::move(streamWriters));
+        },
+        std::move(onAbort));
 }
 
 std::vector<uint8_t> IPC::Echo(const uint8_t* data, size_t size)
@@ -1423,24 +1587,45 @@ IPCBridgeRpcResult IPC::WindowBridgeRpc(int32_t identifier, const std::string& m
     }
 
     PacketWriter writer;
+    std::vector<std::function<void()>> streamWriters;
     writer.write<int32_t>(identifier);
     writer.writeSizePrefixedString(method);
-    writer.writeSizePrefixedString(payload_json);
+    if (!SerializeBridgeRpcPayload(writer, payload_json, streamWriters)) {
+        return MakeBridgeRpcResult(false, "null", "Failed to serialize the bridge RPC payload.");
+    }
 
-    std::vector<uint8_t> response = Call(OpcodeClient::WindowBridgeRpc, writer.data(), writer.size());
+    std::function<void()> afterWrite = nullptr;
+    if (!streamWriters.empty()) {
+        afterWrite = [this, streamWriters = std::move(streamWriters)]() mutable {
+            QueueDeferredStreamWriters(std::move(streamWriters));
+        };
+    }
+
+    std::vector<uint8_t> response = Call(
+        OpcodeClient::WindowBridgeRpc,
+        writer.data(),
+        writer.size(),
+        std::move(afterWrite));
     if (response.empty()) {
         return MakeBridgeRpcResult(false, "null", "Bridge RPC returned an empty response.");
     }
 
     PacketReader reader(response.data(), response.size());
     std::optional<bool> success = reader.read<bool>();
-    std::optional<std::string> result_json = reader.readSizePrefixedString();
-    std::optional<std::string> error = reader.readSizePrefixedString();
-    if (!success || !result_json || !error) {
+    if (!success) {
         return MakeBridgeRpcResult(false, "null", "Failed to parse the bridge RPC response.");
     }
 
-    return MakeBridgeRpcResult(*success, *result_json, *error);
+    std::string payload;
+    if (!DeserializeBridgeRpcPayload(reader, payload)) {
+        return MakeBridgeRpcResult(false, "null", "Failed to parse the bridge RPC response payload.");
+    }
+
+    if (*success) {
+        return MakeBridgeRpcResult(true, payload, "");
+    }
+
+    return MakeBridgeRpcResult(false, "null", payload);
 }
 
 void IPC::NotifyWindowOpened(CefRefPtr<CefBrowser> browser)
@@ -1869,18 +2054,18 @@ void HandleWindowCreate(PacketReader& reader, PacketWriter& writer)
     writer.write<int32_t>(client->GetIdentifier());
 }
 
-bool HandleWindowBridgeRpc(uint32_t requestId, PacketReader& reader, PacketWriter& writer)
+bool IPC::HandleWindowBridgeRpcRequest(uint32_t requestId, PacketReader& reader, PacketWriter& writer)
 {
     std::optional<int32_t> identifier = reader.read<int32_t>();
     std::optional<std::string> method = reader.readSizePrefixedString();
-    std::optional<std::string> payload_json = reader.readSizePrefixedString();
-    if (!identifier || !method || !payload_json) {
-        WriteBridgeRpcResult(writer, false, "null", "WindowBridgeRpc called without valid data.");
+    std::string payload_json;
+    if (!identifier || !method || !DeserializeBridgeRpcPayload(reader, payload_json)) {
+        WriteInlineBridgeRpcResult(writer, false, "WindowBridgeRpc called without valid data.");
         return true;
     }
 
     if (CefCurrentlyOn(TID_UI)) {
-        WriteBridgeRpcResult(writer, false, "null", "WindowBridgeRpc cannot block the CEF UI thread.");
+        WriteInlineBridgeRpcResult(writer, false, "WindowBridgeRpc cannot block the CEF UI thread.");
         return true;
     }
 
@@ -1889,7 +2074,7 @@ bool HandleWindowBridgeRpc(uint32_t requestId, PacketReader& reader, PacketWrite
             PacketWriter writer;
             CefRefPtr<CefBrowser> browser = ClientManager::GetInstance()->AcquirePointer(identifier);
             if (!browser) {
-                WriteBridgeRpcResult(writer, false, "null", "HandleWindowBridgeRpc called while the browser is already closed.");
+                WriteInlineBridgeRpcResult(writer, false, "HandleWindowBridgeRpc called while the browser is already closed.");
                 IPC::Singleton.QueueResponse(OpcodeController::WindowBridgeRpc, requestId, writer);
                 return;
             }
@@ -1897,15 +2082,15 @@ bool HandleWindowBridgeRpc(uint32_t requestId, PacketReader& reader, PacketWrite
             CefRefPtr<CefClient> cef_client = browser->GetHost()->GetClient();
             Client* client = static_cast<Client*>(cef_client.get());
             if (!client) {
-                WriteBridgeRpcResult(writer, false, "null", "HandleWindowBridgeRpc failed to acquire the client.");
+                WriteInlineBridgeRpcResult(writer, false, "HandleWindowBridgeRpc failed to acquire the client.");
                 IPC::Singleton.QueueResponse(OpcodeController::WindowBridgeRpc, requestId, writer);
                 return;
             }
 
             client->StartBridgeRpcCall(browser, method, payload_json, requestId);
-        }, requestId, *identifier, *method, *payload_json))
+        }, requestId, *identifier, *method, std::move(payload_json)))
     ) {
-        WriteBridgeRpcResult(writer, false, "null", "WindowBridgeRpc failed to post work to the CEF UI thread.");
+        WriteInlineBridgeRpcResult(writer, false, "WindowBridgeRpc failed to post work to the CEF UI thread.");
         return true;
     }
     return false;

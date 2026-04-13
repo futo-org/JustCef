@@ -147,11 +147,10 @@ inline bool EndsWith(const std::string& str, const std::string& suffix) {
 }
 
 void QueueClientBridgeRpcResponse(uint32_t controller_request_id, bool success, const std::string& result_json, const std::string& error) {
-    PacketWriter writer;
-    writer.write<bool>(success);
-    writer.writeSizePrefixedString(result_json);
-    writer.writeSizePrefixedString(error);
-    IPC::Singleton.QueueResponse(OpcodeController::WindowBridgeRpc, controller_request_id, writer);
+    IPC::Singleton.QueueWindowBridgeRpcResponse(
+        controller_request_id,
+        success,
+        success ? result_json : error);
 }
 
 std::string ExtractHostFromURL(const std::string& url) 
@@ -996,12 +995,13 @@ void Client::StartBridgeRpcCall(CefRefPtr<CefBrowser> browser, const std::string
         _bridgeRpcResults[request_id] = controllerRequestId;
     }
 
-    CefRefPtr<CefProcessMessage> message = CefProcessMessage::Create(kBridgeRpcCallJsMessageName);
-    CefRefPtr<CefListValue> arguments = message->GetArgumentList();
-    arguments->SetInt(0, request_id);
-    arguments->SetString(1, method);
-    arguments->SetString(2, payload_json);
-    frame->SendProcessMessage(PID_RENDERER, message);
+    SendBridgeRpcCallMessage(
+        frame,
+        PID_RENDERER,
+        kBridgeRpcCallJsMessageName,
+        request_id,
+        method,
+        payload_json);
 }
 
 void Client::CompleteBridgeRpcCall(int32_t request_id, bool success, const std::optional<std::string>& result_json, const std::optional<std::string>& error)
@@ -1068,15 +1068,13 @@ bool Client::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser, CefRefPtr<C
     }
 
     if (message_name == kBridgeRpcCallHostMessageName) {
-        CefRefPtr<CefListValue> arguments = message->GetArgumentList();
-        if (!arguments || arguments->GetSize() < 3 || arguments->GetType(0) != VTYPE_INT ||
-            arguments->GetType(1) != VTYPE_STRING || arguments->GetType(2) != VTYPE_STRING) {
+        int32_t request_id = 0;
+        std::string method;
+        std::string payload_json;
+        if (!ParseBridgeRpcCallMessage(message, request_id, method, payload_json)) {
             return true;
         }
 
-        const int32_t request_id = arguments->GetInt(0);
-        const std::string method = arguments->GetString(1);
-        const std::string payload_json = arguments->GetString(2);
         const int32_t browser_identifier = browser ? browser->GetIdentifier() : 0;
 
         IPC::Singleton.QueueBackgroundWork([request_id, method, payload_json, browser_identifier]() {
@@ -1095,14 +1093,15 @@ bool Client::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser, CefRefPtr<C
                         return;
                     }
 
-                    CefRefPtr<CefProcessMessage> message = CefProcessMessage::Create(kBridgeRpcCallHostResultMessageName);
-                    CefRefPtr<CefListValue> arguments = message->GetArgumentList();
-                    arguments->SetInt(0, request_id);
-                    arguments->SetBool(1, result.success);
-                    arguments->SetString(2, result.success
-                        ? result.result_json.value_or("null")
-                        : result.error.value_or("Bridge RPC failed."));
-                    frame->SendProcessMessage(PID_RENDERER, message);
+                    SendBridgeRpcResultMessage(
+                        frame,
+                        PID_RENDERER,
+                        kBridgeRpcCallHostResultMessageName,
+                        request_id,
+                        result.success,
+                        result.success
+                            ? result.result_json.value_or("null")
+                            : result.error.value_or("Bridge RPC failed."));
                 },
                 browser_identifier,
                 request_id,
@@ -1113,13 +1112,18 @@ bool Client::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser, CefRefPtr<C
     }
 
     if (message_name == kBridgeRpcCallJsResultMessageName) {
-        CefRefPtr<CefListValue> arguments = message->GetArgumentList();
-        if (!arguments || arguments->GetSize() < 3 || arguments->GetType(0) != VTYPE_INT ||
-            arguments->GetType(1) != VTYPE_BOOL || arguments->GetType(2) != VTYPE_STRING) {
+        int32_t request_id = 0;
+        bool success = false;
+        std::string payload;
+        if (!ParseBridgeRpcResultMessage(message, request_id, success, payload)) {
             return true;
         }
 
-        CompleteBridgeRpcCall(arguments->GetInt(0), arguments->GetBool(1), arguments->GetBool(1) ? std::optional<std::string>(arguments->GetString(2)) : std::optional<std::string>("null"), arguments->GetBool(1) ? std::optional<std::string>("") : std::optional<std::string>(arguments->GetString(2)));
+        CompleteBridgeRpcCall(
+            request_id,
+            success,
+            success ? std::optional<std::string>(payload) : std::optional<std::string>("null"),
+            success ? std::optional<std::string>("") : std::optional<std::string>(payload));
         return true;
     }
 

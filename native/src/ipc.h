@@ -237,6 +237,7 @@ public:
     void WindowModifyRequest(int32_t identifier, CefRefPtr<CefRequest> request, bool modifyRequestBody);
     std::unique_ptr<IPCProxyResponse> WindowProxyRequest(int32_t identifier, CefRefPtr<CefRequest> request);
     IPCBridgeRpcResult WindowBridgeRpc(int32_t identifier, const std::string& method, const std::string& payload_json);
+    void QueueWindowBridgeRpcResponse(uint32_t requestId, bool success, const std::string& payload);
     
     void NotifyExit() { Notify(OpcodeClientNotification::Exit); }
     void NotifyReady() { Notify(OpcodeClientNotification::Ready); }
@@ -256,7 +257,7 @@ public:
     void NotifyWindowLoadEnd(CefRefPtr<CefBrowser> browser, const CefString& url);
     void NotifyWindowLoadError(CefRefPtr<CefBrowser> browser, cef_errorcode_t errorCode, const CefString& errorText, const CefString& url);
     void NotifyWindowDevToolsEvent(CefRefPtr<CefBrowser> browser, const CefString& method, const uint8_t* result, size_t result_size);
-    void QueueResponse(OpcodeController opcode, uint32_t requestId, const PacketWriter& writer);
+    void QueueResponse(OpcodeController opcode, uint32_t requestId, const PacketWriter& writer, std::function<void()> afterWrite = nullptr, std::function<void()> onAbort = nullptr);
 
     void QueueWork(std::function<void()> work) 
     {
@@ -303,6 +304,9 @@ private:
     std::shared_ptr<std::atomic<bool>> GetOutgoingStreamCancelFlag(uint32_t identifier);
     void RemoveOutgoingStream(uint32_t identifier);
     bool SerializePostData(PacketWriter& writer, CefRefPtr<CefPostData> postData, std::vector<std::function<void()>>& streamWriters);
+    bool SerializeBridgeRpcPayload(PacketWriter& writer, const std::string& payload, std::vector<std::function<void()>>& streamWriters, std::function<void()>* onAbort = nullptr);
+    bool DeserializeBridgeRpcPayload(PacketReader& reader, std::string& payload);
+    bool HandleWindowBridgeRpcRequest(uint32_t requestId, PacketReader& reader, PacketWriter& writer);
 
     std::atomic<uint32_t> _requestIdCounter;
     std::atomic<uint32_t> _streamIdentifierCounter;
