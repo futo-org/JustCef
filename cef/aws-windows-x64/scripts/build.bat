@@ -71,11 +71,11 @@ set "GN_DEFINES="
 
 if /I "%ARCH%"=="x64" (
   set "ARCH_ARG=--x64-build"
-  set "GN_DEFINES=is_official_build=true proprietary_codecs=true ffmpeg_branding=Chrome is_component_build=false is_debug=false enable_widevine=true enable_printing=true enable_cdm_host_verification=true angle_enable_vulkan_validation_layers=false dawn_enable_vulkan_validation_layers=false dawn_use_built_dxc=false"
+  set "GN_DEFINES=is_official_build=true proprietary_codecs=true ffmpeg_branding=Chrome is_debug=false enable_widevine=true enable_cdm_host_verification=true angle_enable_vulkan_validation_layers=false dawn_enable_vulkan_validation_layers=false"
 ) else if /I "%ARCH%"=="arm64" (
   set "ARCH_ARG=--arm64-build"
   set "CEF_ENABLE_ARM64=1"
-  set "GN_DEFINES=is_official_build=true proprietary_codecs=true ffmpeg_branding=Chrome is_debug=false chrome_pgo_phase=0 use_thin_lto=false enable_widevine=true enable_printing=true enable_cdm_host_verification=true angle_enable_vulkan_validation_layers=false dawn_enable_vulkan_validation_layers=false dawn_use_built_dxc=false"
+  set "GN_DEFINES=is_official_build=true proprietary_codecs=true ffmpeg_branding=Chrome is_debug=false enable_widevine=true enable_cdm_host_verification=true angle_enable_vulkan_validation_layers=false dawn_enable_vulkan_validation_layers=false"
 ) else (
   echo Unsupported architecture: %ARCH%
   exit /b 1

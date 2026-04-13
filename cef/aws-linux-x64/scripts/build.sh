@@ -28,7 +28,7 @@ if [ -n "${CEF_CHECKOUT_RAW}" ]; then
   CHECKOUT_ARG="--checkout=${CEF_CHECKOUT}"
 fi
 
-export GN_DEFINES="is_official_build=true proprietary_codecs=true ffmpeg_branding=Chrome use_sysroot=true symbol_level=1 is_cfi=false use_thin_lto=false is_component_ffmpeg=false enable_widevine=true enable_printing=true enable_cdm_host_verification=false angle_enable_vulkan_validation_layers=false dawn_enable_vulkan_validation_layers=false dawn_use_built_dxc=false"
+export GN_DEFINES="is_official_build=true proprietary_codecs=true ffmpeg_branding=Chrome use_sysroot=true symbol_level=1 use_thin_lto=false enable_widevine=true enable_cdm_host_verification=false angle_enable_vulkan_validation_layers=false dawn_enable_vulkan_validation_layers=false dawn_use_built_dxc=false"
 export CEF_USE_GN=1
 export CEF_ARCHIVE_FORMAT=tar.bz2
 export CEF_CUSTOM_PATCH_SCRIPT="${REPO_ROOT}/patches/apply_cef_patches.py"
