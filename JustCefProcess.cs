@@ -957,28 +957,34 @@ namespace JustCef
                 deferredOutgoingStreams,
                 async (identifier, cancellationToken) =>
                 {
-                    byte[] buffer = new byte[StreamChunkSize];
+                    byte[] buffer = ArrayPool<byte>.Shared.Rent(StreamChunkSize);
                     long totalBytesRead = 0;
-
-                    while (!contentLength.HasValue || totalBytesRead < contentLength.Value)
+                    try
                     {
-                        int requestedBytes = contentLength.HasValue
-                            ? (int)Math.Min(buffer.Length, contentLength.Value - totalBytesRead)
-                            : buffer.Length;
-
-                        int bytesRead = await stream.ReadAsync(buffer, 0, requestedBytes, cancellationToken);
-                        if (bytesRead <= 0)
+                        while (!contentLength.HasValue || totalBytesRead < contentLength.Value)
                         {
-                            ThrowIfEndedBeforeExpectedLength(totalBytesRead, contentLength, "proxy response body");
-                            break;
+                            int requestedBytes = contentLength.HasValue
+                                ? (int)Math.Min(buffer.Length, contentLength.Value - totalBytesRead)
+                                : buffer.Length;
+
+                            int bytesRead = await stream.ReadAsync(buffer, 0, requestedBytes, cancellationToken);
+                            if (bytesRead <= 0)
+                            {
+                                ThrowIfEndedBeforeExpectedLength(totalBytesRead, contentLength, "proxy response body");
+                                break;
+                            }
+
+                            cancellationToken.ThrowIfCancellationRequested();
+
+                            if (!await StreamDataAsync(identifier, buffer, 0, bytesRead, cancellationToken))
+                                throw new Exception("Stream closed.");
+
+                            totalBytesRead += bytesRead;
                         }
-
-                        cancellationToken.ThrowIfCancellationRequested();
-
-                        if (!await StreamDataAsync(identifier, buffer, 0, bytesRead, cancellationToken))
-                            throw new Exception("Stream closed.");
-
-                        totalBytesRead += bytesRead;
+                    }
+                    finally
+                    {
+                        ArrayPool<byte>.Shared.Return(buffer);
                     }
                 },
                 () => DisposeQuietly(stream));
@@ -1173,28 +1179,34 @@ namespace JustCef
                             deferredOutgoingStreams,
                             async (identifier, cancellationToken) =>
                             {
-                                byte[] buffer = new byte[StreamChunkSize];
+                                byte[] buffer = ArrayPool<byte>.Shared.Rent(StreamChunkSize);
                                 long totalBytesRead = 0;
-
-                                while (!streamLength.HasValue || totalBytesRead < streamLength.Value)
+                                try
                                 {
-                                    int requestedBytes = streamLength.HasValue
-                                        ? (int)Math.Min(buffer.Length, streamLength.Value - totalBytesRead)
-                                        : buffer.Length;
-
-                                    int bytesRead = await bodyStream.ReadAsync(buffer, 0, requestedBytes, cancellationToken);
-                                    if (bytesRead <= 0)
+                                    while (!streamLength.HasValue || totalBytesRead < streamLength.Value)
                                     {
-                                        ThrowIfEndedBeforeExpectedLength(totalBytesRead, streamLength, "modified request body element");
-                                        break;
+                                        int requestedBytes = streamLength.HasValue
+                                            ? (int)Math.Min(buffer.Length, streamLength.Value - totalBytesRead)
+                                            : buffer.Length;
+
+                                        int bytesRead = await bodyStream.ReadAsync(buffer, 0, requestedBytes, cancellationToken);
+                                        if (bytesRead <= 0)
+                                        {
+                                            ThrowIfEndedBeforeExpectedLength(totalBytesRead, streamLength, "modified request body element");
+                                            break;
+                                        }
+
+                                        cancellationToken.ThrowIfCancellationRequested();
+
+                                        if (!await StreamDataAsync(identifier, buffer, 0, bytesRead, cancellationToken))
+                                            throw new Exception("Stream closed.");
+
+                                        totalBytesRead += bytesRead;
                                     }
-
-                                    cancellationToken.ThrowIfCancellationRequested();
-
-                                    if (!await StreamDataAsync(identifier, buffer, 0, bytesRead, cancellationToken))
-                                        throw new Exception("Stream closed.");
-
-                                    totalBytesRead += bytesRead;
+                                }
+                                finally
+                                {
+                                    ArrayPool<byte>.Shared.Return(buffer);
                                 }
                             },
                             () => DisposeQuietly(bodyStream));

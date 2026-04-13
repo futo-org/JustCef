@@ -1,3 +1,5 @@
+using System.Buffers;
+
 namespace JustCef;
 
 internal enum IPCProxyBodyElementType
@@ -37,14 +39,21 @@ public sealed class IPCProxyBodyElementStreamedBytes : IPCProxyBodyElement
     public async Task<byte[]> ReadAllBytesAsync(CancellationToken cancellationToken = default)
     {
         using MemoryStream memoryStream = new MemoryStream();
-        byte[] buffer = new byte[64 * 1024];
-        while (true)
+        byte[] buffer = ArrayPool<byte>.Shared.Rent(64 * 1024);
+        try
         {
-            int bytesRead = await BodyStream.ReadAsync(buffer, 0, buffer.Length, cancellationToken);
-            if (bytesRead <= 0)
-                break;
+            while (true)
+            {
+                int bytesRead = await BodyStream.ReadAsync(buffer, 0, buffer.Length, cancellationToken);
+                if (bytesRead <= 0)
+                    break;
 
-            memoryStream.Write(buffer, 0, bytesRead);
+                memoryStream.Write(buffer, 0, bytesRead);
+            }
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
         }
 
         return memoryStream.ToArray();
