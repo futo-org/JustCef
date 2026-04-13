@@ -7,7 +7,7 @@
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <RuntimeIdentifiers>win-x86;win-x64;win-arm64;linux-x64;linux-arm;linux-arm64;osx-x64;osx-arm64</RuntimeIdentifiers>
-    <JustCefVersion>1</JustCefVersion>
+    <JustCefVersion>3</JustCefVersion>
     <JustCefBaseUrl>https://static.grayjay.app/justcef</JustCefBaseUrl>
   </PropertyGroup>
 

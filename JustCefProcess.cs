@@ -1,4 +1,4 @@
-#define HARDCODED_PATHS
+//#define HARDCODED_PATHS
 
 using System.Buffers;
 using System.Buffers.Binary;
