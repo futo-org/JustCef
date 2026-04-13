@@ -256,7 +256,7 @@ void Client::OnFullscreenModeChange(CefRefPtr<CefBrowser> browser, bool fullscre
     });
 }
 
-bool Client::OnBeforePopup(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int popup_id, const CefString& target_url, const CefString& target_frame_name, CefLifeSpanHandler::WindowOpenDisposition target_disposition, bool user_gesture, const CefPopupFeatures& popupFeatures, CefWindowInfo& windowInfo, CefRefPtr<CefClient>& client, CefBrowserSettings& settings, CefRefPtr<CefDictionaryValue>& extra_info, bool* no_javascript_access) {
+bool Client::OnBeforePopup(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int popup_id, const CefString& target_url, const CefString& target_frame_name, CefLifeSpanHandler::WindowOpenDisposition target_disposition, bool user_gesture, const CefPopupFeatures& popupFeatures, CefWindowInfo& windowInfo, CefRefPtr<CefClient>& client, CefBrowserSettings& browserSettings, CefRefPtr<CefDictionaryValue>& extra_info, bool* no_javascript_access) {
     extra_info = CreateBridgeExtraInfo(false, extra_info);
     return false;
 }
@@ -264,7 +264,7 @@ bool Client::OnBeforePopup(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> fr
 void Client::OnBeforeDevToolsPopup(CefRefPtr<CefBrowser> browser,
                                    CefWindowInfo& windowInfo,
                                    CefRefPtr<CefClient>& client,
-                                   CefBrowserSettings& settings,
+                                   CefBrowserSettings& browserSettings,
                                    CefRefPtr<CefDictionaryValue>& extra_info,
                                    bool* use_default_window) {
     extra_info = CreateBridgeExtraInfo(false, extra_info);
