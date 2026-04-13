@@ -35,6 +35,7 @@
     <JustCefArchiveName Condition="'$(JustCefRid)' == 'osx-x64'">JustCefNative-osx-x64.zip</JustCefArchiveName>
     <JustCefArchiveName Condition="'$(JustCefRid)' == 'osx-arm64'">JustCefNative-osx-arm64.zip</JustCefArchiveName>
     <JustCefArchiveName Condition="'$(JustCefRid)' == 'win-x64'">JustCefNative-windows-AMD64.zip</JustCefArchiveName>
+    <JustCefArchiveName Condition="'$(JustCefRid)' == 'win-arm64'">JustCefNative-windows-ARM64.zip</JustCefArchiveName>
     <JustCefArchiveName Condition="'$(JustCefArchiveName)' == '' and '$(JustCefArchiveOverride)' != ''">$(JustCefArchiveOverride)</JustCefArchiveName>
     <JustCefUrl Condition="'$(JustCefArchiveName)' != ''">$(JustCefBaseUrl)/$(JustCefVersion)/$(JustCefArchiveName)</JustCefUrl>
     <JustCefCacheRoot>$([System.IO.Path]::Combine('$(BaseIntermediateOutputPath)','justcef','$(TargetFramework)'))</JustCefCacheRoot>

@@ -6,19 +6,38 @@ if "%CI_COMMIT_TAG%"=="" (
     exit /b 1
 )
 
+set "TARGET_ARCH=%~1"
+if "%TARGET_ARCH%"=="" set "TARGET_ARCH=%PROCESSOR_ARCHITECTURE%"
+
+set "CMAKE_ARCH="
+set "ZIP_ARCH="
+if /I "%TARGET_ARCH%"=="AMD64" (
+    set "CMAKE_ARCH=x64"
+    set "ZIP_ARCH=AMD64"
+) else if /I "%TARGET_ARCH%"=="x64" (
+    set "CMAKE_ARCH=x64"
+    set "ZIP_ARCH=AMD64"
+) else if /I "%TARGET_ARCH%"=="ARM64" (
+    set "CMAKE_ARCH=ARM64"
+    set "ZIP_ARCH=ARM64"
+) else (
+    echo ERROR: Unsupported Windows target architecture: %TARGET_ARCH%
+    echo Usage: build-windows.bat [x64^|arm64]
+    exit /b 1
+)
+
 IF EXIST build (
     rmdir /s /q build
 )
 
 mkdir build
 cd build
-cmake -DCMAKE_BUILD_TYPE=Release ..
+cmake -A %CMAKE_ARCH% -DCMAKE_BUILD_TYPE=Release ..
 cmake --build . --config Release
 cd Release
 
 set "VERSION=%CI_COMMIT_TAG%"
-set "ARCH=%PROCESSOR_ARCHITECTURE%"
-set "ZIP_NAME=JustCefNative-windows-%ARCH%.zip"
+set "ZIP_NAME=JustCefNative-windows-%ZIP_ARCH%.zip"
 
 if exist "%ZIP_NAME%" del /q "%ZIP_NAME%"
 dir

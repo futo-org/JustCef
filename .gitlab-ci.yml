@@ -7,7 +7,7 @@ workflow:
       when: always
     - when: never
 
-build_windows:
+build_windows_x64:
   stage: build
   tags:
     - WindowsBuilder
@@ -17,7 +17,22 @@ build_windows:
     - when: never
   script:
     - cd native
-    - cmd.exe /c "build-windows.bat"
+    - cmd.exe /c "build-windows.bat x64"
+  artifacts:
+    paths:
+      - native/build/Release/*
+
+build_windows_arm64:
+  stage: build
+  tags:
+    - WindowsBuilder
+  rules:
+    - if: '$CI_COMMIT_TAG'
+      when: manual
+    - when: never
+  script:
+    - cd native
+    - cmd.exe /c "build-windows.bat arm64"
   artifacts:
     paths:
       - native/build/Release/*
