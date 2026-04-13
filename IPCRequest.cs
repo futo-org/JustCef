@@ -38,7 +38,13 @@ public sealed class IPCProxyBodyElementStreamedBytes : IPCProxyBodyElement
 
     public async Task<byte[]> ReadAllBytesAsync(CancellationToken cancellationToken = default)
     {
-        using MemoryStream memoryStream = new MemoryStream();
+        int initialCapacity = Length.HasValue && Length.Value >= 0 && Length.Value <= int.MaxValue
+            ? (int)Length.Value
+            : 0;
+
+        using MemoryStream memoryStream = initialCapacity > 0
+            ? new MemoryStream(initialCapacity)
+            : new MemoryStream();
         byte[] buffer = ArrayPool<byte>.Shared.Rent(64 * 1024);
         try
         {

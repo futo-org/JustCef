@@ -39,8 +39,14 @@ constexpr size_t kInlineBodyElementFramingSize = sizeof(uint8_t) + sizeof(uint32
 constexpr size_t kStreamBodyElementFramingSize = sizeof(uint8_t) + sizeof(int64_t) + sizeof(uint32_t);
 constexpr size_t kStreamChunkSize = 65536;
 constexpr size_t kBridgeRpcInlinePayloadFramingSize = sizeof(uint8_t) + sizeof(uint32_t);
+constexpr size_t kBinaryInlinePayloadFramingSize = sizeof(uint8_t) + sizeof(uint32_t);
 
 enum class BridgeRpcPayloadEncoding : uint8_t {
+    Inline = 0,
+    Stream = 1
+};
+
+enum class BinaryPayloadEncoding : uint8_t {
     Inline = 0,
     Stream = 1
 };
@@ -57,6 +63,12 @@ bool WriteInlineBridgeRpcPayload(PacketWriter& writer, const std::string& payloa
     return writer.write<uint8_t>(static_cast<uint8_t>(BridgeRpcPayloadEncoding::Inline)) &&
         writer.write<uint32_t>(static_cast<uint32_t>(payload.size())) &&
         writer.writeBytes(reinterpret_cast<const uint8_t*>(payload.data()), payload.size());
+}
+
+bool WriteInlineBinaryPayload(PacketWriter& writer, const uint8_t* payload, size_t size) {
+    return writer.write<uint8_t>(static_cast<uint8_t>(BinaryPayloadEncoding::Inline)) &&
+        writer.write<uint32_t>(static_cast<uint32_t>(size)) &&
+        writer.writeBytes(payload, size);
 }
 
 bool WriteInlineBridgeRpcResult(PacketWriter& writer, bool success, const std::string& payload) {
@@ -503,15 +515,19 @@ std::vector<uint8_t> IPC::Call(OpcodeClient opcode, const uint8_t* body, size_t 
     return pPendingRequest->responseBody;
 }
 
-void IPC::Notify(OpcodeClientNotification opcode, const PacketWriter& writer)
+void IPC::Notify(OpcodeClientNotification opcode, const PacketWriter& writer, std::function<void()> afterWrite, std::function<void()> onAbort)
 {
-    Notify(opcode, writer.data(), writer.size());
+    Notify(opcode, writer.data(), writer.size(), std::move(afterWrite), std::move(onAbort));
 }
 
-void IPC::Notify(OpcodeClientNotification opcode, const uint8_t* body, size_t size)
+void IPC::Notify(OpcodeClientNotification opcode, const uint8_t* body, size_t size, std::function<void()> afterWrite, std::function<void()> onAbort)
 {
-    if (!IsAvailable())
+    if (!IsAvailable()) {
+        if (onAbort) {
+            onAbort();
+        }
         return;
+    }
 
     if (CefCurrentlyOn(TID_UI)) {
         LOG(ERROR) << "!!!!!!WARNING!!!!!! Do not make remote calls on UI thread !!!!!!WARNING!!!!!!";
@@ -534,7 +550,19 @@ void IPC::Notify(OpcodeClientNotification opcode, const uint8_t* body, size_t si
     if (body && size > 0)
         memcpy(_sendBuffer.data() + sizeof(IPCPacketHeader), body, size);
 
-    _pipe.Write(_sendBuffer.data(), packetLength, true);
+    if (_pipe.Write(_sendBuffer.data(), packetLength, true) != packetLength)
+    {
+        if (onAbort) {
+            onAbort();
+        }
+        LOG(INFO) << "Failed to write entire notification packet.";
+        CloseEverything();
+        return;
+    }
+
+    if (afterWrite) {
+        afterWrite();
+    }
 }
 
 void IPC::QueueResponse(OpcodeController opcode, uint32_t requestId, const PacketWriter& writer, std::function<void()> afterWrite, std::function<void()> onAbort)
@@ -829,8 +857,7 @@ bool IPC::HandleRequest(uint32_t requestId, OpcodeController opcode, PacketReade
             HandleWindowSaveFilePicker(reader, writer);
             return true;
         case OpcodeController::WindowExecuteDevToolsMethod:
-            HandleWindowExecuteDevToolsMethod(reader, writer);
-            return true;
+            return HandleWindowExecuteDevToolsMethodRequest(requestId, reader, writer);
         case OpcodeController::WindowSetTitle:
             HandleWindowSetTitle(reader, writer);
             return true;
@@ -1090,6 +1117,92 @@ bool IPC::SerializeBridgeRpcPayload(PacketWriter& writer, const std::string& pay
         {
             size_t chunkSize = std::min(kStreamChunkSize, sharedPayload->size() - offset);
             if (!StreamClientData(streamIdentifier, reinterpret_cast<const uint8_t*>(sharedPayload->data()) + offset, chunkSize)) {
+                break;
+            }
+
+            offset += chunkSize;
+        }
+
+        RemoveOutgoingStream(streamIdentifier);
+        CloseClientStream(streamIdentifier);
+    });
+
+    return true;
+}
+
+bool IPC::SerializeBinaryPayload(PacketWriter& writer, const uint8_t* payload, size_t size, std::vector<std::function<void()>>& streamWriters, std::function<void()>* onAbort)
+{
+    if (size > std::numeric_limits<uint32_t>::max()) {
+        LOG(ERROR) << "Binary payload exceeds supported size.";
+        return false;
+    }
+
+    if (size <= MAXIMUM_IPC_SIZE - writer.size() - kBinaryInlinePayloadFramingSize) {
+        if (onAbort) {
+            *onAbort = nullptr;
+        }
+
+        return WriteInlineBinaryPayload(writer, payload, size);
+    }
+
+    if (!writer.write<uint8_t>(static_cast<uint8_t>(BinaryPayloadEncoding::Stream)) ||
+        !writer.write<uint32_t>(static_cast<uint32_t>(size))) {
+        return false;
+    }
+
+    uint32_t streamIdentifier = ++_streamIdentifierCounter;
+    std::shared_ptr<std::atomic<bool>> cancelFlag = RegisterOutgoingStream(streamIdentifier);
+    if (!writer.write<uint32_t>(streamIdentifier)) {
+        RemoveOutgoingStream(streamIdentifier);
+        return false;
+    }
+
+    if (onAbort) {
+        *onAbort = [this, streamIdentifier]() {
+            RemoveOutgoingStream(streamIdentifier);
+        };
+    }
+
+    if (size == 0) {
+        streamWriters.push_back([this, streamIdentifier, cancelFlag]()
+        {
+            if (cancelFlag->load()) {
+                RemoveOutgoingStream(streamIdentifier);
+                return;
+            }
+
+            if (!OpenClientStream(streamIdentifier)) {
+                RemoveOutgoingStream(streamIdentifier);
+                return;
+            }
+
+            RemoveOutgoingStream(streamIdentifier);
+            CloseClientStream(streamIdentifier);
+        });
+
+        return true;
+    }
+
+    std::shared_ptr<std::vector<uint8_t>> sharedPayload = std::make_shared<std::vector<uint8_t>>(size);
+    memcpy(sharedPayload->data(), payload, size);
+
+    streamWriters.push_back([this, streamIdentifier, cancelFlag, sharedPayload]()
+    {
+        if (cancelFlag->load()) {
+            RemoveOutgoingStream(streamIdentifier);
+            return;
+        }
+
+        if (!OpenClientStream(streamIdentifier)) {
+            RemoveOutgoingStream(streamIdentifier);
+            return;
+        }
+
+        size_t offset = 0;
+        while (offset < sharedPayload->size() && IsAvailable() && !cancelFlag->load())
+        {
+            size_t chunkSize = std::min(kStreamChunkSize, sharedPayload->size() - offset);
+            if (!StreamClientData(streamIdentifier, sharedPayload->data() + offset, chunkSize)) {
                 break;
             }
 
@@ -1738,11 +1851,24 @@ void IPC::NotifyWindowLoadEnd(CefRefPtr<CefBrowser> browser, const CefString& ur
 void IPC::NotifyWindowDevToolsEvent(CefRefPtr<CefBrowser> browser, const CefString& method, const uint8_t* result, size_t result_size)
 {
     PacketWriter writer;
+    std::vector<std::function<void()>> streamWriters;
+    std::function<void()> onAbort = nullptr;
     writer.write(browser->GetIdentifier());
     writer.writeSizePrefixedString(method);
-    writer.write((int)result_size);
-    writer.writeBytes(result, result_size);
-    Notify(OpcodeClientNotification::WindowDevToolsEvent, writer);
+
+    if (!SerializeBinaryPayload(writer, result, result_size, streamWriters, &onAbort)) {
+        LOG(ERROR) << "Failed to serialize DevTools event payload.";
+        return;
+    }
+
+    std::function<void()> afterWrite = nullptr;
+    if (!streamWriters.empty()) {
+        afterWrite = [this, streamWriters = std::move(streamWriters)]() mutable {
+            QueueDeferredStreamWriters(std::move(streamWriters));
+        };
+    }
+
+    Notify(OpcodeClientNotification::WindowDevToolsEvent, writer, std::move(afterWrite), std::move(onAbort));
 }
 
 void IPC::NotifyWindowLoadError(CefRefPtr<CefBrowser> browser, cef_errorcode_t errorCode, const CefString& errorText, const CefString& url)
@@ -2978,28 +3104,23 @@ void CloseEverything()
     }
 }
 
-std::optional<std::future<std::optional<IPCDevToolsMethodResult>>> HandleWindowExecuteDevToolsMethodInternal(PacketReader& reader, PacketWriter& writer)
+std::optional<std::future<std::optional<IPCDevToolsMethodResult>>> ExecuteWindowDevToolsMethodInternal(int32_t identifier, std::string method, std::optional<std::string> json)
 {
     if (!CefCurrentlyOn(TID_UI)) 
     {
         std::promise<std::optional<std::future<std::optional<IPCDevToolsMethodResult>>>> executeDevToolsMethodPromise;
         std::future<std::optional<std::future<std::optional<IPCDevToolsMethodResult>>>> executeDevToolsMethodFuture = executeDevToolsMethodPromise.get_future();
-        CefPostTask(TID_UI, base::BindOnce([](std::promise<std::optional<std::future<std::optional<IPCDevToolsMethodResult>>>> executeDevToolsMethodPromise, PacketReader& reader, PacketWriter& writer) {
-            executeDevToolsMethodPromise.set_value(HandleWindowExecuteDevToolsMethodInternal(reader, writer));
-        }, std::move(executeDevToolsMethodPromise), std::ref(reader), std::ref(writer)));
+        CefPostTask(TID_UI, base::BindOnce([](
+            std::promise<std::optional<std::future<std::optional<IPCDevToolsMethodResult>>>> executeDevToolsMethodPromise,
+            int32_t identifier,
+            std::string method,
+            std::optional<std::string> json) {
+            executeDevToolsMethodPromise.set_value(ExecuteWindowDevToolsMethodInternal(identifier, std::move(method), std::move(json)));
+        }, std::move(executeDevToolsMethodPromise), identifier, std::move(method), std::move(json)));
         return executeDevToolsMethodFuture.get();
     }
 
-    std::optional<int32_t> identifier = reader.read<int32_t>();
-    std::optional<std::string> method = reader.readSizePrefixedString();
-    std::optional<std::string> json = reader.readSizePrefixedString();
-    if (!identifier || !method)
-    {
-        LOG(ERROR) << "HandleWindowExecuteDevToolsMethod called without valid data. Ignored.";
-        return std::nullopt;
-    }
-
-    CefRefPtr<CefBrowser> browser = ClientManager::GetInstance()->AcquirePointer(*identifier);
+    CefRefPtr<CefBrowser> browser = ClientManager::GetInstance()->AcquirePointer(identifier);
     if (!browser)
     {
         LOG(ERROR) << "HandleWindowExecuteDevToolsMethod called while CefBrowser is already closed. Ignored.";
@@ -3015,35 +3136,85 @@ std::optional<std::future<std::optional<IPCDevToolsMethodResult>>> HandleWindowE
     }
 
     return json 
-        ? pClient->ExecuteDevToolsMethod(browser, *method, *json)
-        : pClient->ExecuteDevToolsMethod(browser, *method);
+        ? pClient->ExecuteDevToolsMethod(browser, method, *json)
+        : pClient->ExecuteDevToolsMethod(browser, method);
 }
 
-void HandleWindowExecuteDevToolsMethod(PacketReader& reader, PacketWriter& writer)
+bool IPC::HandleWindowExecuteDevToolsMethodRequest(uint32_t requestId, PacketReader& reader, PacketWriter& writer)
 {
+    std::optional<int32_t> identifier = reader.read<int32_t>();
+    std::optional<std::string> method = reader.readSizePrefixedString();
+    std::optional<bool> hasJson = reader.read<bool>();
+    if (!identifier || !method || !hasJson)
+    {
+        LOG(ERROR) << "HandleWindowExecuteDevToolsMethod called without valid data. Ignored.";
+        writer.write(false);
+        writer.write<uint8_t>(static_cast<uint8_t>(BinaryPayloadEncoding::Inline));
+        writer.write<uint32_t>(0);
+        return true;
+    }
+
+    std::optional<std::string> json = std::nullopt;
+    if (*hasJson) {
+        std::string payload;
+        if (!DeserializeBridgeRpcPayload(reader, payload)) {
+            LOG(ERROR) << "HandleWindowExecuteDevToolsMethod called without valid DevTools params payload. Ignored.";
+            writer.write(false);
+            writer.write<uint8_t>(static_cast<uint8_t>(BinaryPayloadEncoding::Inline));
+            writer.write<uint32_t>(0);
+            return true;
+        }
+
+        json = std::move(payload);
+    }
+
+    std::vector<std::function<void()>> streamWriters;
+    std::function<void()> onAbort = nullptr;
+
     //TODO: Make promise instead of blocking?
-    std::optional<std::future<std::optional<IPCDevToolsMethodResult>>> result = HandleWindowExecuteDevToolsMethodInternal(reader, writer);
+    std::optional<std::future<std::optional<IPCDevToolsMethodResult>>> result = ExecuteWindowDevToolsMethodInternal(*identifier, std::move(*method), std::move(json));
     if (result) 
     {
         std::optional<IPCDevToolsMethodResult> r = (*result).get();
         if (r)
         {
             writer.write(r->success);
-            writer.write<uint32_t>((uint32_t)r->result->size());
-            if (r->result->size() > 0)
-                writer.writeBytes(r->result->data(), r->result->size());
+            if (!SerializeBinaryPayload(writer, r->result->data(), r->result->size(), streamWriters, &onAbort)) {
+                writer = PacketWriter();
+                writer.write(false);
+                writer.write<uint8_t>(static_cast<uint8_t>(BinaryPayloadEncoding::Inline));
+                writer.write<uint32_t>(0);
+                streamWriters.clear();
+                onAbort = nullptr;
+            }
         }
         else
         {
             writer.write(false);
+            writer.write<uint8_t>(static_cast<uint8_t>(BinaryPayloadEncoding::Inline));
             writer.write<uint32_t>(0);
         }
     }
     else
     {
         writer.write(false);
+        writer.write<uint8_t>(static_cast<uint8_t>(BinaryPayloadEncoding::Inline));
         writer.write<uint32_t>(0);
     }
+
+    if (streamWriters.empty()) {
+        return true;
+    }
+
+    QueueResponse(
+        OpcodeController::WindowExecuteDevToolsMethod,
+        requestId,
+        writer,
+        [this, streamWriters = std::move(streamWriters)]() mutable {
+            QueueDeferredStreamWriters(std::move(streamWriters));
+        },
+        std::move(onAbort));
+    return false;
 }
 
 void HandleWindowSetTitle(PacketReader& reader, PacketWriter& writer)

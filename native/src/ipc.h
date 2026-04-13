@@ -286,8 +286,8 @@ private:
 
     void Run();
     std::vector<uint8_t> Call(OpcodeClient opcode, const uint8_t* body = nullptr, size_t size = 0, std::function<void()> afterWrite = nullptr);
-    void Notify(OpcodeClientNotification opcode, const uint8_t* body = nullptr, size_t size = 0);
-    void Notify(OpcodeClientNotification opcode, const PacketWriter& writer);
+    void Notify(OpcodeClientNotification opcode, const uint8_t* body = nullptr, size_t size = 0, std::function<void()> afterWrite = nullptr, std::function<void()> onAbort = nullptr);
+    void Notify(OpcodeClientNotification opcode, const PacketWriter& writer, std::function<void()> afterWrite = nullptr, std::function<void()> onAbort = nullptr);
     bool HandleRequest(uint32_t requestId, OpcodeController opcode, PacketReader& reader, PacketWriter& writer);
     void HandleNotification(OpcodeControllerNotification opcode, PacketReader& reader);
     void WriteResponse(uint32_t requestId, uint8_t opcode, const uint8_t* body, size_t size);
@@ -305,8 +305,10 @@ private:
     void RemoveOutgoingStream(uint32_t identifier);
     bool SerializePostData(PacketWriter& writer, CefRefPtr<CefPostData> postData, std::vector<std::function<void()>>& streamWriters);
     bool SerializeBridgeRpcPayload(PacketWriter& writer, const std::string& payload, std::vector<std::function<void()>>& streamWriters, std::function<void()>* onAbort = nullptr);
+    bool SerializeBinaryPayload(PacketWriter& writer, const uint8_t* payload, size_t size, std::vector<std::function<void()>>& streamWriters, std::function<void()>* onAbort = nullptr);
     bool DeserializeBridgeRpcPayload(PacketReader& reader, std::string& payload);
     bool HandleWindowBridgeRpcRequest(uint32_t requestId, PacketReader& reader, PacketWriter& writer);
+    bool HandleWindowExecuteDevToolsMethodRequest(uint32_t requestId, PacketReader& reader, PacketWriter& writer);
 
     std::atomic<uint32_t> _requestIdCounter;
     std::atomic<uint32_t> _streamIdentifierCounter;
@@ -360,7 +362,6 @@ void HandleWindowSetModifyRequests(PacketReader& reader, PacketWriter& writer);
 void HandleWindowOpenFilePicker(PacketReader& reader, PacketWriter& writer);
 void HandleWindowOpenDirectoryPicker(PacketReader& reader, PacketWriter& writer);
 void HandleWindowSaveFilePicker(PacketReader& reader, PacketWriter& writer);
-void HandleWindowExecuteDevToolsMethod(PacketReader& reader, PacketWriter& writer);
 void HandleWindowSetTitle(PacketReader& reader, PacketWriter& writer);
 void HandleWindowSetIcon(PacketReader& reader, PacketWriter& writer);
 void HandleAddUrlToProxy(PacketReader& reader, PacketWriter& writer);
