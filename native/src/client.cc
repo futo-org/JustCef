@@ -213,27 +213,7 @@ bool MatchesDomain(const std::string& request_host, const std::string& cookie_do
     return false;
 }
 
-Client::Client(const IPCWindowCreate& settings) : settings(settings) {
-    CefRefPtr<CefCommandLine> cmd = CefCommandLine::GetGlobalCommandLine();
-
-    _dedupeInput = false;
-    _dedupeInputMs = DEFAULT_DEDEUPE_INPUT_MS;
-    if (cmd && cmd->HasSwitch("dedupe-input")) {
-        _dedupeInput = true;
-
-        const std::string val = cmd->GetSwitchValue("dedupe-input").ToString();
-        if (!val.empty()) {
-            int v = std::stoi(val);
-            if (v <= 0) {
-                LOG(WARNING) << "Invalid --dedupe-input value '" << val << "'. Using default " << _dedupeInputMs << " ms.";
-            } else {
-                _dedupeInputMs = v;
-            }
-        } else {
-            LOG(INFO) << "--dedupe-input enabled with default window: " << _dedupeInputMs << " ms.";
-        }
-    }
-}
+Client::Client(const IPCWindowCreate& settings) : settings(settings) {}
 
 void Client::OnTitleChange(CefRefPtr<CefBrowser> browser, const CefString& title) 
 {
@@ -393,52 +373,23 @@ void Client::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
     LOG(INFO) << "OnBeforeClose finished " << browser->GetIdentifier();
 }
 
-void Client::OnLoadEnd(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int httpStatusCode) {
-    IPC::Singleton.QueueWork([browser, frame]() {
-        IPC::Singleton.NotifyWindowLoadEnd(browser, frame->GetURL());
+void Client::OnLoadingStateChange(CefRefPtr<CefBrowser> browser, bool isLoading, bool canGoBack, bool canGoForward)
+{
+    IPC::Singleton.QueueWork([browser, isLoading, canGoBack, canGoForward]() {
+        IPC::Singleton.NotifyWindowLoadingStateChanged(browser, isLoading, canGoBack, canGoForward);
     });
+}
 
-    if (_dedupeInput) {
-        std::ostringstream js;
-        js <<
-R"JS(
-(function(){
-  const WINDOW_MS = )JS" << _dedupeInputMs << R"JS(;
-  const perTarget = new WeakMap();
-
-  document.addEventListener('beforeinput', function(e){
-    if (e.inputType !== 'insertText') return;
-    if (typeof e.data !== 'string' || e.data.length !== 1) return;
-    if (e.isComposing) return;
-    if (e.ctrlKey || e.metaKey || e.altKey) return;
-
-    const t = e.target;
-    let m = perTarget.get(t);
-    if (!m) { m = new Map(); perTarget.set(t, m); }
-
-    const now = performance.now();
-    const ch = e.data;
-    const lastTs = m.get(ch) || 0;
-
-    if ((now - lastTs) <= WINDOW_MS) {
-      e.preventDefault();
-      e.stopPropagation();
-      return;
-    }
-
-    m.set(ch, now);
-  }, { capture: true });
-})();
-)JS";
-
-        frame->ExecuteJavaScript(js.str(), frame->GetURL(), 0);
-    }
+void Client::OnLoadEnd(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int httpStatusCode) {
+    IPC::Singleton.QueueWork([browser, frame, httpStatusCode]() {
+        IPC::Singleton.NotifyWindowFrameLoadEnd(browser, frame, httpStatusCode);
+    });
 }
 
 void Client::OnLoadStart(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, TransitionType transition_type) 
 {
     IPC::Singleton.QueueWork([browser, frame]() {
-        IPC::Singleton.NotifyWindowLoadStart(browser, frame->GetURL());
+        IPC::Singleton.NotifyWindowFrameLoadStart(browser, frame);
     });
 }
 
@@ -446,8 +397,8 @@ void Client::OnLoadError(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> fram
 {
     LOG(ERROR) << "Failed to load URL (" << errorCode << ") '" << failedUrl << "': " << errorText;
 
-    IPC::Singleton.QueueWork([browser, errorCode, errorText, failedUrl]() {
-        IPC::Singleton.NotifyWindowLoadError(browser, errorCode, errorText, failedUrl);
+    IPC::Singleton.QueueWork([browser, frame, errorCode, errorText, failedUrl]() {
+        IPC::Singleton.NotifyWindowFrameLoadError(browser, frame, errorCode, errorText, failedUrl);
     });
 }
 

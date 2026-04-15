@@ -129,10 +129,11 @@ enum class OpcodeClientNotification : uint8_t {
     //WindowMoved = 10,
     //WindowKeyboardEvent = 11,
     WindowFullscreenChanged = 12,
-    WindowLoadStart = 13,
-    WindowLoadEnd = 14,
-    WindowLoadError = 15,
-    WindowDevToolsEvent = 16
+    WindowFrameLoadStart = 13,
+    WindowFrameLoadEnd = 14,
+    WindowFrameLoadError = 15,
+    WindowDevToolsEvent = 16,
+    WindowLoadingStateChanged = 17
 };
 
 typedef struct _IPCPendingRequest {
@@ -253,9 +254,10 @@ public:
     //void NotifyWindowResized(CefRefPtr<CefBrowser> browser, int x, int y, int width, int height);
     //void NotifyWindowMoved(CefRefPtr<CefBrowser> browser, int x, int y, int width, int height);
     void NotifyWindowFullscreenChanged(CefRefPtr<CefBrowser> browser, bool fullscreen);
-    void NotifyWindowLoadStart(CefRefPtr<CefBrowser> browser, const CefString& url);
-    void NotifyWindowLoadEnd(CefRefPtr<CefBrowser> browser, const CefString& url);
-    void NotifyWindowLoadError(CefRefPtr<CefBrowser> browser, cef_errorcode_t errorCode, const CefString& errorText, const CefString& url);
+    void NotifyWindowFrameLoadStart(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame);
+    void NotifyWindowFrameLoadEnd(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int httpStatusCode);
+    void NotifyWindowFrameLoadError(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, cef_errorcode_t errorCode, const CefString& errorText, const CefString& url);
+    void NotifyWindowLoadingStateChanged(CefRefPtr<CefBrowser> browser, bool isLoading, bool canGoBack, bool canGoForward);
     void NotifyWindowDevToolsEvent(CefRefPtr<CefBrowser> browser, const CefString& method, const uint8_t* result, size_t result_size);
     void QueueResponse(OpcodeController opcode, uint32_t requestId, const PacketWriter& writer, std::function<void()> afterWrite = nullptr, std::function<void()> onAbort = nullptr);
 

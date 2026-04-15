@@ -118,10 +118,11 @@ namespace JustCef
             //WindowMoved = 10,
             //WindowKeyboardEvent = 11,
             WindowFullscreenChanged = 12,
-            WindowLoadStart = 13,
-            WindowLoadEnd = 14,
-            WindowLoadError = 15,
-            WindowDevToolsEvent = 16
+            WindowFrameLoadStart = 13,
+            WindowFrameLoadEnd = 14,
+            WindowFrameLoadError = 15,
+            WindowDevToolsEvent = 16,
+            WindowLoadingStateChanged = 17
         }
 
         private enum BridgeRpcPayloadEncoding : byte
@@ -197,7 +198,7 @@ namespace JustCef
         }
 
         private static ArrayPool<byte> BufferPool = ArrayPool<byte>.Create();
-        private readonly TaskCompletionSource _readyTaskCompletionSource = new TaskCompletionSource();
+        private readonly TaskCompletionSource _readyTaskCompletionSource = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         private const int MaxIPCSize = 10 * 1024 * 1024;
         private const int HeaderSize = 4 + 4 + 1 + 1;
@@ -1609,27 +1610,47 @@ namespace JustCef
                     GetWindow(identifier)?.InvokeOnFullscreenChanged(fullscreen);
                     break;
                 }
-                case OpcodeClientNotification.WindowLoadStart:
+                case OpcodeClientNotification.WindowFrameLoadStart:
                 {
                     int identifier = reader.Read<int>();
+                    string? frameIdentifier = reader.ReadSizePrefixedString();
+                    bool isMainFrame = reader.Read<bool>();
                     string? url = reader.ReadSizePrefixedString();
-                    GetWindow(identifier)?.InvokeOnLoadStart(url);
+                    GetWindow(identifier)?.InvokeOnFrameLoadStart(frameIdentifier, isMainFrame, url);
+                    //Logger.Info<JustCefProcess>($"WindowFrameLoadStart (frameIdentifier = {frameIdentifier}, isMainFrame = {isMainFrame}, url = {url}).");
                     break;
                 }
-                case OpcodeClientNotification.WindowLoadEnd:
+                case OpcodeClientNotification.WindowFrameLoadEnd:
                 {
                     int identifier = reader.Read<int>();
+                    string? frameIdentifier = reader.ReadSizePrefixedString();
+                    bool isMainFrame = reader.Read<bool>();
                     string? url = reader.ReadSizePrefixedString();
-                    GetWindow(identifier)?.InvokeOnLoadEnd(url);
+                    int httpStatusCode = reader.Read<int>();
+                    GetWindow(identifier)?.InvokeOnFrameLoadEnd(frameIdentifier, isMainFrame, url, httpStatusCode);
+                    //Logger.Info<JustCefProcess>($"WindowFrameLoadEnd (frameIdentifier = {frameIdentifier}, isMainFrame = {isMainFrame}, url = {url}, httpStatusCode = {httpStatusCode}).");
                     break;
                 }
-                case OpcodeClientNotification.WindowLoadError:
+                case OpcodeClientNotification.WindowFrameLoadError:
                 {
                     int identifier = reader.Read<int>();
+                    string? frameIdentifier = reader.ReadSizePrefixedString();
+                    bool isMainFrame = reader.Read<bool>();
                     int errorCode = reader.Read<int>();
                     string? errorText = reader.ReadSizePrefixedString();
                     string? failedUrl = reader.ReadSizePrefixedString();
-                    GetWindow(identifier)?.InvokeOnLoadError(errorCode, errorText, failedUrl);
+                    GetWindow(identifier)?.InvokeOnFrameLoadError(frameIdentifier, isMainFrame, errorCode, errorText, failedUrl);
+                    //Logger.Info<JustCefProcess>($"WindowFrameLoadError (frameIdentifier = {frameIdentifier}, isMainFrame = {isMainFrame}, failedUrl = {failedUrl}, errorCode = {errorCode}, errorText = {errorText}).");
+                    break;
+                }
+                case OpcodeClientNotification.WindowLoadingStateChanged:
+                {
+                    int identifier = reader.Read<int>();
+                    bool isLoading = reader.Read<bool>();
+                    bool canGoBack = reader.Read<bool>();
+                    bool canGoForward = reader.Read<bool>();
+                    //Logger.Info<JustCefProcess>($"LoadingStateChanged (isLoading = {isLoading}).");
+                    GetWindow(identifier)?.InvokeOnLoadingStateChanged(isLoading, canGoBack, canGoForward);
                     break;
                 }
                 case OpcodeClientNotification.WindowDevToolsEvent:
@@ -1924,7 +1945,7 @@ namespace JustCef
             writer.WriteSizePrefixedString(appId);
 
             var reader = await CallAsync(OpcodeController.WindowCreate, writer, cancellationToken);
-            var window = new JustCefWindow(this, reader.Read<int>(), requestModifier, requestProxy, bridgeRpcHandler);
+            var window = new JustCefWindow(this, reader.Read<int>(), requestModifier, requestProxy, bridgeRpcHandler, !String.IsNullOrEmpty(url));
             lock (_windows)
             {
                 _windows.Add(window);
@@ -2044,7 +2065,7 @@ namespace JustCef
         public async Task WaitForReadyAsync(CancellationToken cancellationToken = default)
         {
             EnsureStarted();
-            await Task.WhenAny(_readyTaskCompletionSource.Task, Task.Delay(Timeout.Infinite, cancellationToken));
+            await _readyTaskCompletionSource.Task.WaitAsync(cancellationToken);
         }
 
         public async Task WindowMaximizeAsync(int identifier, CancellationToken cancellationToken = default) 
@@ -2222,7 +2243,7 @@ namespace JustCef
             return reader.ReadSizePrefixedString()!;
         }
 
-        public async Task<(bool Succes, byte[] Data)> WindowExecuteDevToolsMethodAsync(int identifier, string methodName, string? json = null,  CancellationToken cancellationToken = default)
+        public async Task<(bool Success, byte[] Data)> WindowExecuteDevToolsMethodAsync(int identifier, string methodName, string? json = null,  CancellationToken cancellationToken = default)
         {
             var writer = new PacketWriter();
             var deferredOutgoingStreams = new DeferredOutgoingStreams();

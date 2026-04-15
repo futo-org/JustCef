@@ -1832,20 +1832,47 @@ void IPC::NotifyWindowFullscreenChanged(CefRefPtr<CefBrowser> browser, bool full
     Notify(OpcodeClientNotification::WindowFullscreenChanged, writer);
 }
 
-void IPC::NotifyWindowLoadStart(CefRefPtr<CefBrowser> browser, const CefString& url)
+void IPC::NotifyWindowFrameLoadStart(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame)
 {
     PacketWriter writer;
     writer.write(browser->GetIdentifier());
-    writer.writeSizePrefixedString(url);
-    Notify(OpcodeClientNotification::WindowLoadStart, writer);
+    writer.writeSizePrefixedString(frame ? frame->GetIdentifier() : "");
+    writer.write(frame ? frame->IsMain() : false);
+    writer.writeSizePrefixedString(frame ? frame->GetURL() : "");
+    Notify(OpcodeClientNotification::WindowFrameLoadStart, writer);
 }
 
-void IPC::NotifyWindowLoadEnd(CefRefPtr<CefBrowser> browser, const CefString& url)
+void IPC::NotifyWindowFrameLoadEnd(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int httpStatusCode)
 {
     PacketWriter writer;
     writer.write(browser->GetIdentifier());
+    writer.writeSizePrefixedString(frame ? frame->GetIdentifier() : "");
+    writer.write(frame ? frame->IsMain() : false);
+    writer.writeSizePrefixedString(frame ? frame->GetURL() : "");
+    writer.write<int32_t>(httpStatusCode);
+    Notify(OpcodeClientNotification::WindowFrameLoadEnd, writer);
+}
+
+void IPC::NotifyWindowFrameLoadError(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, cef_errorcode_t errorCode, const CefString& errorText, const CefString& url)
+{
+    PacketWriter writer;
+    writer.write(browser->GetIdentifier());
+    writer.writeSizePrefixedString(frame ? frame->GetIdentifier() : "");
+    writer.write(frame ? frame->IsMain() : false);
+    writer.write((int32_t)errorCode);
+    writer.writeSizePrefixedString(errorText);
     writer.writeSizePrefixedString(url);
-    Notify(OpcodeClientNotification::WindowLoadEnd, writer);
+    Notify(OpcodeClientNotification::WindowFrameLoadError, writer);
+}
+
+void IPC::NotifyWindowLoadingStateChanged(CefRefPtr<CefBrowser> browser, bool isLoading, bool canGoBack, bool canGoForward)
+{
+    PacketWriter writer;
+    writer.write(browser->GetIdentifier());
+    writer.write(isLoading);
+    writer.write(canGoBack);
+    writer.write(canGoForward);
+    Notify(OpcodeClientNotification::WindowLoadingStateChanged, writer);
 }
 
 void IPC::NotifyWindowDevToolsEvent(CefRefPtr<CefBrowser> browser, const CefString& method, const uint8_t* result, size_t result_size)
@@ -1869,16 +1896,6 @@ void IPC::NotifyWindowDevToolsEvent(CefRefPtr<CefBrowser> browser, const CefStri
     }
 
     Notify(OpcodeClientNotification::WindowDevToolsEvent, writer, std::move(afterWrite), std::move(onAbort));
-}
-
-void IPC::NotifyWindowLoadError(CefRefPtr<CefBrowser> browser, cef_errorcode_t errorCode, const CefString& errorText, const CefString& url)
-{
-    PacketWriter writer;
-    writer.write(browser->GetIdentifier());
-    writer.write((int32_t)errorCode);
-    writer.writeSizePrefixedString(errorText);
-    writer.writeSizePrefixedString(url);
-    Notify(OpcodeClientNotification::WindowLoadError, writer);
 }
 
 #ifdef _WIN32
@@ -3717,3 +3734,4 @@ void HandleRemoveDevToolsEventMethod(PacketReader& reader, PacketWriter& writer)
     pClient->RemoveDevToolsEventMethod(browser, *method);
     LOG(INFO) << "Removed DevTools event method: " + *method;
 }
+
