@@ -36,7 +36,6 @@ namespace {
 
 constexpr uint8_t kIPCProxyBodyElementStream = 3;
 constexpr size_t kInlineBodyElementFramingSize = sizeof(uint8_t) + sizeof(uint32_t);
-constexpr size_t kStreamBodyElementFramingSize = sizeof(uint8_t) + sizeof(int64_t) + sizeof(uint32_t);
 constexpr size_t kStreamChunkSize = 65536;
 constexpr size_t kBridgeRpcInlinePayloadFramingSize = sizeof(uint8_t) + sizeof(uint32_t);
 constexpr size_t kBinaryInlinePayloadFramingSize = sizeof(uint8_t) + sizeof(uint32_t);

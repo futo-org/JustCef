@@ -191,6 +191,8 @@ elseif(OS_MAC)
     process_helper_mac.h
     app_other.cc
     app_renderer.cc
+    bridge.cc
+    bridge.h
     )
 endif()
 
