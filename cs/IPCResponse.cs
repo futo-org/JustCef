@@ -6,5 +6,5 @@ public class IPCResponse
     public required string StatusText { get; init;}
     public required Dictionary<string, List<string>> Headers { get; init; }
     public byte[]? Body { get; init; }
-    public DataStream? BodyStream { get; init; }
+    public IDataSource? DataSource { get; init; }
 }

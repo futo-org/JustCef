@@ -878,7 +878,7 @@ namespace JustCef
             var elements = DeserializeBodyElements(reader);
 
             IPCResponse? response = null;
-            HashSet<DataStream>? transferredStreams = null;
+            HashSet<IDataSource>? transferredStreams = null;
             try
             {
                 response = await window.ProxyRequestAsync(new IPCRequest
@@ -892,11 +892,11 @@ namespace JustCef
                 if (response == null)
                     return;
 
-                if (response.Body != null && response.BodyStream != null)
-                    throw new InvalidOperationException("IPCResponse cannot define both Body and BodyStream.");
+                if (response.Body != null && response.DataSource != null)
+                    throw new InvalidOperationException("IPCResponse cannot define both Body and DataSource.");
 
-                if (response.BodyStream != null)
-                    transferredStreams = new HashSet<DataStream>(ReferenceEqualityComparer.Instance) { response.BodyStream };
+                if (response.DataSource != null)
+                    transferredStreams = new HashSet<IDataSource>(ReferenceEqualityComparer.Instance) { response.DataSource };
 
                 var responseHeaders = response.Headers
                     .SelectMany(header => header.Value
@@ -942,7 +942,7 @@ namespace JustCef
                         HandleLargeBufferedContent(response.Body, writer, deferredOutgoingStreams);
                     }
                 }
-                else if (response.BodyStream != null)
+                else if (response.DataSource != null)
                 {
                     if (contentLength != null)
                     {
@@ -958,12 +958,12 @@ namespace JustCef
                             {
                                 try
                                 {
-                                    await ReadExactlyAsync(response.BodyStream, buffer, 0, inlineBodySize);
+                                    await ReadExactlyAsync(response.DataSource, buffer, 0, inlineBodySize);
                                     writer.WriteBytes(buffer, 0, inlineBodySize);
                                 }
                                 finally
                                 {
-                                    DisposeQuietly(response.BodyStream);
+                                    DisposeQuietly(response.DataSource);
                                 }
                             }
                             finally
@@ -974,13 +974,13 @@ namespace JustCef
                         else
                         {
                             writer.Write((byte)2);
-                            HandleLargeOrChunkedContent(response.BodyStream, writer, deferredOutgoingStreams, contentLength);
+                            HandleLargeOrChunkedContent(response.DataSource, writer, deferredOutgoingStreams, contentLength);
                         }
                     }
                     else
                     {
                         writer.Write((byte)2);
-                        HandleLargeOrChunkedContent(response.BodyStream, writer, deferredOutgoingStreams, null);
+                        HandleLargeOrChunkedContent(response.DataSource, writer, deferredOutgoingStreams, null);
                     }
                 }
                 else
@@ -1016,7 +1016,7 @@ namespace JustCef
                 });
         }
 
-        private void HandleLargeOrChunkedContent(DataStream stream, PacketWriter writer, DeferredOutgoingStreams deferredOutgoingStreams, long? contentLength = null)
+        private void HandleLargeOrChunkedContent(IDataSource dataSource, PacketWriter writer, DeferredOutgoingStreams deferredOutgoingStreams, long? contentLength = null)
         {
             AddDeferredOutgoingStream(
                 writer,
@@ -1033,7 +1033,7 @@ namespace JustCef
                                 ? (int)Math.Min(buffer.Length, contentLength.Value - totalBytesRead)
                                 : buffer.Length;
 
-                            int bytesRead = await stream.ReadAsync(buffer, 0, requestedBytes, cancellationToken);
+                            int bytesRead = await dataSource.ReadAsync(new Memory<byte>(buffer, 0, requestedBytes), cancellationToken);
                             if (bytesRead <= 0)
                             {
                                 ThrowIfEndedBeforeExpectedLength(totalBytesRead, contentLength, "proxy response body");
@@ -1053,7 +1053,7 @@ namespace JustCef
                         ArrayPool<byte>.Shared.Return(buffer);
                     }
                 },
-                () => DisposeQuietly(stream));
+                () => DisposeQuietly(dataSource));
         }
 
         private static void ThrowIfEndedBeforeExpectedLength(long totalBytesRead, long? expectedLength, string description)
@@ -1064,12 +1064,12 @@ namespace JustCef
             }
         }
 
-        private static async Task ReadExactlyAsync(DataStream stream, byte[] buffer, int offset, int count, CancellationToken cancellationToken = default)
+        private static async Task ReadExactlyAsync(IDataSource dataSource, byte[] buffer, int offset, int count, CancellationToken cancellationToken = default)
         {
             int totalRead = 0;
             while (totalRead < count)
             {
-                int bytesRead = await stream.ReadAsync(buffer, offset + totalRead, count - totalRead, cancellationToken);
+                int bytesRead = await dataSource.ReadAsync(new Memory<byte>(buffer, offset + totalRead, count - totalRead), cancellationToken);
                 if (bytesRead <= 0)
                     throw new EndOfStreamException($"Data stream ended after {totalRead} bytes, expected {count}.");
 
@@ -1275,7 +1275,7 @@ namespace JustCef
                         writer.WriteSizePrefixedString(fileElement.FileName);
                         break;
                     case IPCProxyBodyElementStreamedBytes streamedBytesElement:
-                        var bodyStream = streamedBytesElement.BodyStream;
+                        var dataSource = streamedBytesElement.DataSource;
                         writer.Write((byte)IPCProxyBodyElementType.Stream);
                         long? streamLength = streamedBytesElement.Length;
                         writer.Write(streamLength ?? UnknownStreamLength);
@@ -1294,7 +1294,7 @@ namespace JustCef
                                             ? (int)Math.Min(buffer.Length, streamLength.Value - totalBytesRead)
                                             : buffer.Length;
 
-                                        int bytesRead = await bodyStream.ReadAsync(buffer, 0, requestedBytes, cancellationToken);
+                                        int bytesRead = await dataSource.ReadAsync(new Memory<byte>(buffer, 0, requestedBytes), cancellationToken);
                                         if (bytesRead <= 0)
                                         {
                                             ThrowIfEndedBeforeExpectedLength(totalBytesRead, streamLength, "modified request body element");
@@ -1314,7 +1314,7 @@ namespace JustCef
                                     ArrayPool<byte>.Shared.Return(buffer);
                                 }
                             },
-                            () => DisposeQuietly(bodyStream));
+                            () => DisposeQuietly(dataSource));
                         break;
                     default:
                         throw new InvalidOperationException($"Unsupported proxy body element type '{element.GetType().Name}'.");
@@ -1435,19 +1435,19 @@ namespace JustCef
             }
         }
 
-        private static void DisposeIncomingStreamElements(IEnumerable<IPCProxyBodyElement> elements, HashSet<DataStream>? transferredStreams = null)
+        private static void DisposeIncomingStreamElements(IEnumerable<IPCProxyBodyElement> elements, HashSet<IDataSource>? transferredStreams = null)
         {
             foreach (var element in elements)
             {
                 if (element is not IPCProxyBodyElementStreamedBytes streamedBytesElement)
                     continue;
 
-                if (transferredStreams != null && transferredStreams.Contains(streamedBytesElement.BodyStream))
+                if (transferredStreams != null && transferredStreams.Contains(streamedBytesElement.DataSource))
                     continue;
 
                 try
                 {
-                    streamedBytesElement.BodyStream.Dispose();
+                    streamedBytesElement.DataSource.Dispose();
                 }
                 catch
                 {
@@ -1482,7 +1482,7 @@ namespace JustCef
             var elements = DeserializeBodyElements(reader);
 
             IPCRequest? modifiedRequest = null;
-            HashSet<DataStream>? transferredStreams = null;
+            HashSet<IDataSource>? transferredStreams = null;
             try
             {
                 modifiedRequest = window.ModifyRequest(new IPCRequest
@@ -1501,8 +1501,8 @@ namespace JustCef
                     if (element is not IPCProxyBodyElementStreamedBytes streamedBytesElement)
                         continue;
 
-                    transferredStreams ??= new HashSet<DataStream>(ReferenceEqualityComparer.Instance);
-                    transferredStreams.Add(streamedBytesElement.BodyStream);
+                    transferredStreams ??= new HashSet<IDataSource>(ReferenceEqualityComparer.Instance);
+                    transferredStreams.Add(streamedBytesElement.DataSource);
                 }
 
                 writer.WriteSizePrefixedString(modifiedRequest.Method);

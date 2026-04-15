@@ -26,14 +26,14 @@ public sealed class IPCProxyBodyElementBytes : IPCProxyBodyElement
 
 public sealed class IPCProxyBodyElementStreamedBytes : IPCProxyBodyElement
 {
-    public IPCProxyBodyElementStreamedBytes(DataStream bodyStream, long? length = null)
+    public IPCProxyBodyElementStreamedBytes(IDataSource dataSource, long? length = null)
     {
-        ArgumentNullException.ThrowIfNull(bodyStream);
-        BodyStream = bodyStream;
+        ArgumentNullException.ThrowIfNull(dataSource);
+        DataSource = dataSource;
         Length = length;
     }
 
-    public DataStream BodyStream { get; }
+    public IDataSource DataSource { get; }
     public long? Length { get; }
 
     public async Task<byte[]> ReadAllBytesAsync(CancellationToken cancellationToken = default)
@@ -46,11 +46,12 @@ public sealed class IPCProxyBodyElementStreamedBytes : IPCProxyBodyElement
             ? new MemoryStream(initialCapacity)
             : new MemoryStream();
         byte[] buffer = ArrayPool<byte>.Shared.Rent(64 * 1024);
+        var memory = new Memory<byte>(buffer, 0, buffer.Length);
         try
         {
             while (true)
             {
-                int bytesRead = await BodyStream.ReadAsync(buffer, 0, buffer.Length, cancellationToken);
+                int bytesRead = await DataSource.ReadAsync(memory, cancellationToken);
                 if (bytesRead <= 0)
                     break;
 
