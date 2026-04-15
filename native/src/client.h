@@ -48,6 +48,7 @@ class Client : public CefClient,
     bool DoClose(CefRefPtr<CefBrowser> browser) override;
     void OnBeforeClose(CefRefPtr<CefBrowser> browser) override;
     // CefLoadHandler methods:
+    void OnLoadingStateChange(CefRefPtr<CefBrowser> browser, bool isLoading, bool canGoBack, bool canGoForward) override;
     void OnLoadEnd(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int httpStatusCode) override;
     void OnLoadStart(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, TransitionType transition_type) override;
     void OnLoadError(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, ErrorCode errorCode, const CefString& errorText, const CefString& failedUrl) override;
@@ -115,9 +116,6 @@ class Client : public CefClient,
     std::mutex _devToolsEventMethodsSetMutex;
     std::unordered_set<std::string> _devToolsEventMethodsSet;
     std::mutex _bridgeRpcResultsMutex;
-
-    bool _dedupeInput = false;
-    int _dedupeInputMs = DEFAULT_DEDEUPE_INPUT_MS;
 
     IMPLEMENT_REFCOUNTING(Client);
     DISALLOW_COPY_AND_ASSIGN(Client);

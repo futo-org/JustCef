@@ -11,26 +11,40 @@ namespace JustCef
         public event Action? OnFocused;
         public event Action? OnUnfocused;
         public event Action<bool>? OnFullscreenChanged;
-        public event Action<string?>? OnLoadStart;
-        public event Action<string?>? OnLoadEnd;
-        public event Action<int, string?, string?>? OnLoadError;
+        public event Action<FrameLoadStartInfo>? OnFrameLoadStart;
+        public event Action<FrameLoadEndInfo>? OnFrameLoadEnd;
+        public event Action<FrameLoadErrorInfo>? OnFrameLoadError;
+        public event Action<LoadingStateChangedInfo>? OnLoadingStateChanged;
         public event Action<string?, byte[]>? OnDevToolsEvent;
 
         private Func<JustCefWindow, IPCRequest, IPCRequest?>? _requestModifier;
         private Func<JustCefWindow, IPCRequest, Task<IPCResponse?>>? _requestProxy;
         private Func<JustCefWindow, string, string?, Task<string?>>? _bridgeRpcHandler;
 
-        private readonly TaskCompletionSource _closeCompletionSource = new TaskCompletionSource();
+        private readonly TaskCompletionSource _closeCompletionSource = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly object _loadingMutex = new();
+        private bool _isLoading;
+        private TaskCompletionSource _loadedCompletionSource = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public JustCefWindow(JustCefProcess process, int identifier, Func<JustCefWindow, IPCRequest, IPCRequest?>? requestModifier, Func<JustCefWindow, IPCRequest, Task<IPCResponse?>>? requestProxy, Func<JustCefWindow, string, string?, Task<string?>>? bridgeRpcHandler)
+        public JustCefWindow(JustCefProcess process, int identifier, Func<JustCefWindow, IPCRequest, IPCRequest?>? requestModifier, Func<JustCefWindow, IPCRequest, Task<IPCResponse?>>? requestProxy, Func<JustCefWindow, string, string?, Task<string?>>? bridgeRpcHandler, bool isLoading)
         {
             _process = process;
             Identifier = identifier;
             _requestModifier = requestModifier;
             _requestProxy = requestProxy;
             _bridgeRpcHandler = bridgeRpcHandler;
+            if (isLoading) 
+            {
+                lock (_loadingMutex)
+                {
+                    if (!_isLoading)
+                    {
+                        _isLoading = true;
+                        _loadedCompletionSource = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                    }
+                }
+            }
         }
-
         public async Task MaximizeAsync(CancellationToken cancellationToken = default) => await _process.WindowMaximizeAsync(Identifier, cancellationToken);
         public async Task MinimizeAsync(CancellationToken cancellationToken = default) => await _process.WindowMinimizeAsync(Identifier, cancellationToken);
         public async Task RestoreAsync(CancellationToken cancellationToken = default) => await _process.WindowRestoreAsync(Identifier, cancellationToken);
@@ -39,7 +53,38 @@ namespace JustCef
         public async Task ActivateAsync(CancellationToken cancellationToken = default) => await _process.WindowActivateAsync(Identifier, cancellationToken);
         public async Task BringToTopAsync(CancellationToken cancellationToken = default) => await _process.WindowBringToTopAsync(Identifier, cancellationToken);
         public async Task SetAlwaysOnTopAsync(bool alwaysOnTop, CancellationToken cancellationToken = default) => await _process.WindowSetAlwaysOnTopAsync(Identifier, alwaysOnTop, cancellationToken);
-        public async Task LoadUrlAsync(string url, CancellationToken cancellationToken = default) => await _process.WindowLoadUrlAsync(Identifier, url, cancellationToken);
+        public async Task LoadUrlAsync(string url, CancellationToken cancellationToken = default)
+        {
+            lock (_loadingMutex)
+            {
+                if (!_isLoading)
+                {
+                    _isLoading = true;
+                    _loadedCompletionSource = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                }
+            }
+            
+            try
+            {
+                await _process.WindowLoadUrlAsync(Identifier, url, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                TaskCompletionSource? tcs = null;
+                lock (_loadingMutex)
+                {
+                    if (_isLoading)
+                    {
+                        _isLoading = false;
+                        tcs = _loadedCompletionSource;
+                    }
+                }
+
+                tcs?.TrySetException(ex);
+                throw;
+            }
+        }
+
         public async Task SetPositionAsync(int x, int y, CancellationToken cancellationToken = default) => await _process.WindowSetPositionAsync(Identifier, x, y, cancellationToken);
         public async Task<(int X, int Y)> GetPositionAsync(CancellationToken cancellationToken = default) => await _process.WindowGetPositionAsync(Identifier, cancellationToken);
         public async Task SetSizeAsync(int width, int height, CancellationToken cancellationToken = default) => await _process.WindowSetSizeAsync(Identifier, width, height, cancellationToken);
@@ -111,24 +156,92 @@ namespace JustCef
             _requestModifier = requestModifier;
         }
 
-        public void InvokeOnClose() 
+        internal void InvokeOnClose()
         {
+            TaskCompletionSource? loadedCompletionSourceToFail = null;
+            lock (_loadingMutex)
+            {
+                if (_isLoading)
+                {
+                    _isLoading = false;
+                    loadedCompletionSourceToFail = _loadedCompletionSource;
+                }
+            }
+
+            loadedCompletionSourceToFail?.TrySetException(new InvalidOperationException("Window was closed before loading completed."));
+
             _closeCompletionSource.TrySetResult();
             OnClose?.Invoke();
         }
 
-        public void InvokeOnFocused() => OnFocused?.Invoke();
-        public void InvokeOnUnfocused() => OnUnfocused?.Invoke();
-        public void InvokeOnFullscreenChanged(bool fullscreen) => OnFullscreenChanged?.Invoke(fullscreen);
-        public void InvokeOnLoadStart(string? url) => OnLoadStart?.Invoke(url);
-        public void InvokeOnLoadEnd(string? url) => OnLoadEnd?.Invoke(url);
-        public void InvokeOnLoadError(int errorCode, string? errorText, string? failedUrl) => OnLoadError?.Invoke(errorCode, errorText, failedUrl);
-        public void InvokeOnDevToolsEvent(string? method, byte[] parameters) => OnDevToolsEvent?.Invoke(method, parameters);
+        internal void InvokeOnFocused() => OnFocused?.Invoke();
+        internal void InvokeOnUnfocused() => OnUnfocused?.Invoke();
+        internal void InvokeOnFullscreenChanged(bool fullscreen) => OnFullscreenChanged?.Invoke(fullscreen);
+        internal void InvokeOnFrameLoadStart(string? frameIdentifier, bool isMainFrame, string? url)
+        {
+            OnFrameLoadStart?.Invoke(new FrameLoadStartInfo(
+                FrameIdentifier: frameIdentifier,
+                IsMainFrame: isMainFrame,
+                Url: url));
+        }
+
+        internal void InvokeOnFrameLoadEnd(string? frameIdentifier, bool isMainFrame, string? url, int httpStatusCode)
+        {
+            OnFrameLoadEnd?.Invoke(new FrameLoadEndInfo(
+                FrameIdentifier: frameIdentifier,
+                IsMainFrame: isMainFrame,
+                Url: url,
+                HttpStatusCode: httpStatusCode));
+        }
+
+        internal void InvokeOnFrameLoadError(string? frameIdentifier, bool isMainFrame, int errorCode, string? errorText, string? failedUrl)
+        {
+            OnFrameLoadError?.Invoke(new FrameLoadErrorInfo(
+                FrameIdentifier: frameIdentifier,
+                IsMainFrame: isMainFrame,
+                ErrorCode: errorCode,
+                ErrorText: errorText,
+                FailedUrl: failedUrl));
+        }
+
+        internal void InvokeOnLoadingStateChanged(bool isLoading, bool canGoBack, bool canGoForward)
+        {
+            TaskCompletionSource? loadedCompletionSourceToComplete = null;
+
+            lock (_loadingMutex)
+            {
+                if (isLoading)
+                {
+                    if (!_isLoading)
+                    {
+                        _isLoading = true;
+                        _loadedCompletionSource = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                    }
+                }
+                else
+                {
+                    if (_isLoading)
+                    {
+                        _isLoading = false;
+                        loadedCompletionSourceToComplete = _loadedCompletionSource;
+                    }
+                }
+            }
+
+            loadedCompletionSourceToComplete?.TrySetResult();
+
+            OnLoadingStateChanged?.Invoke(new LoadingStateChangedInfo(
+                IsLoading: isLoading,
+                CanGoBack: canGoBack,
+                CanGoForward: canGoForward));
+        }
+
+        internal void InvokeOnDevToolsEvent(string? method, byte[] parameters) => OnDevToolsEvent?.Invoke(method, parameters);
 
         public void WaitForExit() => _closeCompletionSource.Task.Wait();
-        public async Task WaitForExitAsync(CancellationToken cancellationToken = default) 
+        public async Task WaitForExitAsync(CancellationToken cancellationToken = default)
         {
-            await Task.WhenAny(_closeCompletionSource.Task, Task.Delay(Timeout.Infinite, cancellationToken));
+            await _closeCompletionSource.Task.WaitAsync(cancellationToken);
         }
 
         public async Task<IPCResponse?> ProxyRequestAsync(IPCRequest request)
@@ -199,5 +312,49 @@ namespace JustCef
 
             return await _bridgeRpcHandler(this, method, json);
         }
+
+        public async Task NavigateAsync(string url, CancellationToken cancellationToken = default)
+        {
+            await LoadUrlAsync(url, cancellationToken);
+            await WaitUntilLoadedAsync(cancellationToken);
+        }
+
+        public async Task WaitUntilLoadedAsync(CancellationToken cancellationToken = default)
+        {
+            Task waitTask;
+
+            lock (_loadingMutex)
+            {
+                if (!_isLoading)
+                    return;
+
+                waitTask = _loadedCompletionSource.Task;
+            }
+
+            await waitTask.WaitAsync(cancellationToken);
+        }
+
+        public readonly record struct FrameLoadStartInfo(
+            string? FrameIdentifier,
+            bool IsMainFrame,
+            string? Url);
+
+        public readonly record struct FrameLoadEndInfo(
+            string? FrameIdentifier,
+            bool IsMainFrame,
+            string? Url,
+            int HttpStatusCode);
+
+        public readonly record struct FrameLoadErrorInfo(
+            string? FrameIdentifier,
+            bool IsMainFrame,
+            int ErrorCode,
+            string? ErrorText,
+            string? FailedUrl);
+
+        public readonly record struct LoadingStateChangedInfo(
+            bool IsLoading,
+            bool CanGoBack,
+            bool CanGoForward);
     }
 }
