@@ -272,7 +272,7 @@ namespace JustCef
                     StatusCode = 404,
                     StatusText = "Not Found",
                     Headers = new(StringComparer.InvariantCultureIgnoreCase),
-                    BodyStream = null
+                    DataSource = null
                 };
             }
         }
