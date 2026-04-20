@@ -17,6 +17,8 @@ set(LIBJUSTCEF_SOURCES
     JustCefWindow.h
     Packet.h
     WindowInternals.h
+    DataStream.cpp
+    DataStream.h
 )
 
 add_library(libjustcef STATIC ${LIBJUSTCEF_SOURCES})

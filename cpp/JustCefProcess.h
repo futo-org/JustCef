@@ -44,6 +44,8 @@ struct WindowCreateOptions {
     std::optional<std::string> title;
     std::optional<std::string> icon_path;
     std::optional<std::string> app_id;
+    bool bridge_enabled = false;
+    BridgeRpcHandler bridge_rpc_handler;
 };
 
 class JustCefProcess {
@@ -95,7 +97,9 @@ public:
         bool modify_request_body = false,
         std::optional<std::string> title = std::nullopt,
         std::optional<std::string> icon_path = std::nullopt,
-        std::optional<std::string> app_id = std::nullopt);
+        std::optional<std::string> app_id = std::nullopt,
+        bool bridge_enabled = false,
+        BridgeRpcHandler bridge_rpc_handler = {});
 
     asio::awaitable<void> NotifyExitAsync();
 
@@ -103,6 +107,7 @@ public:
     asio::awaitable<bool> StreamDataAsync(std::uint32_t identifier, std::vector<std::uint8_t> data);
     asio::awaitable<void> StreamCloseAsync(std::uint32_t identifier);
 
+    // Legacy helpers. Prefer the window-scoped picker methods.
     asio::awaitable<std::vector<std::string>> PickFileAsync(bool multiple, std::vector<FileFilter> filters);
     asio::awaitable<std::string> PickDirectoryAsync();
     asio::awaitable<std::string> SaveFileAsync(std::string default_name, std::vector<FileFilter> filters);

@@ -4,6 +4,7 @@
 #include "json.hpp"
 
 #include <array>
+#include <chrono>
 #include <stdexcept>
 #include <string_view>
 #include <system_error>
@@ -111,6 +112,10 @@ asio::awaitable<std::optional<IPCResponse>> MakeReadyProxyAwaitable(std::optiona
 
 asio::awaitable<std::optional<IPCRequest>> MakeReadyModifierAwaitable(std::optional<IPCRequest> request) {
     co_return request;
+}
+
+asio::awaitable<std::optional<std::string>> MakeReadyBridgeAwaitable(std::optional<std::string> response) {
+    co_return response;
 }
 
 std::string EncodeBase64(const std::vector<std::uint8_t>& bytes) {
@@ -357,7 +362,31 @@ asio::awaitable<void> JustCefWindow::SetAlwaysOnTopAsync(bool always_on_top) {
 }
 
 asio::awaitable<void> JustCefWindow::LoadUrlAsync(std::string url) {
-    return RequireProcess(command_target_)->WindowLoadUrlAsync(Identifier(), std::move(url));
+    {
+        std::lock_guard<std::mutex> lock(shared_->loading_mutex);
+        shared_->is_loading = true;
+        shared_->loading_failed = false;
+        shared_->loading_error.clear();
+        shared_->loading_cv.notify_all();
+    }
+
+    try {
+        co_await RequireProcess(command_target_)->WindowLoadUrlAsync(Identifier(), std::move(url));
+    } catch (...) {
+        {
+            std::lock_guard<std::mutex> lock(shared_->loading_mutex);
+            shared_->is_loading = false;
+            shared_->loading_failed = true;
+            shared_->loading_error = "Window navigation failed.";
+            shared_->loading_cv.notify_all();
+        }
+        throw;
+    }
+}
+
+asio::awaitable<void> JustCefWindow::NavigateAsync(std::string url) {
+    co_await LoadUrlAsync(std::move(url));
+    co_await WaitUntilLoadedAsync();
 }
 
 asio::awaitable<void> JustCefWindow::SetPositionAsync(int x, int y) {
@@ -384,6 +413,18 @@ asio::awaitable<double> JustCefWindow::GetZoomAsync() {
     return RequireProcess(command_target_)->WindowGetZoomAsync(Identifier());
 }
 
+asio::awaitable<std::vector<std::string>> JustCefWindow::PickFileAsync(bool multiple, std::vector<FileFilter> filters) {
+    return RequireProcess(command_target_)->WindowPickFileAsync(Identifier(), multiple, std::move(filters));
+}
+
+asio::awaitable<std::string> JustCefWindow::PickDirectoryAsync() {
+    return RequireProcess(command_target_)->WindowPickDirectoryAsync(Identifier());
+}
+
+asio::awaitable<std::string> JustCefWindow::SaveFileAsync(std::string default_name, std::vector<FileFilter> filters) {
+    return RequireProcess(command_target_)->WindowSaveFileAsync(Identifier(), std::move(default_name), std::move(filters));
+}
+
 asio::awaitable<void> JustCefWindow::CloseAsync(bool force_close) {
     return RequireProcess(command_target_)->WindowCloseAsync(Identifier(), force_close);
 }
@@ -408,6 +449,12 @@ asio::awaitable<DevToolsMethodResult> JustCefWindow::ExecuteDevToolsMethodAsync(
     std::string method_name,
     std::optional<std::string> json) {
     return RequireProcess(command_target_)->WindowExecuteDevToolsMethodAsync(Identifier(), std::move(method_name), std::move(json));
+}
+
+asio::awaitable<std::string> JustCefWindow::CallBridgeRpcAsync(
+    std::string method,
+    std::optional<std::string> json) {
+    return RequireProcess(command_target_)->WindowBridgeRpcAsync(Identifier(), std::move(method), std::move(json));
 }
 
 asio::awaitable<BrowserResponse> JustCefWindow::ExecuteBrowserRequestAsync(BrowserRequest request) {
@@ -493,6 +540,18 @@ void JustCefWindow::SetRequestProxy(SyncRequestProxy request_proxy) {
     };
 }
 
+void JustCefWindow::SetBridgeRpcHandler(BridgeRpcHandler bridge_rpc_handler) {
+    std::lock_guard<std::mutex> lock(shared_->request_mutex);
+    shared_->bridge_rpc_handler = std::move(bridge_rpc_handler);
+}
+
+void JustCefWindow::SetBridgeRpcHandler(SyncBridgeRpcHandler bridge_rpc_handler) {
+    std::lock_guard<std::mutex> lock(shared_->request_mutex);
+    shared_->bridge_rpc_handler = [handler = std::move(bridge_rpc_handler)](JustCefWindow& window, std::string method, std::string json) mutable {
+        return MakeReadyBridgeAwaitable(handler(window, std::move(method), std::move(json)));
+    };
+}
+
 void JustCefWindow::SetRequestModifier(RequestModifier request_modifier) {
     std::lock_guard<std::mutex> lock(shared_->request_mutex);
     shared_->request_modifier = std::move(request_modifier);
@@ -503,6 +562,52 @@ void JustCefWindow::SetRequestModifier(SyncRequestModifier request_modifier) {
     shared_->request_modifier = [handler = std::move(request_modifier)](JustCefWindow& window, const IPCRequest& request) mutable {
         return MakeReadyModifierAwaitable(handler(window, request));
     };
+}
+
+bool JustCefWindow::IsLoading() const {
+    std::lock_guard<std::mutex> lock(shared_->loading_mutex);
+    return shared_->is_loading;
+}
+
+bool JustCefWindow::CanGoBack() const {
+    std::lock_guard<std::mutex> lock(shared_->loading_mutex);
+    return shared_->can_go_back;
+}
+
+bool JustCefWindow::CanGoForward() const {
+    std::lock_guard<std::mutex> lock(shared_->loading_mutex);
+    return shared_->can_go_forward;
+}
+
+void JustCefWindow::WaitUntilLoaded() const {
+    std::unique_lock<std::mutex> lock(shared_->loading_mutex);
+    shared_->loading_cv.wait(lock, [this] {
+        return !shared_->is_loading || shared_->close_signaled.load();
+    });
+
+    if (shared_->loading_failed) {
+        throw std::runtime_error(
+            shared_->loading_error.empty() ? "Window loading failed." : shared_->loading_error);
+    }
+}
+
+asio::awaitable<void> JustCefWindow::WaitUntilLoadedAsync() const {
+    asio::steady_timer timer(shared_->executor);
+    for (;;) {
+        {
+            std::lock_guard<std::mutex> lock(shared_->loading_mutex);
+            if (!shared_->is_loading || shared_->close_signaled.load()) {
+                if (shared_->loading_failed) {
+                    throw std::runtime_error(
+                        shared_->loading_error.empty() ? "Window loading failed." : shared_->loading_error);
+                }
+                co_return;
+            }
+        }
+
+        timer.expires_after(std::chrono::milliseconds(10));
+        co_await timer.async_wait(asio::use_awaitable);
+    }
 }
 
 void JustCefWindow::WaitForExit() const {

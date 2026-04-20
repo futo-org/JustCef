@@ -1,6 +1,6 @@
 include_guard(GLOBAL)
 
-set(JUSTCEF_VERSION 1 CACHE STRING "JustCef native runtime version")
+set(JUSTCEF_VERSION 4 CACHE STRING "JustCef native runtime version")
 set(JUSTCEF_BASE_URL "https://static.grayjay.app/justcef" CACHE STRING "JustCef native runtime base URL")
 set(JUSTCEF_RUNTIME_MODULE_DIR "${CMAKE_CURRENT_LIST_DIR}" CACHE INTERNAL "JustCef runtime helper directory")
 

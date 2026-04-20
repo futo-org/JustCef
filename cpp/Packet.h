@@ -18,23 +18,35 @@ enum class PacketType : std::uint8_t {
     Notification = 2,
 };
 
-enum class OpcodeController : std::uint8_t {
+enum class OpcodeController : uint8_t {
     Ping = 0,
     Print = 1,
     Echo = 2,
     WindowCreate = 3,
+    //WindowCreatePositioned = 4,
     WindowSetDevelopmentToolsEnabled = 5,
     WindowLoadUrl = 6,
-    WindowSetZoom = 9,
+    //WindowLoadHtml = 7,
+    //WindowExecuteJavascript = 8, //string js
+    WindowSetZoom = 9, //double zoom
+    //WindowSetResizable = 10, //bool value
+    //WindowSetWindowless = 11, //bool value
+    //WindowGetWindowSize = 12,
+    //WindowSetWindowSize = 13, //Size size
     WindowGetPosition = 14,
-    WindowSetPosition = 15,
+    WindowSetPosition = 15, //Position value
+    //WindowCenterWindow = 16,
     WindowMaximize = 17,
     WindowMinimize = 18,
     WindowRestore = 19,
     WindowShow = 20,
     WindowHide = 21,
     WindowClose = 22,
+    //WindowSetRequestModificationEnabled = 23, //bool enabled
+    //WindowModifyRequest = 24, //Request request -> Response
     WindowRequestFocus = 25,
+    //WindowRegisterKeyboardListener = 26,
+    //WindowSetTitle = 27,
     WindowActivate = 28,
     WindowBringToTop = 29,
     WindowSetAlwaysOnTop = 30,
@@ -45,51 +57,67 @@ enum class OpcodeController : std::uint8_t {
     StreamOpen = 35,
     StreamClose = 36,
     StreamData = 37,
-    PickFile = 38,
-    PickDirectory = 39,
-    SaveFile = 40,
-    WindowExecuteDevToolsMethod = 41,
-    WindowSetDevelopmentToolsVisible = 42,
-    WindowSetTitle = 43,
-    WindowSetIcon = 44,
-    WindowAddUrlToProxy = 45,
-    WindowRemoveUrlToProxy = 46,
-    WindowAddUrlToModify = 47,
-    WindowRemoveUrlToModify = 48,
-    WindowGetSize = 49,
-    WindowSetSize = 50,
-    WindowAddDevToolsEventMethod = 51,
-    WindowRemoveDevToolsEventMethod = 52,
-    WindowAddDomainToProxy = 53,
-    WindowRemoveDomainToProxy = 54,
-    WindowGetZoom = 55,
+    StreamCancel = 38,
+    PickFile = 39,
+    PickDirectory = 40,
+    SaveFile = 41,
+    WindowExecuteDevToolsMethod = 42,
+    WindowSetDevelopmentToolsVisible = 43,
+    WindowSetTitle = 44,
+    WindowSetIcon = 45,
+    WindowAddUrlToProxy = 46,
+    WindowRemoveUrlToProxy = 47,
+    WindowAddUrlToModify = 48,
+    WindowRemoveUrlToModify = 49,
+    WindowGetSize = 50,
+    WindowSetSize = 51,
+    WindowAddDevToolsEventMethod = 52,
+    WindowRemoveDevToolsEventMethod = 53,
+    WindowAddDomainToProxy = 54,
+    WindowRemoveDomainToProxy = 55,
+    WindowGetZoom = 56,
+    WindowBridgeRpc = 57
 };
 
-enum class OpcodeControllerNotification : std::uint8_t {
-    Exit = 0,
+//Notifications from controller
+enum class OpcodeControllerNotification : uint8_t {
+    Exit = 0
 };
 
-enum class OpcodeClient : std::uint8_t {
+//Requests from client
+enum class OpcodeClient : uint8_t {
     Ping = 0,
     Print = 1,
     Echo = 2,
     WindowProxyRequest = 3,
     WindowModifyRequest = 4,
-    StreamClose = 5,
+    StreamOpen = 5,
+    StreamData = 6,
+    StreamClose = 7,
+    StreamCancel = 8,
+    WindowBridgeRpc = 9
 };
 
-enum class OpcodeClientNotification : std::uint8_t {
+//Notifications from client
+enum class OpcodeClientNotification : uint8_t {
     Ready = 0,
     Exit = 1,
     WindowOpened = 2,
     WindowClosed = 3,
+    //WindowResized = 4,
     WindowFocused = 5,
     WindowUnfocused = 6,
+    //WindowMinimized = 7,
+    //WindowMaximized = 8,
+    //WindowRestored = 9,
+    //WindowMoved = 10,
+    //WindowKeyboardEvent = 11,
     WindowFullscreenChanged = 12,
-    WindowLoadStart = 13,
-    WindowLoadEnd = 14,
-    WindowLoadError = 15,
+    WindowFrameLoadStart = 13,
+    WindowFrameLoadEnd = 14,
+    WindowFrameLoadError = 15,
     WindowDevToolsEvent = 16,
+    WindowLoadingStateChanged = 17
 };
 
 constexpr std::size_t kMaxIpcSize = 10 * 1024 * 1024;

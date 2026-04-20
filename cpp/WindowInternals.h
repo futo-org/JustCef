@@ -1,10 +1,12 @@
 #pragma once
 
 #include "AsyncSignal.h"
+#include "JustCefWindow.h"
 #include "IpcTypes.h"
 #include "asio.h"
 
 #include <atomic>
+#include <condition_variable>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -32,6 +34,15 @@ public:
     virtual asio::awaitable<Size> WindowGetSizeAsync(int identifier) = 0;
     virtual asio::awaitable<void> WindowSetZoomAsync(int identifier, double zoom) = 0;
     virtual asio::awaitable<double> WindowGetZoomAsync(int identifier) = 0;
+    virtual asio::awaitable<std::vector<std::string>> WindowPickFileAsync(
+        int identifier,
+        bool multiple,
+        std::vector<FileFilter> filters) = 0;
+    virtual asio::awaitable<std::string> WindowPickDirectoryAsync(int identifier) = 0;
+    virtual asio::awaitable<std::string> WindowSaveFileAsync(
+        int identifier,
+        std::string default_name,
+        std::vector<FileFilter> filters) = 0;
     virtual asio::awaitable<void> WindowCloseAsync(int identifier, bool force_close) = 0;
     virtual asio::awaitable<void> WindowSetFullscreenAsync(int identifier, bool fullscreen) = 0;
     virtual asio::awaitable<void> RequestFocusAsync(int identifier) = 0;
@@ -40,6 +51,10 @@ public:
     virtual asio::awaitable<DevToolsMethodResult> WindowExecuteDevToolsMethodAsync(
         int identifier,
         std::string method_name,
+        std::optional<std::string> json) = 0;
+    virtual asio::awaitable<std::string> WindowBridgeRpcAsync(
+        int identifier,
+        std::string method,
         std::optional<std::string> json) = 0;
     virtual asio::awaitable<void> WindowSetTitleAsync(int identifier, std::string title) = 0;
     virtual asio::awaitable<void> WindowSetIconAsync(int identifier, std::string icon_path) = 0;
@@ -61,8 +76,17 @@ struct WindowShared {
     std::mutex request_mutex;
     RequestModifier request_modifier;
     RequestProxy request_proxy;
+    BridgeRpcHandler bridge_rpc_handler;
     detail::AsyncSignal close_signal;
     std::atomic<bool> close_signaled = false;
+
+    mutable std::mutex loading_mutex;
+    std::condition_variable loading_cv;
+    bool is_loading = false;
+    bool can_go_back = false;
+    bool can_go_forward = false;
+    bool loading_failed = false;
+    std::string loading_error;
 };
 
 }  // namespace justcef

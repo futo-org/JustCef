@@ -1,5 +1,5 @@
 #include "JustCefProcess.h"
-
+#include "DataStream.h"
 #include "AsyncSignal.h"
 #include "Packet.h"
 #include "WindowInternals.h"
@@ -12,12 +12,14 @@
 #include <cstring>
 #include <mutex>
 #include <optional>
+#include <queue>
 #include <set>
 #include <sstream>
 #include <stdexcept>
 #include <thread>
 #include <tuple>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 #ifdef _WIN32
@@ -130,74 +132,85 @@ std::string ReadRequiredString(detail::PacketReader& reader, const char* field_n
     return *value;
 }
 
+
+enum class BinaryPayloadEncoding : std::uint8_t {
+    Inline = 0,
+    Stream = 1,
+};
+
+enum class BridgeRpcPayloadEncoding : std::uint8_t {
+    Inline = 0,
+    Stream = 1,
+};
+
+constexpr std::size_t kInlinePayloadFramingSize = sizeof(std::uint8_t) + sizeof(std::uint32_t);
+
+void WriteInlinePayload(detail::PacketWriter& writer, BridgeRpcPayloadEncoding encoding, std::string_view payload) {
+    writer.Write<std::uint8_t>(static_cast<std::uint8_t>(encoding));
+    writer.Write<std::uint32_t>(static_cast<std::uint32_t>(payload.size()));
+    if (!payload.empty()) {
+        writer.WriteBytes(reinterpret_cast<const std::uint8_t*>(payload.data()), payload.size());
+    }
+}
+
+class DeferredOutgoingStreams {
+public:
+    void Add(std::function<void()> start, std::function<void()> cleanup) {
+        starts_.push_back([start = std::move(start), cleanup = std::move(cleanup)]() mutable {
+            try {
+                start();
+            } catch (...) {
+                cleanup();
+                throw;
+            }
+        });
+
+        if (abort_) {
+            auto previous = std::move(abort_);
+            abort_ = [previous = std::move(previous), cleanup = std::move(cleanup)]() mutable {
+                previous();
+                cleanup();
+            };
+        } else {
+            abort_ = std::move(cleanup);
+        }
+    }
+
+    bool HasAny() const {
+        return !starts_.empty();
+    }
+
+    void StartAll() {
+        abort_ = {};
+        auto starts = std::move(starts_);
+        starts_.clear();
+
+        for (auto& start : starts) {
+            try {
+                start();
+            } catch (...) {
+                Logger::Error("JustCefProcess", "Failed to start deferred outgoing stream.", std::current_exception());
+            }
+        }
+    }
+
+    void CleanupAll() {
+        auto abort = std::move(abort_);
+        starts_.clear();
+        if (abort) {
+            abort();
+        }
+    }
+
+private:
+    std::vector<std::function<void()>> starts_;
+    std::function<void()> abort_;
+};
+
 struct ParsedWindowRequest {
     int identifier = 0;
     IPCRequest request;
 };
-
-ParsedWindowRequest ReadWindowRequest(detail::PacketReader& reader) {
-    ParsedWindowRequest parsed;
-    parsed.identifier = ReadRequired<std::int32_t>(reader, "identifier");
-    parsed.request.method = ReadRequiredString(reader, "method");
-    parsed.request.url = ReadRequiredString(reader, "url");
-
-    const auto header_count = ReadRequired<std::int32_t>(reader, "headerCount");
-    if (header_count < 0) {
-        throw std::runtime_error("Header count cannot be negative.");
-    }
-
-    for (int index = 0; index < header_count; ++index) {
-        const auto key = ReadRequiredString(reader, "headerKey");
-        const auto value = ReadRequiredString(reader, "headerValue");
-        parsed.request.headers[key].push_back(value);
-    }
-
-    const auto element_count = ReadRequired<std::uint32_t>(reader, "elementCount");
-    parsed.request.elements.reserve(element_count);
-    for (std::uint32_t index = 0; index < element_count; ++index) {
-        const auto element_type = static_cast<IPCProxyBodyElementType>(ReadRequired<std::uint8_t>(reader, "elementType"));
-        switch (element_type) {
-            case IPCProxyBodyElementType::Bytes: {
-                const auto size = ReadRequired<std::uint32_t>(reader, "elementSize");
-                parsed.request.elements.push_back(IPCProxyBodyElement::Bytes(reader.ReadBytes(size)));
-                break;
-            }
-            case IPCProxyBodyElementType::File: {
-                parsed.request.elements.push_back(IPCProxyBodyElement::File(ReadRequiredString(reader, "fileName")));
-                break;
-            }
-            case IPCProxyBodyElementType::Empty:
-            default:
-                parsed.request.elements.push_back({});
-                break;
-        }
-    }
-
-    return parsed;
-}
-
-void SerializeModifyRequest(detail::PacketWriter& writer, const IPCRequest& request) {
-    writer.WriteSizePrefixedString(request.method);
-    writer.WriteSizePrefixedString(request.url);
-    writer.Write<std::int32_t>(static_cast<std::int32_t>(CountHeaderValuePairs(request.headers)));
-    for (const auto& [key, values] : request.headers) {
-        for (const auto& value : values) {
-            writer.WriteSizePrefixedString(key);
-            writer.WriteSizePrefixedString(value);
-        }
-    }
-
-    writer.Write<std::uint32_t>(static_cast<std::uint32_t>(request.elements.size()));
-    for (const auto& element : request.elements) {
-        writer.Write<std::uint8_t>(static_cast<std::uint8_t>(element.type));
-        if (element.type == IPCProxyBodyElementType::Bytes) {
-            writer.Write<std::uint32_t>(static_cast<std::uint32_t>(element.data.size()));
-            writer.WriteBytes(element.data);
-        } else if (element.type == IPCProxyBodyElementType::File) {
-            writer.WriteSizePrefixedString(element.file_name);
-        }
-    }
-}
 
 std::vector<std::string> SplitArgumentsPosix(const std::string& arguments) {
     std::vector<std::string> parts;
@@ -689,6 +702,11 @@ public:
             throw std::invalid_argument("When modify_requests is true, request_modifier must be set.");
         }
 
+        const bool bridge_enabled = options.bridge_enabled || static_cast<bool>(options.bridge_rpc_handler);
+        if (options.bridge_rpc_handler && !bridge_enabled) {
+            throw std::invalid_argument("When bridge RPC is configured, bridge_enabled must be true.");
+        }
+
         detail::PacketWriter writer;
         writer.Write<bool>(options.resizable);
         writer.Write<bool>(options.frameless);
@@ -701,22 +719,25 @@ public:
         writer.Write<bool>(options.modify_request_body);
         writer.Write<bool>(options.proxy_requests);
         writer.Write<bool>(options.log_console);
+        writer.Write<bool>(bridge_enabled);
         writer.Write<std::int32_t>(options.minimum_width);
         writer.Write<std::int32_t>(options.minimum_height);
         writer.Write<std::int32_t>(options.preferred_width);
         writer.Write<std::int32_t>(options.preferred_height);
         writer.WriteSizePrefixedString(options.url);
-        writer.WriteSizePrefixedString(options.title);
-        writer.WriteSizePrefixedString(options.icon_path);
-        writer.WriteSizePrefixedString(options.app_id);
+        writer.WriteSizePrefixedString(options.title.value_or(std::string()));
+        writer.WriteSizePrefixedString(options.icon_path.value_or(std::string()));
+        writer.WriteSizePrefixedString(options.app_id.value_or(std::string()));
 
-        detail::PacketReader reader(co_await AsyncRawCall(detail::OpcodeController::WindowCreate, std::move(writer), asio::use_awaitable));
+        detail::PacketReader reader(co_await AsyncRawCall(detail::OpcodeController::WindowCreate, std::move(writer)));
         const int identifier = ReadRequired<std::int32_t>(reader, "windowIdentifier");
 
         auto shared = std::make_shared<WindowShared>();
         shared->executor = executor_;
         shared->request_proxy = options.request_proxy;
         shared->request_modifier = options.request_modifier;
+        shared->bridge_rpc_handler = options.bridge_rpc_handler;
+        shared->is_loading = !options.url.empty();
 
         auto window = std::shared_ptr<JustCefWindow>(
             new JustCefWindow(identifier, shared_from_this(), shared));
@@ -748,7 +769,7 @@ public:
         detail::PacketWriter writer;
         writer.Write<std::uint32_t>(identifier);
         writer.WriteBytes(data);
-        detail::PacketReader reader(co_await AsyncRawCall(detail::OpcodeController::StreamData, std::move(writer), asio::use_awaitable));
+        detail::PacketReader reader(co_await AsyncRawCall(detail::OpcodeController::StreamData, std::move(writer)));
         co_return ReadRequired<bool>(reader, "streamWritable");
     }
 
@@ -756,6 +777,12 @@ public:
         detail::PacketWriter writer;
         writer.Write<std::uint32_t>(identifier);
         co_await AsyncVoidCall(detail::OpcodeController::StreamClose, std::move(writer));
+    }
+
+    asio::awaitable<void> StreamCancelAsync(std::uint32_t identifier) {
+        detail::PacketWriter writer;
+        writer.Write<std::uint32_t>(identifier);
+        co_await AsyncVoidCall(detail::OpcodeController::StreamCancel, std::move(writer));
     }
 
     asio::awaitable<void> WindowMaximizeAsync(int identifier) {
@@ -905,8 +932,9 @@ public:
         co_await AsyncVoidCall(detail::OpcodeController::WindowClose, std::move(writer));
     }
 
-    asio::awaitable<std::vector<std::string>> PickFileAsync(bool multiple, std::vector<FileFilter> filters) {
+    asio::awaitable<std::vector<std::string>> WindowPickFileAsync(int identifier, bool multiple, std::vector<FileFilter> filters) {
         detail::PacketWriter writer;
+        writer.Write<std::int32_t>(identifier);
         writer.Write<bool>(multiple);
         writer.Write<std::uint32_t>(static_cast<std::uint32_t>(filters.size()));
         for (const auto& filter : filters) {
@@ -925,14 +953,17 @@ public:
         });
     }
 
-    asio::awaitable<std::string> PickDirectoryAsync() {
-        co_return co_await AsyncParsedCall<std::string>(detail::OpcodeController::PickDirectory, detail::PacketWriter{}, [](detail::PacketReader& reader) {
+    asio::awaitable<std::string> WindowPickDirectoryAsync(int identifier) {
+        detail::PacketWriter writer;
+        writer.Write<std::int32_t>(identifier);
+        co_return co_await AsyncParsedCall<std::string>(detail::OpcodeController::PickDirectory, std::move(writer), [](detail::PacketReader& reader) {
             return ReadRequiredString(reader, "directory");
         });
     }
 
-    asio::awaitable<std::string> SaveFileAsync(std::string default_name, std::vector<FileFilter> filters) {
+    asio::awaitable<std::string> WindowSaveFileAsync(int identifier, std::string default_name, std::vector<FileFilter> filters) {
         detail::PacketWriter writer;
+        writer.Write<std::int32_t>(identifier);
         writer.WriteSizePrefixedString(default_name);
         writer.Write<std::uint32_t>(static_cast<std::uint32_t>(filters.size()));
         for (const auto& filter : filters) {
@@ -945,27 +976,91 @@ public:
         });
     }
 
-    asio::awaitable<DevToolsMethodResult> WindowExecuteDevToolsMethodAsync(
-        int identifier,
-        std::string method_name,
-        std::optional<std::string> json) {
+    asio::awaitable<std::vector<std::string>> PickFileAsync(bool multiple, std::vector<FileFilter> filters) {
+        auto windows = Windows();
+        if (windows.empty()) {
+            throw std::runtime_error("PickFileAsync requires an open window. Use JustCefWindow::PickFileAsync.");
+        }
+        if (windows.size() > 1) {
+            throw std::runtime_error("PickFileAsync is ambiguous when multiple windows are open. Use JustCefWindow::PickFileAsync.");
+        }
+        co_return co_await WindowPickFileAsync(windows.front()->Identifier(), multiple, std::move(filters));
+    }
+
+    asio::awaitable<std::string> PickDirectoryAsync() {
+        auto windows = Windows();
+        if (windows.empty()) {
+            throw std::runtime_error("PickDirectoryAsync requires an open window. Use JustCefWindow::PickDirectoryAsync.");
+        }
+        if (windows.size() > 1) {
+            throw std::runtime_error("PickDirectoryAsync is ambiguous when multiple windows are open. Use JustCefWindow::PickDirectoryAsync.");
+        }
+        co_return co_await WindowPickDirectoryAsync(windows.front()->Identifier());
+    }
+
+    asio::awaitable<std::string> SaveFileAsync(std::string default_name, std::vector<FileFilter> filters) {
+        auto windows = Windows();
+        if (windows.empty()) {
+            throw std::runtime_error("SaveFileAsync requires an open window. Use JustCefWindow::SaveFileAsync.");
+        }
+        if (windows.size() > 1) {
+            throw std::runtime_error("SaveFileAsync is ambiguous when multiple windows are open. Use JustCefWindow::SaveFileAsync.");
+        }
+        co_return co_await WindowSaveFileAsync(windows.front()->Identifier(), std::move(default_name), std::move(filters));
+    }
+
+    asio::awaitable<DevToolsMethodResult> WindowExecuteDevToolsMethodAsync(int identifier, std::string method_name, std::optional<std::string> json) {
         detail::PacketWriter writer;
+        DeferredOutgoingStreams deferred;
         writer.Write<std::int32_t>(identifier);
         writer.WriteSizePrefixedString(method_name);
+        writer.Write<bool>(json.has_value());
         if (json) {
-            writer.WriteSizePrefixedString(*json);
+            SerializeBridgeRpcPayload(writer, *json, deferred);
         }
 
         co_return co_await AsyncParsedCall<DevToolsMethodResult>(
             detail::OpcodeController::WindowExecuteDevToolsMethod,
             std::move(writer),
-            [](detail::PacketReader& reader) {
+            [this](detail::PacketReader& reader) {
                 DevToolsMethodResult result;
                 result.success = ReadRequired<bool>(reader, "success");
-                const auto size = ReadRequired<std::uint32_t>(reader, "resultSize");
-                result.data = reader.ReadBytes(size);
+                result.data = DeserializeBinaryPayload(reader, result.success ? "DevTools method result" : "DevTools method error payload");
                 return result;
-            });
+            },
+            &deferred);
+    }
+
+    asio::awaitable<std::string> WindowBridgeRpcAsync(
+        int identifier,
+        std::string method,
+        std::optional<std::string> json) {
+        if (method.empty()) {
+            throw std::invalid_argument("Bridge RPC method must be a non-empty string.");
+        }
+
+        detail::PacketWriter writer;
+        DeferredOutgoingStreams deferred;
+        writer.Write<std::int32_t>(identifier);
+        writer.WriteSizePrefixedString(method);
+
+        const std::string payload = json.value_or("null");
+        SerializeBridgeRpcPayload(writer, payload, deferred);
+
+        co_return co_await AsyncParsedCall<std::string>(
+            detail::OpcodeController::WindowBridgeRpc,
+            std::move(writer),
+            [this](detail::PacketReader& reader) {
+                const bool success = ReadRequired<bool>(reader, "success");
+                const auto payload = DeserializeBridgeRpcPayload(
+                    reader,
+                    success ? "bridge RPC response payload" : "bridge RPC error payload");
+                if (!success) {
+                    throw std::runtime_error(payload);
+                }
+                return payload;
+            },
+            &deferred);
     }
 
     asio::awaitable<void> WindowSetTitleAsync(int identifier, std::string title) {
@@ -1023,6 +1118,12 @@ private:
         std::function<void(std::exception_ptr, std::vector<std::uint8_t>)> completion;
     };
 
+    struct IncomingStreamDispatcher {
+        std::mutex mutex;
+        std::queue<std::function<void()>> queue;
+        bool running = false;
+    };
+
     struct OutgoingStreamState {
         std::shared_ptr<ByteStream> stream;
         std::atomic<bool> canceled = false;
@@ -1034,63 +1135,168 @@ private:
         std::shared_ptr<WindowShared> shared;
     };
 
-    std::optional<WindowRecord> GetWindowRecord(int identifier) const {
-        std::lock_guard<std::mutex> lock(windows_mutex_);
-        const auto iterator = std::find_if(windows_.begin(), windows_.end(), [identifier](const WindowRecord& record) {
-            return record.identifier == identifier;
-        });
-        if (iterator == windows_.end()) {
-            return std::nullopt;
+    void EnsureStarted() const {
+        if (!started_.load()) {
+            throw std::runtime_error("Process has not been started.");
         }
-        return *iterator;
     }
 
-    std::optional<WindowRecord> RemoveWindowRecord(int identifier) {
-        std::lock_guard<std::mutex> lock(windows_mutex_);
-        const auto iterator = std::find_if(windows_.begin(), windows_.end(), [identifier](const WindowRecord& record) {
-            return record.identifier == identifier;
-        });
-        if (iterator == windows_.end()) {
-            return std::nullopt;
+    bool ReadExact(void* buffer, std::size_t size) {
+        auto* bytes = static_cast<std::uint8_t*>(buffer);
+        std::size_t total = 0;
+        while (total < size) {
+#ifdef _WIN32
+            DWORD read = 0;
+            if (!ReadFile(read_handle_, bytes + total, static_cast<DWORD>(size - total), &read, nullptr)) {
+                throw std::runtime_error("Failed to read from IPC pipe.");
+            }
+#else
+            const ssize_t read = ::read(read_handle_, bytes + total, size - total);
+            if (read < 0) {
+                if (errno == EINTR) {
+                    continue;
+                }
+                throw std::runtime_error("Failed to read from IPC pipe.");
+            }
+#endif
+            if (read == 0) {
+                if (total == 0) {
+                    return false;
+                }
+                throw std::runtime_error("IPC pipe closed while reading.");
+            }
+            total += static_cast<std::size_t>(read);
         }
-
-        WindowRecord removed = std::move(*iterator);
-        windows_.erase(iterator);
-        return removed;
+        return true;
     }
 
-    template <typename CompletionToken>
-    typename asio::async_result<std::decay_t<CompletionToken>, void(std::exception_ptr, std::vector<std::uint8_t>)>::return_type
-    AsyncRawCall(detail::OpcodeController opcode, detail::PacketWriter writer, CompletionToken&& token) {
-        return asio::async_initiate<CompletionToken, void(std::exception_ptr, std::vector<std::uint8_t>)>(
-            [this, opcode, writer = std::move(writer)](auto handler) mutable {
-                using Handler = std::decay_t<decltype(handler)>;
+    void WriteExact(const std::uint8_t* data, std::size_t size) {
+        std::size_t total = 0;
+        while (total < size) {
+#ifdef _WIN32
+            DWORD written = 0;
+            if (!WriteFile(write_handle_, data + total, static_cast<DWORD>(size - total), &written, nullptr)) {
+                throw std::runtime_error("Failed to write to IPC pipe.");
+            }
+#else
+            const ssize_t written = ::write(write_handle_, data + total, size - total);
+            if (written < 0) {
+                if (errno == EINTR) {
+                    continue;
+                }
+                throw std::runtime_error("Failed to write to IPC pipe.");
+            }
+#endif
+            total += static_cast<std::size_t>(written);
+        }
+    }
 
-                auto handler_ptr = std::make_shared<Handler>(std::move(handler));
-                auto handler_executor = asio::get_associated_executor(*handler_ptr, executor_);
+    void SendPacket(
+        detail::PacketType packet_type,
+        std::uint8_t opcode,
+        std::uint32_t request_id,
+        const std::vector<std::uint8_t>& body) {
+        EnsureStarted();
+        if (shutdown_.load()) {
+            throw std::runtime_error("Process transport is shut down.");
+        }
 
-                BeginCall(
-                    opcode,
-                    writer,
-                    [handler_ptr, handler_executor](std::exception_ptr exception, std::vector<std::uint8_t> body) mutable {
-                        asio::dispatch(handler_executor, [handler_ptr, exception, body = std::move(body)]() mutable {
+        const std::uint32_t packet_size =
+            static_cast<std::uint32_t>(body.size() + detail::kPacketHeaderSize - sizeof(std::uint32_t));
+
+        std::vector<std::uint8_t> packet(detail::kPacketHeaderSize + body.size());
+        std::memcpy(packet.data(), &packet_size, sizeof(packet_size));
+        std::memcpy(packet.data() + sizeof(packet_size), &request_id, sizeof(request_id));
+        packet[8] = static_cast<std::uint8_t>(packet_type);
+        packet[9] = opcode;
+        if (!body.empty()) {
+            std::memcpy(packet.data() + detail::kPacketHeaderSize, body.data(), body.size());
+        }
+
+        std::lock_guard<std::mutex> lock(write_mutex_);
+        WriteExact(packet.data(), packet.size());
+    }
+
+    void Notify(detail::OpcodeControllerNotification opcode) {
+        SendPacket(detail::PacketType::Notification, static_cast<std::uint8_t>(opcode), 0, {});
+    }
+
+    asio::awaitable<std::vector<std::uint8_t>> AsyncRawCall(
+        detail::OpcodeController opcode,
+        detail::PacketWriter writer,
+        DeferredOutgoingStreams* deferred = nullptr) {
+        EnsureStarted();
+
+        auto response =
+            co_await asio::async_initiate<decltype(asio::use_awaitable), void(std::exception_ptr, std::vector<std::uint8_t>)>(
+                [self = shared_from_this(),
+                 opcode,
+                 body = writer.Buffer(),
+                 deferred](auto handler) mutable {
+                    using Handler = std::decay_t<decltype(handler)>;
+
+                    auto handler_ptr = std::make_shared<Handler>(std::move(handler));
+                    auto handler_executor = asio::get_associated_executor(*handler_ptr, self->executor_);
+                    const auto request_id = ++self->request_id_counter_;
+
+                    {
+                        std::lock_guard<std::mutex> lock(self->pending_requests_mutex_);
+                        self->pending_requests_[request_id].completion =
+                            [handler_ptr, handler_executor](std::exception_ptr exception, std::vector<std::uint8_t> response) mutable {
+                                asio::dispatch(handler_executor, [handler_ptr, exception, response = std::move(response)]() mutable {
+                                    auto completion_handler = std::move(*handler_ptr);
+                                    completion_handler(exception, std::move(response));
+                                });
+                            };
+                    }
+
+                    try {
+                        self->SendPacket(
+                            detail::PacketType::Request,
+                            static_cast<std::uint8_t>(opcode),
+                            request_id,
+                            body);
+
+                        if (deferred && deferred->HasAny()) {
+                            deferred->StartAll();
+                        }
+                    } catch (...) {
+                        if (deferred) {
+                            deferred->CleanupAll();
+                        }
+
+                        {
+                            std::lock_guard<std::mutex> lock(self->pending_requests_mutex_);
+                            self->pending_requests_.erase(request_id);
+                        }
+
+                        auto exception = std::current_exception();
+                        asio::dispatch(handler_executor, [handler_ptr, exception]() mutable {
                             auto completion_handler = std::move(*handler_ptr);
-                            completion_handler(exception, std::move(body));
+                            completion_handler(exception, std::vector<std::uint8_t>{});
                         });
-                    });
-            },
-            token);
+                    }
+                },
+                asio::use_awaitable);
+
+        co_return response;
+    }
+
+    asio::awaitable<void> AsyncVoidCall(
+        detail::OpcodeController opcode,
+        detail::PacketWriter writer,
+        DeferredOutgoingStreams* deferred = nullptr) {
+        (void)co_await AsyncRawCall(opcode, std::move(writer), deferred);
     }
 
     template <typename T, typename Parser>
-    asio::awaitable<T> AsyncParsedCall(detail::OpcodeController opcode, detail::PacketWriter writer, Parser parser) {
-        detail::PacketReader reader(co_await AsyncRawCall(opcode, std::move(writer), asio::use_awaitable));
+    asio::awaitable<T> AsyncParsedCall(
+        detail::OpcodeController opcode,
+        detail::PacketWriter writer,
+        Parser parser,
+        DeferredOutgoingStreams* deferred = nullptr) {
+        detail::PacketReader reader(co_await AsyncRawCall(opcode, std::move(writer), deferred));
         co_return parser(reader);
-    }
-
-    asio::awaitable<void> AsyncVoidCall(detail::OpcodeController opcode, detail::PacketWriter writer) {
-        (void)co_await AsyncRawCall(opcode, std::move(writer), asio::use_awaitable);
-        co_return;
     }
 
     asio::awaitable<void> AsyncWindowIdentifierCall(detail::OpcodeController opcode, int identifier) {
@@ -1106,194 +1312,671 @@ private:
         co_await AsyncVoidCall(opcode, std::move(writer));
     }
 
-    void EnsureStarted() const {
-        if (!started_.load()) {
-            throw std::runtime_error("Process should be started.");
-        }
-
-        if (shutdown_.load()) {
-            throw std::runtime_error("Process is no longer running.");
-        }
-    }
-
-    void BeginCall(
-        detail::OpcodeController opcode,
-        const detail::PacketWriter& writer,
-        std::function<void(std::exception_ptr, std::vector<std::uint8_t>)> completion) {
-        EnsureStarted();
-
-        const std::uint32_t request_id = ++request_id_counter_;
+    void QueueIncomingStreamWork(std::uint32_t identifier, std::function<void()> work) {
+        std::shared_ptr<IncomingStreamDispatcher> dispatcher;
         {
-            std::lock_guard<std::mutex> lock(pending_requests_mutex_);
-            pending_requests_[request_id] = PendingRequest{.completion = std::move(completion)};
+            std::lock_guard<std::mutex> lock(incoming_stream_dispatchers_mutex_);
+            auto& entry = incoming_stream_dispatchers_[identifier];
+            if (!entry) {
+                entry = std::make_shared<IncomingStreamDispatcher>();
+            }
+            dispatcher = entry;
         }
 
-        try {
-            SendPacket(detail::PacketType::Request, static_cast<std::uint8_t>(opcode), request_id, writer.Buffer());
-        } catch (...) {
-            PendingRequest pending;
+        bool should_start = false;
+        {
+            std::lock_guard<std::mutex> lock(dispatcher->mutex);
+            dispatcher->queue.push(std::move(work));
+            if (!dispatcher->running) {
+                dispatcher->running = true;
+                should_start = true;
+            }
+        }
+
+        if (!should_start) {
+            return;
+        }
+
+        auto self = shared_from_this();
+        std::thread([self, identifier, dispatcher]() {
+            self->ProcessIncomingStreamDispatcher(identifier, dispatcher);
+        }).detach();
+    }
+
+    void ProcessIncomingStreamDispatcher(
+        std::uint32_t identifier,
+        const std::shared_ptr<IncomingStreamDispatcher>& dispatcher) {
+        for (;;) {
+            std::function<void()> work;
             {
-                std::lock_guard<std::mutex> lock(pending_requests_mutex_);
-                const auto iterator = pending_requests_.find(request_id);
-                if (iterator != pending_requests_.end()) {
-                    pending = std::move(iterator->second);
-                    pending_requests_.erase(iterator);
+                std::lock_guard<std::mutex> lock(dispatcher->mutex);
+                if (dispatcher->queue.empty()) {
+                    dispatcher->running = false;
+                    break;
                 }
+                work = std::move(dispatcher->queue.front());
+                dispatcher->queue.pop();
             }
-            if (pending.completion) {
-                pending.completion(std::current_exception(), {});
+
+            try {
+                work();
+            } catch (...) {
+                Logger::Error("JustCefProcess", "Incoming stream worker failed.", std::current_exception());
             }
         }
-    }
 
-    void Notify(detail::OpcodeControllerNotification opcode) {
-        EnsureStarted();
-        SendPacket(detail::PacketType::Notification, static_cast<std::uint8_t>(opcode), 0, {});
-    }
-
-    void SendPacket(
-        detail::PacketType packet_type,
-        std::uint8_t opcode,
-        std::uint32_t request_id,
-        const std::vector<std::uint8_t>& body) {
-        std::vector<std::uint8_t> packet(detail::kPacketHeaderSize + body.size());
-        const std::uint32_t size = static_cast<std::uint32_t>(packet.size() - sizeof(std::uint32_t));
-        std::memcpy(packet.data(), &size, sizeof(size));
-        std::memcpy(packet.data() + 4, &request_id, sizeof(request_id));
-        packet[8] = static_cast<std::uint8_t>(packet_type);
-        packet[9] = opcode;
-        if (!body.empty()) {
-            std::memcpy(packet.data() + detail::kPacketHeaderSize, body.data(), body.size());
-        }
-
-        std::lock_guard<std::mutex> lock(write_mutex_);
-        WriteAll(packet.data(), packet.size());
-    }
-
-    bool ReadExactly(void* buffer, std::size_t size) {
-        std::size_t total = 0;
-        while (total < size) {
-#ifdef _WIN32
-            DWORD read = 0;
-            if (!ReadFile(read_handle_, static_cast<char*>(buffer) + total, static_cast<DWORD>(size - total), &read, nullptr) || read == 0) {
-                return false;
-            }
-            total += read;
-#else
-            const ssize_t read = ::read(read_handle_, static_cast<char*>(buffer) + total, size - total);
-            if (read == 0) {
-                return false;
-            }
-            if (read < 0) {
-                if (errno == EINTR) {
-                    continue;
-                }
-                return false;
-            }
-            total += static_cast<std::size_t>(read);
-#endif
-        }
-
-        return true;
-    }
-
-    void WriteAll(const void* buffer, std::size_t size) {
-        std::size_t total = 0;
-        while (total < size) {
-#ifdef _WIN32
-            DWORD written = 0;
-            if (!WriteFile(write_handle_, static_cast<const char*>(buffer) + total, static_cast<DWORD>(size - total), &written, nullptr) || written == 0) {
-                throw std::runtime_error("Failed to write IPC packet.");
-            }
-            total += written;
-#else
-            const ssize_t written = ::write(write_handle_, static_cast<const char*>(buffer) + total, size - total);
-            if (written < 0) {
-                if (errno == EINTR) {
-                    continue;
-                }
-                throw std::runtime_error("Failed to write IPC packet.");
-            }
-            if (written == 0) {
-                throw std::runtime_error("Failed to write IPC packet.");
-            }
-            total += static_cast<std::size_t>(written);
-#endif
+        std::lock_guard<std::mutex> lock(incoming_stream_dispatchers_mutex_);
+        const auto iterator = incoming_stream_dispatchers_.find(identifier);
+        if (iterator != incoming_stream_dispatchers_.end() && iterator->second == dispatcher) {
+            incoming_stream_dispatchers_.erase(iterator);
         }
     }
 
     void ReceiveLoop() {
-        Logger::Info("JustCefProcess", "Receive loop started.");
-
         try {
-            std::array<std::uint8_t, detail::kPacketHeaderSize> header_bytes{};
-            while (!shutdown_.load()) {
-                if (!ReadExactly(header_bytes.data(), header_bytes.size())) {
+            for (;;) {
+                std::array<std::uint8_t, detail::kPacketHeaderSize> header_bytes{};
+                const bool had_partial_header = ReadExact(header_bytes.data(), header_bytes.size());
+                if (!had_partial_header) {
                     break;
                 }
 
-                detail::PacketHeader header{};
+                detail::PacketHeader header;
                 std::memcpy(&header.size, header_bytes.data(), sizeof(header.size));
-                std::memcpy(&header.request_id, header_bytes.data() + 4, sizeof(header.request_id));
+                std::memcpy(
+                    &header.request_id,
+                    header_bytes.data() + sizeof(header.size),
+                    sizeof(header.request_id));
                 header.packet_type = static_cast<detail::PacketType>(header_bytes[8]);
                 header.opcode = header_bytes[9];
 
-                const std::size_t body_size = header.size + sizeof(std::uint32_t) - detail::kPacketHeaderSize;
+                const auto body_size =
+                    static_cast<std::size_t>(header.size + sizeof(std::uint32_t) - detail::kPacketHeaderSize);
                 if (body_size > detail::kMaxIpcSize) {
-                    throw std::runtime_error("Invalid packet size received from justcefnative.");
+                    throw std::runtime_error("Received an IPC packet larger than the supported maximum.");
                 }
 
                 std::vector<std::uint8_t> body(body_size);
-                if (body_size > 0 && !ReadExactly(body.data(), body.size())) {
-                    throw std::runtime_error("Failed to read the full IPC packet body.");
+                if (body_size > 0 && ReadExact(body.data(), body_size)) {
+                } else if (body_size > 0) {
+                    throw std::runtime_error("IPC pipe closed while reading a packet body.");
                 }
 
-                if (header.packet_type == detail::PacketType::Response) {
-                    PendingRequest pending;
-                    {
-                        std::lock_guard<std::mutex> lock(pending_requests_mutex_);
-                        const auto iterator = pending_requests_.find(header.request_id);
-                        if (iterator != pending_requests_.end()) {
-                            pending = std::move(iterator->second);
-                            pending_requests_.erase(iterator);
+                switch (header.packet_type) {
+                    case detail::PacketType::Response: {
+                        PendingRequest pending;
+                        bool found = false;
+                        {
+                            std::lock_guard<std::mutex> lock(pending_requests_mutex_);
+                            const auto iterator = pending_requests_.find(header.request_id);
+                            if (iterator != pending_requests_.end()) {
+                                pending = iterator->second;
+                                pending_requests_.erase(iterator);
+                                found = true;
+                            }
                         }
-                    }
 
-                    if (pending.completion) {
-                        pending.completion(nullptr, std::move(body));
-                    } else {
-                        Logger::Error(
-                            "JustCefProcess",
-                            "Received a packet response for a request that no longer has an awaiter.");
+                        if (found && pending.completion) {
+                            pending.completion(nullptr, std::move(body));
+                        }
+                        break;
                     }
-                } else if (header.packet_type == detail::PacketType::Request) {
-                    asio::co_spawn(
-                        executor_,
-                        [this, opcode = static_cast<detail::OpcodeClient>(header.opcode), request_id = header.request_id, body = std::move(body)]() mutable -> asio::awaitable<void> {
-                            co_await HandleIncomingRequest(opcode, request_id, std::move(body));
-                        },
-                        asio::detached);
-                } else if (header.packet_type == detail::PacketType::Notification) {
-                    asio::dispatch(executor_, [this, opcode = static_cast<detail::OpcodeClientNotification>(header.opcode), body = std::move(body)]() mutable {
-                        detail::PacketReader reader(std::move(body));
-                        HandleNotification(opcode, reader);
-                    });
-                } else {
-                    throw std::runtime_error("Received an unknown IPC packet type.");
+                    case detail::PacketType::Request: {
+                        const auto opcode = static_cast<detail::OpcodeClient>(header.opcode);
+                        if (opcode == detail::OpcodeClient::StreamOpen ||
+                            opcode == detail::OpcodeClient::StreamData ||
+                            opcode == detail::OpcodeClient::StreamClose ||
+                            opcode == detail::OpcodeClient::StreamCancel) {
+                            if (body.size() < sizeof(std::uint32_t)) {
+                                throw std::runtime_error("Received malformed stream packet.");
+                            }
+
+                            std::uint32_t stream_identifier = 0;
+                            std::memcpy(&stream_identifier, body.data(), sizeof(stream_identifier));
+
+                            auto self = shared_from_this();
+                            QueueIncomingStreamWork(stream_identifier, [self, opcode, request_id = header.request_id, opcode_byte = header.opcode, body = std::move(body)]() mutable {
+                                try {
+                                    detail::PacketReader reader(std::move(body));
+                                    detail::PacketWriter writer;
+
+                                    switch (opcode) {
+                                        case detail::OpcodeClient::StreamOpen:
+                                            self->HandleClientStreamOpen(reader);
+                                            break;
+                                        case detail::OpcodeClient::StreamData:
+                                            self->HandleClientStreamData(reader, writer);
+                                            break;
+                                        case detail::OpcodeClient::StreamClose:
+                                            self->HandleClientStreamClose(reader);
+                                            break;
+                                        case detail::OpcodeClient::StreamCancel:
+                                            self->HandleClientStreamCancel(reader);
+                                            break;
+                                        default:
+                                            break;
+                                    }
+
+                                    self->SendPacket(detail::PacketType::Response, opcode_byte, request_id, writer.Buffer());
+                                } catch (...) {
+                                    Logger::Error("JustCefProcess", "Exception occurred while processing stream IPC request.", std::current_exception());
+                                    try {
+                                        self->SendPacket(detail::PacketType::Response, opcode_byte, request_id, {});
+                                    } catch (...) {
+                                    }
+                                }
+                            });
+                            break;
+                        }
+
+                        auto self = shared_from_this();
+                        asio::co_spawn(
+                            executor_,
+                            [self, opcode, request_id = header.request_id, body = std::move(body)]() mutable {
+                                return self->HandleIncomingRequest(opcode, request_id, std::move(body));
+                            },
+                            asio::detached);
+                        break;
+                    }
+                    case detail::PacketType::Notification: {
+                        auto self = shared_from_this();
+                        asio::dispatch(executor_, [self, opcode = static_cast<detail::OpcodeClientNotification>(header.opcode), body = std::move(body)]() mutable {
+                            try {
+                                detail::PacketReader reader(std::move(body));
+                                self->HandleNotification(opcode, reader);
+                            } catch (...) {
+                                Logger::Error("JustCefProcess", "Exception occurred while processing IPC notification.", std::current_exception());
+                            }
+                        });
+                        break;
+                    }
+                    default:
+                        throw std::runtime_error("Received an IPC packet with an unsupported type.");
                 }
             }
         } catch (...) {
-            Logger::Error("JustCefProcess", "An exception occurred in the IPC receive loop.", std::current_exception());
+            Logger::Error("JustCefProcess", "IPC receive loop failed.", std::current_exception());
         }
 
-        Logger::Info("JustCefProcess", "Receive loop stopped.");
         Shutdown(true);
+    }
+
+    std::optional<WindowRecord> GetWindowRecord(int identifier) const {
+        std::lock_guard<std::mutex> lock(windows_mutex_);
+        const auto iterator = std::find_if(windows_.begin(), windows_.end(), [identifier](const WindowRecord& record) {
+            return record.identifier == identifier;
+        });
+        if (iterator == windows_.end()) {
+            return std::nullopt;
+        }
+        return *iterator;
+    }
+
+
+    std::optional<WindowRecord> RemoveWindowRecord(int identifier) {
+        std::lock_guard<std::mutex> lock(windows_mutex_);
+        const auto iterator = std::find_if(windows_.begin(), windows_.end(), [identifier](const WindowRecord& record) {
+            return record.identifier == identifier;
+        });
+        if (iterator == windows_.end()) {
+            return std::nullopt;
+        }
+
+        WindowRecord removed = std::move(*iterator);
+        windows_.erase(iterator);
+        return removed;
+    }
+
+    std::shared_ptr<DataStream> GetOrCreateIncomingStream(std::uint32_t identifier) {
+        std::lock_guard<std::mutex> lock(incoming_streams_mutex_);
+        if (const auto iterator = incoming_streams_.find(identifier); iterator != incoming_streams_.end()) {
+            return iterator->second;
+        }
+
+        auto stream = std::make_shared<DataStream>(identifier);
+        incoming_streams_[identifier] = stream;
+        return stream;
+    }
+
+    void ReleaseIncomingStream(std::uint32_t identifier) {
+        std::shared_ptr<DataStream> stream;
+        {
+            std::lock_guard<std::mutex> lock(incoming_streams_mutex_);
+            if (const auto iterator = incoming_streams_.find(identifier); iterator != incoming_streams_.end()) {
+                stream = iterator->second;
+                incoming_streams_.erase(iterator);
+            }
+            canceled_incoming_streams_.erase(identifier);
+        }
+
+        if (stream) {
+            stream->Close();
+        }
+    }
+
+    void RequestIncomingStreamCancel(std::uint32_t identifier) {
+        {
+            std::lock_guard<std::mutex> lock(incoming_streams_mutex_);
+            canceled_incoming_streams_.insert(identifier);
+        }
+
+        asio::co_spawn(
+            executor_,
+            [this, identifier]() -> asio::awaitable<void> {
+                try {
+                    co_await StreamCancelAsync(identifier);
+                } catch (...) {
+                }
+                co_return;
+            },
+            asio::detached);
+    }
+
+    std::vector<std::uint8_t> ReadIncomingStreamBytes(std::uint32_t identifier, std::optional<std::size_t> expected_length, std::string_view description) {
+        auto stream = GetOrCreateIncomingStream(identifier);
+        bool completed = false;
+
+        try {
+            std::vector<std::uint8_t> buffer;
+            if (expected_length) {
+                buffer.resize(*expected_length);
+                std::size_t total = 0;
+                while (total < buffer.size()) {
+                    const std::size_t read = stream->Read(buffer.data() + total, buffer.size() - total);
+                    if (read == 0) {
+                        throw std::runtime_error(std::string("Data stream for ") + std::string(description) + " ended before the declared payload length.");
+                    }
+                    total += read;
+                }
+            } else {
+                std::array<std::uint8_t, 65536> chunk{};
+                for (;;) {
+                    const std::size_t read = stream->Read(chunk.data(), chunk.size());
+                    if (read == 0) {
+                        break;
+                    }
+                    buffer.insert(buffer.end(), chunk.begin(), chunk.begin() + static_cast<std::ptrdiff_t>(read));
+                }
+            }
+
+            completed = true;
+            ReleaseIncomingStream(identifier);
+            return buffer;
+        } catch (...) {
+            if (!completed) {
+                RequestIncomingStreamCancel(identifier);
+                ReleaseIncomingStream(identifier);
+            }
+            throw;
+        }
+    }
+
+    std::string DeserializeBridgeRpcPayload(detail::PacketReader& reader, std::string_view description) {
+        const auto encoding = static_cast<BridgeRpcPayloadEncoding>(ReadRequired<std::uint8_t>(reader, "payloadEncoding"));
+        const auto payload_length = ReadRequired<std::uint32_t>(reader, "payloadLength");
+        switch (encoding) {
+            case BridgeRpcPayloadEncoding::Inline: {
+                const auto payload = reader.ReadString(static_cast<std::size_t>(payload_length));
+                if (!payload) {
+                    throw std::runtime_error(
+                        std::string("Failed to parse inline payload for ") + std::string(description) + ".");
+                }
+                return *payload;
+            }
+            case BridgeRpcPayloadEncoding::Stream: {
+                const auto stream_identifier = ReadRequired<std::uint32_t>(reader, "streamIdentifier");
+                const auto payload_bytes = ReadIncomingStreamBytes(
+                    stream_identifier,
+                    static_cast<std::size_t>(payload_length),
+                    description);
+                return std::string(payload_bytes.begin(), payload_bytes.end());
+            }
+            default:
+                throw std::runtime_error("Unsupported bridge RPC payload encoding.");
+        }
+    }
+
+    std::vector<std::uint8_t> DeserializeBinaryPayload(detail::PacketReader& reader, std::string_view description) {
+        const auto encoding = static_cast<BinaryPayloadEncoding>(ReadRequired<std::uint8_t>(reader, "payloadEncoding"));
+        const auto payload_length = ReadRequired<std::uint32_t>(reader, "payloadLength");
+        switch (encoding) {
+            case BinaryPayloadEncoding::Inline:
+                return reader.ReadBytes(static_cast<std::size_t>(payload_length));
+            case BinaryPayloadEncoding::Stream: {
+                const auto stream_identifier = ReadRequired<std::uint32_t>(reader, "streamIdentifier");
+                return ReadIncomingStreamBytes(
+                    stream_identifier,
+                    static_cast<std::size_t>(payload_length),
+                    description);
+            }
+            default:
+                throw std::runtime_error("Unsupported binary payload encoding.");
+        }
+    }
+
+    void AddDeferredOutgoingStream(
+        detail::PacketWriter& writer,
+        DeferredOutgoingStreams& deferred,
+        std::shared_ptr<OutgoingStreamState> state,
+        std::function<asio::awaitable<void>(std::uint32_t, std::shared_ptr<OutgoingStreamState>)> transfer) {
+        const auto stream_identifier = ++stream_identifier_counter_;
+        {
+            std::lock_guard<std::mutex> lock(outgoing_streams_mutex_);
+            outgoing_streams_[stream_identifier] = state;
+        }
+
+        writer.Write<std::uint32_t>(stream_identifier);
+
+        auto self = shared_from_this();
+        deferred.Add(
+            [self, stream_identifier, state, transfer = std::move(transfer)]() mutable {
+                asio::co_spawn(
+                    self->executor_,
+                    [self, stream_identifier, state, transfer = std::move(transfer)]() mutable -> asio::awaitable<void> {
+                        bool opened = false;
+                        try {
+                            co_await self->StreamOpenAsync(stream_identifier);
+                            opened = true;
+                            co_await transfer(stream_identifier, state);
+                        } catch (...) {
+                            Logger::Error("JustCefProcess", "Failed to stream deferred IPC payload.", std::current_exception());
+                        }
+
+                        if (state->stream) {
+                            try {
+                                state->stream->Close();
+                            } catch (...) {
+                            }
+                        }
+
+                        if (opened) {
+                            try {
+                                co_await self->StreamCloseAsync(stream_identifier);
+                            } catch (...) {
+                            }
+                        }
+
+                        std::lock_guard<std::mutex> lock(self->outgoing_streams_mutex_);
+                        self->outgoing_streams_.erase(stream_identifier);
+                        co_return;
+                    },
+                    asio::detached);
+            },
+            [self, stream_identifier, state]() mutable {
+                state->canceled = true;
+                if (state->stream) {
+                    try {
+                        state->stream->Close();
+                    } catch (...) {
+                    }
+                }
+
+                std::lock_guard<std::mutex> lock(self->outgoing_streams_mutex_);
+                self->outgoing_streams_.erase(stream_identifier);
+            });
+    }
+
+    void SerializeBridgeRpcPayload(
+        detail::PacketWriter& writer,
+        const std::string& payload,
+        DeferredOutgoingStreams& deferred) {
+        if (payload.size() <= detail::kMaxIpcSize - writer.Size() - kInlinePayloadFramingSize) {
+            WriteInlinePayload(writer, BridgeRpcPayloadEncoding::Inline, payload);
+            return;
+        }
+
+        writer.Write<std::uint8_t>(static_cast<std::uint8_t>(BridgeRpcPayloadEncoding::Stream));
+        writer.Write<std::uint32_t>(static_cast<std::uint32_t>(payload.size()));
+
+        auto bytes = std::make_shared<std::vector<std::uint8_t>>(payload.begin(), payload.end());
+        auto state = std::make_shared<OutgoingStreamState>();
+        AddDeferredOutgoingStream(
+            writer,
+            deferred,
+            state,
+            [this, bytes](std::uint32_t stream_identifier, std::shared_ptr<OutgoingStreamState> state) -> asio::awaitable<void> {
+                std::size_t offset = 0;
+                while (offset < bytes->size() && !state->canceled.load()) {
+                    const auto chunk_size = std::min<std::size_t>(65536, bytes->size() - offset);
+                    if (!co_await StreamDataAsync(
+                            stream_identifier,
+                            std::vector<std::uint8_t>(
+                                bytes->begin() + static_cast<std::ptrdiff_t>(offset),
+                                bytes->begin() + static_cast<std::ptrdiff_t>(offset + chunk_size)))) {
+                        throw std::runtime_error("Stream closed.");
+                    }
+                    offset += chunk_size;
+                }
+                co_return;
+            });
+    }
+
+    void SerializeModifyRequest(
+        detail::PacketWriter& writer,
+        const IPCRequest& request,
+        DeferredOutgoingStreams& deferred) {
+        writer.WriteSizePrefixedString(request.method);
+        writer.WriteSizePrefixedString(request.url);
+        writer.Write<std::int32_t>(static_cast<std::int32_t>(CountHeaderValuePairs(request.headers)));
+        for (const auto& [key, values] : request.headers) {
+            for (const auto& value : values) {
+                writer.WriteSizePrefixedString(key);
+                writer.WriteSizePrefixedString(value);
+            }
+        }
+
+        writer.Write<std::uint32_t>(static_cast<std::uint32_t>(request.elements.size()));
+        for (const auto& element : request.elements) {
+            if (element.type == IPCProxyBodyElementType::Bytes &&
+                element.data.size() > detail::kMaxIpcSize - writer.Size() - (sizeof(std::uint8_t) + sizeof(std::int64_t) + sizeof(std::uint32_t))) {
+                writer.Write<std::uint8_t>(3);
+                writer.Write<std::int64_t>(static_cast<std::int64_t>(element.data.size()));
+
+                auto bytes = std::make_shared<std::vector<std::uint8_t>>(element.data);
+                auto state = std::make_shared<OutgoingStreamState>();
+                AddDeferredOutgoingStream(
+                    writer,
+                    deferred,
+                    state,
+                    [this, bytes](std::uint32_t stream_identifier, std::shared_ptr<OutgoingStreamState> state) -> asio::awaitable<void> {
+                        std::size_t offset = 0;
+                        while (offset < bytes->size() && !state->canceled.load()) {
+                            const auto chunk_size = std::min<std::size_t>(65536, bytes->size() - offset);
+                            if (!co_await StreamDataAsync(
+                                    stream_identifier,
+                                    std::vector<std::uint8_t>(
+                                        bytes->begin() + static_cast<std::ptrdiff_t>(offset),
+                                        bytes->begin() + static_cast<std::ptrdiff_t>(offset + chunk_size)))) {
+                                throw std::runtime_error("Stream closed.");
+                            }
+                            offset += chunk_size;
+                        }
+                        co_return;
+                    });
+                continue;
+            }
+
+            writer.Write<std::uint8_t>(static_cast<std::uint8_t>(element.type));
+            if (element.type == IPCProxyBodyElementType::Bytes) {
+                writer.Write<std::uint32_t>(static_cast<std::uint32_t>(element.data.size()));
+                writer.WriteBytes(element.data);
+            } else if (element.type == IPCProxyBodyElementType::File) {
+                writer.WriteSizePrefixedString(element.file_name);
+            }
+        }
+    }
+
+    ParsedWindowRequest ReadWindowRequest(detail::PacketReader& reader) {
+        ParsedWindowRequest parsed;
+        parsed.identifier = ReadRequired<std::int32_t>(reader, "identifier");
+        parsed.request.method = ReadRequiredString(reader, "method");
+        parsed.request.url = ReadRequiredString(reader, "url");
+
+        const auto header_count = ReadRequired<std::int32_t>(reader, "headerCount");
+        if (header_count < 0) {
+            throw std::runtime_error("Header count cannot be negative.");
+        }
+
+        for (int index = 0; index < header_count; ++index) {
+            const auto key = ReadRequiredString(reader, "headerKey");
+            const auto value = ReadRequiredString(reader, "headerValue");
+            parsed.request.headers[key].push_back(value);
+        }
+
+        const auto element_count = ReadRequired<std::uint32_t>(reader, "elementCount");
+        parsed.request.elements.reserve(element_count);
+        for (std::uint32_t index = 0; index < element_count; ++index) {
+            const auto element_type = static_cast<IPCProxyBodyElementType>(ReadRequired<std::uint8_t>(reader, "elementType"));
+            switch (element_type) {
+                case IPCProxyBodyElementType::Bytes: {
+                    const auto size = ReadRequired<std::uint32_t>(reader, "elementSize");
+                    parsed.request.elements.push_back(IPCProxyBodyElement::Bytes(reader.ReadBytes(size)));
+                    break;
+                }
+                case IPCProxyBodyElementType::File: {
+                    parsed.request.elements.push_back(IPCProxyBodyElement::File(ReadRequiredString(reader, "fileName")));
+                    break;
+                }
+                case static_cast<IPCProxyBodyElementType>(3): {
+                    const auto length = ReadRequired<std::int64_t>(reader, "streamLength");
+                    const auto stream_identifier = ReadRequired<std::uint32_t>(reader, "streamIdentifier");
+                    const auto data = ReadIncomingStreamBytes(stream_identifier, length >= 0 ? std::optional<std::size_t>(static_cast<std::size_t>(length)) : std::nullopt, "request body stream");
+                    parsed.request.elements.push_back(IPCProxyBodyElement::Bytes(std::move(data)));
+                    break;
+                }
+                case IPCProxyBodyElementType::Empty:
+                default:
+                    parsed.request.elements.push_back({});
+                    break;
+            }
+        }
+
+        return parsed;
+    }
+
+    void HandleClientStreamOpen(detail::PacketReader& reader) {
+        const auto identifier = ReadRequired<std::uint32_t>(reader, "streamIdentifier");
+        std::lock_guard<std::mutex> lock(incoming_streams_mutex_);
+        if (canceled_incoming_streams_.contains(identifier)) {
+            return;
+        }
+
+        if (!incoming_streams_.contains(identifier)) {
+            incoming_streams_[identifier] = std::make_shared<DataStream>(identifier);
+        }
+    }
+
+    void HandleClientStreamData(detail::PacketReader& reader, detail::PacketWriter& writer) {
+        const auto identifier = ReadRequired<std::uint32_t>(reader, "streamIdentifier");
+
+        std::shared_ptr<DataStream> stream;
+        {
+            std::lock_guard<std::mutex> lock(incoming_streams_mutex_);
+            if (canceled_incoming_streams_.contains(identifier)) {
+                writer.Write<bool>(false);
+                return;
+            }
+
+            const auto iterator = incoming_streams_.find(identifier);
+            if (iterator == incoming_streams_.end()) {
+                writer.Write<bool>(false);
+                return;
+            }
+            stream = iterator->second;
+        }
+
+        const auto remaining = reader.RemainingSize();
+        if (remaining > 0) {
+            const auto data = reader.ReadBytes(remaining);
+            if (!data.empty()) {
+                stream->Write(data.data(), data.size());
+            }
+        }
+
+        writer.Write<bool>(true);
+    }
+
+    void HandleClientStreamClose(detail::PacketReader& reader) {
+        const auto identifier = ReadRequired<std::uint32_t>(reader, "streamIdentifier");
+        ReleaseIncomingStream(identifier);
+    }
+
+    void HandleClientStreamCancel(detail::PacketReader& reader) {
+        const auto identifier = ReadRequired<std::uint32_t>(reader, "streamIdentifier");
+        std::shared_ptr<OutgoingStreamState> stream_state;
+        {
+            std::lock_guard<std::mutex> lock(outgoing_streams_mutex_);
+            if (const auto iterator = outgoing_streams_.find(identifier); iterator != outgoing_streams_.end()) {
+                stream_state = iterator->second;
+            }
+        }
+
+        if (stream_state) {
+            stream_state->canceled = true;
+            if (stream_state->stream) {
+                stream_state->stream->Close();
+            }
+        }
+    }
+
+    asio::awaitable<void> HandleWindowBridgeRpc(detail::PacketReader& reader, detail::PacketWriter& writer, DeferredOutgoingStreams& deferred) {
+        const int identifier = ReadRequired<std::int32_t>(reader, "identifier");
+        const auto record = GetWindowRecord(identifier);
+        if (!record || !record->window || !record->shared) {
+            writer.Write<bool>(false);
+            WriteInlinePayload(writer, BridgeRpcPayloadEncoding::Inline, "Bridge RPC target window no longer exists.");
+            co_return;
+        }
+
+        const auto method = reader.ReadSizePrefixedString();
+        if (!method || method->empty()) {
+            writer.Write<bool>(false);
+            WriteInlinePayload(writer, BridgeRpcPayloadEncoding::Inline, "Bridge RPC method must be a non-empty string.");
+            co_return;
+        }
+
+        try {
+            const auto payload_json = DeserializeBridgeRpcPayload(reader, "bridge RPC request payload");
+
+            BridgeRpcHandler handler;
+            {
+                std::lock_guard<std::mutex> lock(record->shared->request_mutex);
+                handler = record->shared->bridge_rpc_handler;
+            }
+
+            if (!handler) {
+                writer.Write<bool>(false);
+                WriteInlinePayload(writer, BridgeRpcPayloadEncoding::Inline, "No bridge RPC handler is registered for this window.");
+                co_return;
+            }
+
+            const auto result_json = co_await handler(*record->window, *method, payload_json);
+            const std::string payload = result_json.value_or("null");
+            writer.Write<bool>(true);
+            SerializeBridgeRpcPayload(writer, payload, deferred);
+            co_return;
+        } catch (const std::exception& exception) {
+            Logger::Error("JustCefProcess", "Exception occurred while processing bridge RPC.", std::current_exception());
+            writer.Write<bool>(false);
+            const std::string message = exception.what();
+            SerializeBridgeRpcPayload(
+                writer,
+                message.empty() ? std::string("Bridge RPC failed.") : message,
+                deferred);
+            co_return;
+        } catch (...) {
+            Logger::Error("JustCefProcess", "Exception occurred while processing bridge RPC.", std::current_exception());
+            writer.Write<bool>(false);
+            SerializeBridgeRpcPayload(writer, "Bridge RPC failed.", deferred);
+            co_return;
+        }
     }
 
     asio::awaitable<void> HandleIncomingRequest(detail::OpcodeClient opcode, std::uint32_t request_id, std::vector<std::uint8_t> body) {
         try {
             detail::PacketReader reader(std::move(body));
             detail::PacketWriter writer;
+            DeferredOutgoingStreams deferred;
 
             switch (opcode) {
                 case detail::OpcodeClient::Ping:
@@ -1307,36 +1990,38 @@ private:
                     writer.WriteBytes(reader.ReadBytes(reader.RemainingSize()));
                     break;
                 case detail::OpcodeClient::WindowProxyRequest:
-                    co_await HandleWindowProxyRequest(reader, writer);
+                    co_await HandleWindowProxyRequest(reader, writer, deferred);
                     break;
                 case detail::OpcodeClient::WindowModifyRequest:
-                    co_await HandleWindowModifyRequest(reader, writer);
+                    co_await HandleWindowModifyRequest(reader, writer, deferred);
                     break;
-                case detail::OpcodeClient::StreamClose: {
-                    const auto identifier = ReadRequired<std::uint32_t>(reader, "streamIdentifier");
-                    std::shared_ptr<OutgoingStreamState> stream_state;
-                    {
-                        std::lock_guard<std::mutex> lock(outgoing_streams_mutex_);
-                        const auto iterator = outgoing_streams_.find(identifier);
-                        if (iterator != outgoing_streams_.end()) {
-                            stream_state = iterator->second;
-                        }
-                    }
-
-                    if (stream_state) {
-                        stream_state->canceled = true;
-                        if (stream_state->stream) {
-                            stream_state->stream->Close();
-                        }
-                    }
+                case detail::OpcodeClient::WindowBridgeRpc:
+                    co_await HandleWindowBridgeRpc(reader, writer, deferred);
                     break;
-                }
+                case detail::OpcodeClient::StreamOpen:
+                    HandleClientStreamOpen(reader);
+                    break;
+                case detail::OpcodeClient::StreamData:
+                    HandleClientStreamData(reader, writer);
+                    break;
+                case detail::OpcodeClient::StreamClose:
+                    HandleClientStreamClose(reader);
+                    break;
+                case detail::OpcodeClient::StreamCancel:
+                    HandleClientStreamCancel(reader);
+                    break;
                 default:
                     Logger::Warning("JustCefProcess", "Received an unhandled client opcode.");
                     break;
             }
 
-            SendPacket(detail::PacketType::Response, static_cast<std::uint8_t>(opcode), request_id, writer.Buffer());
+            try {
+                SendPacket(detail::PacketType::Response, static_cast<std::uint8_t>(opcode), request_id, writer.Buffer());
+                deferred.StartAll();
+            } catch (...) {
+                deferred.CleanupAll();
+                throw;
+            }
         } catch (...) {
             Logger::Error("JustCefProcess", "Exception occurred while processing IPC request.", std::current_exception());
             try {
@@ -1347,7 +2032,7 @@ private:
         co_return;
     }
 
-    asio::awaitable<void> HandleWindowProxyRequest(detail::PacketReader& reader, detail::PacketWriter& writer) {
+    asio::awaitable<void> HandleWindowProxyRequest(detail::PacketReader& reader, detail::PacketWriter& writer, DeferredOutgoingStreams& deferred) {
         const ParsedWindowRequest parsed = ReadWindowRequest(reader);
         const auto record = GetWindowRecord(parsed.identifier);
         if (!record || !record->window || !record->shared) {
@@ -1390,18 +2075,12 @@ private:
 
         writer.Write<std::uint32_t>(static_cast<std::uint32_t>(response->status_code));
         writer.WriteSizePrefixedString(response->status_text);
-        writer.Write<std::uint32_t>(static_cast<std::uint32_t>(filtered_headers.size()));
+        writer.Write<std::uint32_t>(static_cast<std::uint32_t>(CountHeaderValuePairs(filtered_headers)));
         for (const auto& [key, values] : filtered_headers) {
-            std::string joined;
-            for (std::size_t index = 0; index < values.size(); ++index) {
-                if (index > 0) {
-                    joined += ", ";
-                }
-                joined += values[index];
+            for (const auto& value : values) {
+                writer.WriteSizePrefixedString(key);
+                writer.WriteSizePrefixedString(value);
             }
-
-            writer.WriteSizePrefixedString(key);
-            writer.WriteSizePrefixedString(joined);
         }
 
         if (!response->body_stream) {
@@ -1429,32 +2108,25 @@ private:
         }
 
         writer.Write<std::uint8_t>(2);
-        co_await HandleLargeOrChunkedContent(response->body_stream, writer, content_length);
+        HandleLargeOrChunkedContent(response->body_stream, writer, deferred, content_length);
     }
 
-    asio::awaitable<void> HandleLargeOrChunkedContent(
+    void HandleLargeOrChunkedContent(
         std::shared_ptr<ByteStream> stream,
         detail::PacketWriter& writer,
+        DeferredOutgoingStreams& deferred,
         std::optional<std::uint64_t> content_length) {
-        const std::uint32_t stream_identifier = ++stream_identifier_counter_;
-        auto outgoing_state = std::make_shared<OutgoingStreamState>();
-        outgoing_state->stream = std::move(stream);
-        {
-            std::lock_guard<std::mutex> lock(outgoing_streams_mutex_);
-            outgoing_streams_[stream_identifier] = outgoing_state;
-        }
-
-        detail::PacketWriter open_writer;
-        open_writer.Write<std::uint32_t>(stream_identifier);
-        co_await StreamOpenAsync(stream_identifier);
-        writer.Write<std::uint32_t>(stream_identifier);
-
-        asio::co_spawn(executor_, [this, stream_identifier, outgoing_state, content_length]() -> asio::awaitable<void> {
-            try {
+        auto state = std::make_shared<OutgoingStreamState>();
+        state->stream = std::move(stream);
+        AddDeferredOutgoingStream(
+            writer,
+            deferred,
+            state,
+            [this, content_length](std::uint32_t stream_identifier, std::shared_ptr<OutgoingStreamState> state) -> asio::awaitable<void> {
                 std::array<std::uint8_t, 65536> buffer{};
                 std::uint64_t total_read = 0;
 
-                while (!outgoing_state->canceled.load()) {
+                while (!state->canceled.load()) {
                     std::size_t request_size = buffer.size();
                     if (content_length) {
                         if (total_read >= *content_length) {
@@ -1463,12 +2135,8 @@ private:
                         request_size = static_cast<std::size_t>(std::min<std::uint64_t>(request_size, *content_length - total_read));
                     }
 
-                    const std::size_t bytes_read = outgoing_state->stream->Read(buffer.data(), request_size);
+                    const std::size_t bytes_read = state->stream ? state->stream->Read(buffer.data(), request_size) : 0;
                     if (bytes_read == 0) {
-                        break;
-                    }
-
-                    if (outgoing_state->canceled.load()) {
                         break;
                     }
 
@@ -1480,30 +2148,11 @@ private:
 
                     total_read += bytes_read;
                 }
-            } catch (...) {
-                Logger::Error("JustCefProcess", "Failed to stream response body.", std::current_exception());
-            }
-
-            try {
-                if (outgoing_state->stream) {
-                    outgoing_state->stream->Close();
-                }
-            } catch (...) {
-            }
-
-            try {
-                co_await StreamCloseAsync(stream_identifier);
-            } catch (...) {
-            }
-
-            std::lock_guard<std::mutex> lock(outgoing_streams_mutex_);
-            outgoing_streams_.erase(stream_identifier);
-            co_return;
-        }, asio::detached);
-        co_return;
+                co_return;
+            });
     }
 
-    asio::awaitable<void> HandleWindowModifyRequest(detail::PacketReader& reader, detail::PacketWriter& writer) {
+    asio::awaitable<void> HandleWindowModifyRequest(detail::PacketReader& reader, detail::PacketWriter& writer, DeferredOutgoingStreams& deferred) {
         const ParsedWindowRequest parsed = ReadWindowRequest(reader);
         const auto record = GetWindowRecord(parsed.identifier);
         if (!record || !record->window || !record->shared) {
@@ -1536,7 +2185,7 @@ private:
             co_return;
         }
 
-        SerializeModifyRequest(writer, *modified_request);
+        SerializeModifyRequest(writer, *modified_request, deferred);
         co_return;
     }
 
@@ -1580,40 +2229,84 @@ private:
                 }
                 break;
             }
-            case detail::OpcodeClientNotification::WindowLoadStart: {
+            case detail::OpcodeClientNotification::WindowFrameLoadStart: {
                 const int identifier = ReadRequired<std::int32_t>(reader, "identifier");
+                const auto frame_identifier = reader.ReadSizePrefixedString();
+                const bool is_main_frame = ReadRequired<bool>(reader, "isMainFrame");
                 const auto url = reader.ReadSizePrefixedString();
                 if (auto window = GetWindow(identifier)) {
-                    window->OnLoadStart.Emit(url);
+                    window->OnFrameLoadStart.Emit(FrameLoadStartInfo{
+                        .frame_identifier = frame_identifier,
+                        .is_main_frame = is_main_frame,
+                        .url = url,
+                    });
                 }
                 break;
             }
-            case detail::OpcodeClientNotification::WindowLoadEnd: {
+            case detail::OpcodeClientNotification::WindowFrameLoadEnd: {
                 const int identifier = ReadRequired<std::int32_t>(reader, "identifier");
+                const auto frame_identifier = reader.ReadSizePrefixedString();
+                const bool is_main_frame = ReadRequired<bool>(reader, "isMainFrame");
                 const auto url = reader.ReadSizePrefixedString();
+                const int http_status_code = ReadRequired<std::int32_t>(reader, "httpStatusCode");
                 if (auto window = GetWindow(identifier)) {
-                    window->OnLoadEnd.Emit(url);
+                    window->OnFrameLoadEnd.Emit(FrameLoadEndInfo{
+                        .frame_identifier = frame_identifier,
+                        .is_main_frame = is_main_frame,
+                        .url = url,
+                        .http_status_code = http_status_code,
+                    });
                 }
                 break;
             }
-            case detail::OpcodeClientNotification::WindowLoadError: {
+            case detail::OpcodeClientNotification::WindowFrameLoadError: {
                 const int identifier = ReadRequired<std::int32_t>(reader, "identifier");
+                const auto frame_identifier = reader.ReadSizePrefixedString();
+                const bool is_main_frame = ReadRequired<bool>(reader, "isMainFrame");
                 const int error_code = ReadRequired<std::int32_t>(reader, "errorCode");
                 const auto error_text = reader.ReadSizePrefixedString();
                 const auto failed_url = reader.ReadSizePrefixedString();
                 if (auto window = GetWindow(identifier)) {
-                    window->OnLoadError.Emit(error_code, error_text, failed_url);
+                    window->OnFrameLoadError.Emit(FrameLoadErrorInfo{
+                        .frame_identifier = frame_identifier,
+                        .is_main_frame = is_main_frame,
+                        .error_code = error_code,
+                        .error_text = error_text,
+                        .failed_url = failed_url,
+                    });
+                }
+                break;
+            }
+            case detail::OpcodeClientNotification::WindowLoadingStateChanged: {
+                const int identifier = ReadRequired<std::int32_t>(reader, "identifier");
+                const bool is_loading = ReadRequired<bool>(reader, "isLoading");
+                const bool can_go_back = ReadRequired<bool>(reader, "canGoBack");
+                const bool can_go_forward = ReadRequired<bool>(reader, "canGoForward");
+                const auto record = GetWindowRecord(identifier);
+                if (record && record->shared) {
+                    std::lock_guard<std::mutex> lock(record->shared->loading_mutex);
+                    record->shared->is_loading = is_loading;
+                    record->shared->can_go_back = can_go_back;
+                    record->shared->can_go_forward = can_go_forward;
+                    if (!is_loading) {
+                        record->shared->loading_failed = false;
+                        record->shared->loading_error.clear();
+                    }
+                    record->shared->loading_cv.notify_all();
+                }
+                if (auto window = GetWindow(identifier)) {
+                    window->OnLoadingStateChanged.Emit(LoadingStateChangedInfo{
+                        .is_loading = is_loading,
+                        .can_go_back = can_go_back,
+                        .can_go_forward = can_go_forward,
+                    });
                 }
                 break;
             }
             case detail::OpcodeClientNotification::WindowDevToolsEvent: {
                 const int identifier = ReadRequired<std::int32_t>(reader, "identifier");
                 const auto method = reader.ReadSizePrefixedString();
-                const auto size = ReadRequired<std::int32_t>(reader, "paramsSize");
-                if (size < 0) {
-                    throw std::runtime_error("Negative devtools payload size.");
-                }
-                auto payload = reader.ReadBytes(static_cast<std::size_t>(size));
+                auto payload = DeserializeBinaryPayload(reader, "DevTools event payload");
                 if (auto window = GetWindow(identifier)) {
                     window->OnDevToolsEvent.Emit(method, std::move(payload));
                 }
@@ -1633,6 +2326,16 @@ private:
         bool expected = false;
         if (!record->shared->close_signaled.compare_exchange_strong(expected, true)) {
             return;
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(record->shared->loading_mutex);
+            if (record->shared->is_loading) {
+                record->shared->is_loading = false;
+                record->shared->loading_failed = true;
+                record->shared->loading_error = "Window was closed before loading completed.";
+            }
+            record->shared->loading_cv.notify_all();
         }
 
         record->shared->close_signal.SignalSuccess();
@@ -1715,6 +2418,28 @@ private:
             outgoing_streams_.clear();
         }
 
+        std::vector<std::shared_ptr<DataStream>> incoming_streams_to_close;
+        {
+            std::lock_guard<std::mutex> lock(incoming_streams_mutex_);
+            incoming_streams_to_close.reserve(incoming_streams_.size());
+            for (auto& [_, stream] : incoming_streams_) {
+                incoming_streams_to_close.push_back(stream);
+            }
+            incoming_streams_.clear();
+            canceled_incoming_streams_.clear();
+        }
+
+        for (const auto& stream : incoming_streams_to_close) {
+            if (stream) {
+                stream->Close();
+            }
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(incoming_stream_dispatchers_mutex_);
+            incoming_stream_dispatchers_.clear();
+        }
+
         std::vector<WindowRecord> windows_to_close;
         {
             std::lock_guard<std::mutex> lock(windows_mutex_);
@@ -1740,8 +2465,13 @@ private:
     std::vector<WindowRecord> windows_;
     std::mutex pending_requests_mutex_;
     std::unordered_map<std::uint32_t, PendingRequest> pending_requests_;
+    std::mutex incoming_stream_dispatchers_mutex_;
+    std::unordered_map<std::uint32_t, std::shared_ptr<IncomingStreamDispatcher>> incoming_stream_dispatchers_;
     std::mutex outgoing_streams_mutex_;
     std::unordered_map<std::uint32_t, std::shared_ptr<OutgoingStreamState>> outgoing_streams_;
+    std::mutex incoming_streams_mutex_;
+    std::unordered_map<std::uint32_t, std::shared_ptr<DataStream>> incoming_streams_;
+    std::unordered_set<std::uint32_t> canceled_incoming_streams_;
     std::mutex write_mutex_;
     std::thread receive_thread_;
 
@@ -1836,7 +2566,9 @@ asio::awaitable<std::shared_ptr<JustCefWindow>> JustCefProcess::CreateWindowAsyn
     bool modify_request_body,
     std::optional<std::string> title,
     std::optional<std::string> icon_path,
-    std::optional<std::string> app_id) {
+    std::optional<std::string> app_id,
+    bool bridge_enabled,
+    BridgeRpcHandler bridge_rpc_handler) {
     return CreateWindowAsync(WindowCreateOptions{
         .url = std::move(url),
         .minimum_width = minimum_width,
@@ -1859,6 +2591,8 @@ asio::awaitable<std::shared_ptr<JustCefWindow>> JustCefProcess::CreateWindowAsyn
         .title = std::move(title),
         .icon_path = std::move(icon_path),
         .app_id = std::move(app_id),
+        .bridge_enabled = bridge_enabled,
+        .bridge_rpc_handler = std::move(bridge_rpc_handler),
     });
 }
 
