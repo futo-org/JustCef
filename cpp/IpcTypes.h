@@ -38,6 +38,9 @@ class ByteStream
 public:
     virtual ~ByteStream() = default;
     virtual std::size_t Read(std::uint8_t* buffer, std::size_t size) = 0;
+
+    virtual asio::awaitable<std::size_t> ReadAsync(std::uint8_t* buffer, std::size_t size) { co_return Read(buffer, size); }
+
     virtual void Close() {}
 };
 

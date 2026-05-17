@@ -2383,7 +2383,7 @@ private:
             std::size_t total = 0;
             while (total < buffer.size())
             {
-                const std::size_t read = response->body_stream->Read(buffer.data() + total, buffer.size() - total);
+                const std::size_t read = co_await response->body_stream->ReadAsync(buffer.data() + total, buffer.size() - total);
                 if (read == 0)
                 {
                     break;
@@ -2426,7 +2426,7 @@ private:
                         request_size = static_cast<std::size_t>(std::min<std::uint64_t>(request_size, *content_length - total_read));
                     }
 
-                    const std::size_t bytes_read = state->stream ? state->stream->Read(buffer.data(), request_size) : 0;
+                    const std::size_t bytes_read = state->stream ? co_await state->stream->ReadAsync(buffer.data(), request_size) : 0;
                     if (bytes_read == 0)
                     {
                         break;
