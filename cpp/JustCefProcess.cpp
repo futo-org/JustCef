@@ -2399,6 +2399,7 @@ private:
         }
 
         writer.Write<std::uint8_t>(2);
+        writer.Write<std::int64_t>(content_length ? static_cast<std::int64_t>(*content_length) : static_cast<std::int64_t>(-1));
         HandleLargeOrChunkedContent(response->body_stream, writer, deferred, content_length);
     }
 

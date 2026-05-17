@@ -185,6 +185,7 @@ typedef struct _IPCProxyResponse
     std::multimap<std::string, std::string> headers = {};
     std::optional<std::vector<uint8_t>> body = std::nullopt;
     std::shared_ptr<DataStream> bodyStream = nullptr;
+    int64_t bodyLength = -1;
 } IPCProxyResponse;
 
 typedef struct _IPCBridgeRpcResult

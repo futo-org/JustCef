@@ -1558,6 +1558,7 @@ std::unique_ptr<IPCProxyResponse> IPC::WindowProxyRequest(int32_t identifier, Ce
 
         std::optional<std::vector<uint8_t>> body = std::nullopt;
         std::shared_ptr<DataStream> bodyStream = nullptr;
+        int64_t streamBodyLength = -1;
         if (*bodyType == 1)
         {
             std::optional<uint32_t> bodySize = reader.read<uint32_t>();
@@ -1581,13 +1582,15 @@ std::unique_ptr<IPCProxyResponse> IPC::WindowProxyRequest(int32_t identifier, Ce
         }
         else if (*bodyType == 2)
         {
+            std::optional<int64_t> bodyLength = reader.read<int64_t>();
             std::optional<uint32_t> streamId = reader.read<uint32_t>();
-            if (!streamId)
+            if (!bodyLength || !streamId)
             {
-                LOG(ERROR) << "Failed to read stream id.";
+                LOG(ERROR) << "Failed to read stream body length / id.";
                 return nullptr;
             }
 
+            streamBodyLength = *bodyLength;
             bodyStream = GetOrCreateIncomingStream(*streamId);
         }
 
@@ -1598,6 +1601,7 @@ std::unique_ptr<IPCProxyResponse> IPC::WindowProxyRequest(int32_t identifier, Ce
         result->media_type = mediaType;
         result->body = body;
         result->bodyStream = bodyStream;
+        result->bodyLength = streamBodyLength;
 
         return result;
     }

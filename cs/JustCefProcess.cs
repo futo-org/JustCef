@@ -939,6 +939,7 @@ namespace JustCef
                     else
                     {
                         writer.Write((byte)2);
+                        writer.Write(bodyLength);
                         HandleLargeBufferedContent(response.Body, writer, deferredOutgoingStreams);
                     }
                 }
@@ -974,12 +975,14 @@ namespace JustCef
                         else
                         {
                             writer.Write((byte)2);
+                            writer.Write(contentLength.Value);
                             HandleLargeOrChunkedContent(response.DataSource, writer, deferredOutgoingStreams, contentLength);
                         }
                     }
                     else
                     {
                         writer.Write((byte)2);
+                        writer.Write(UnknownStreamLength);
                         HandleLargeOrChunkedContent(response.DataSource, writer, deferredOutgoingStreams, null);
                     }
                 }

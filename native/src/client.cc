@@ -665,7 +665,7 @@ public:
         }
 
         response->SetHeaderMap(headerMap);
-        response_length = _response->body ? (*_response->body).size() : -1;
+        response_length = _response->body ? static_cast<int64_t>((*_response->body).size()) : _response->bodyLength;
     }
 
     bool Read(void* data_out, int bytes_to_read, int& bytes_read, CefRefPtr<CefResourceReadCallback> callback) override
