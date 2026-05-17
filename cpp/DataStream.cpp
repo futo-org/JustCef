@@ -2,18 +2,24 @@
 
 #include <algorithm>
 
-DataStream::DataStream(uint32_t identifier, size_t bufferSize)
-    : _identifier(identifier), _buffer(bufferSize), _capacity(bufferSize) {}
+DataStream::DataStream(uint32_t identifier, size_t bufferSize) : _identifier(identifier), _buffer(bufferSize), _capacity(bufferSize)
+{
+}
 
-void DataStream::Write(const uint8_t* data, size_t length) 
+void DataStream::Write(const uint8_t* data, size_t length)
 {
     std::unique_lock<std::mutex> lock(_mutex);
 
     size_t offset = 0;
-    while (offset < length) 
+    while (offset < length)
     {
-        _cvWrite.wait(lock, [this] { return !isFull() || _isClosed; });
-        if (_isClosed) break;
+        _cvWrite.wait(lock,
+                      [this]
+                      {
+                          return !isFull() || _isClosed;
+                      });
+        if (_isClosed)
+            break;
 
         size_t spaceAvailable = _capacity - _size;
         size_t writeLength = std::min(spaceAvailable, length - offset);
@@ -24,7 +30,7 @@ void DataStream::Write(const uint8_t* data, size_t length)
         _tail = (_tail + firstPart) % _capacity;
         _size += firstPart;
 
-        if (firstPart < writeLength) 
+        if (firstPart < writeLength)
         {
             size_t secondPart = writeLength - firstPart;
 
@@ -38,15 +44,20 @@ void DataStream::Write(const uint8_t* data, size_t length)
     }
 }
 
-size_t DataStream::Read(uint8_t* buffer, size_t bufferSize) 
+size_t DataStream::Read(uint8_t* buffer, size_t bufferSize)
 {
     std::unique_lock<std::mutex> lock(_mutex);
     size_t bytesRead = 0;
 
-    while (bytesRead < bufferSize) 
+    while (bytesRead < bufferSize)
     {
-        _cvRead.wait(lock, [this] { return !isEmpty() || _isClosed; });
-        if (isEmpty() && _isClosed) break;
+        _cvRead.wait(lock,
+                     [this]
+                     {
+                         return !isEmpty() || _isClosed;
+                     });
+        if (isEmpty() && _isClosed)
+            break;
 
         size_t dataAvailable = _size;
         size_t readLength = std::min(dataAvailable, bufferSize - bytesRead);
@@ -57,7 +68,7 @@ size_t DataStream::Read(uint8_t* buffer, size_t bufferSize)
         _head = (_head + firstPart) % _capacity;
         _size -= firstPart;
 
-        if (firstPart < readLength) 
+        if (firstPart < readLength)
         {
             size_t secondPart = readLength - firstPart;
             std::copy_n(_buffer.begin() + _head, secondPart, buffer + bytesRead);
@@ -68,17 +79,17 @@ size_t DataStream::Read(uint8_t* buffer, size_t bufferSize)
 
         _cvWrite.notify_all();
 
-        if (!isEmpty()) break;
+        if (!isEmpty())
+            break;
     }
 
     return bytesRead;
 }
 
-void DataStream::Close() 
+void DataStream::Close()
 {
     std::lock_guard<std::mutex> lock(_mutex);
     _isClosed = true;
     _cvRead.notify_all();
     _cvWrite.notify_all();
 }
-

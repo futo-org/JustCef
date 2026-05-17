@@ -9,33 +9,32 @@
 
 #include "include/base/cef_logging.h"
 
-class Pipe {
+class Pipe
+{
 public:
-    Pipe(bool closeOnDestruct = true) :
+    Pipe(bool closeOnDestruct = true)
+        :
 #ifdef _WIN32
-       _readHandle(INVALID_HANDLE_VALUE),
-       _writeHandle(INVALID_HANDLE_VALUE),
+          _readHandle(INVALID_HANDLE_VALUE), _writeHandle(INVALID_HANDLE_VALUE),
 #else
-        _readFd(-1), _writeFd(-1),
+          _readFd(-1), _writeFd(-1),
 #endif
-        _closeOnDestruct(closeOnDestruct)
+          _closeOnDestruct(closeOnDestruct)
     {
-
     }
 
-    ~Pipe() 
+    ~Pipe()
     {
         LOG(INFO) << "Pipe destructor called";
         if (_closeOnDestruct)
             Close();
     }
 
-    #ifdef _WIN32
+#ifdef _WIN32
     void SetHandles(HANDLE readHandle, HANDLE writeHandle);
-    #else
+#else
     void SetHandles(int readFd, int writeFd);
-    #endif
-
+#endif
 
     bool Create();
     bool HasValidHandles();
@@ -54,4 +53,4 @@ private:
     bool _closeOnDestruct;
 };
 
-#endif //PIPE_H
+#endif // PIPE_H

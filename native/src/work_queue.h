@@ -9,24 +9,23 @@
 
 #include "include/base/cef_logging.h"
 
-class WorkQueue {
+class WorkQueue
+{
 public:
-    WorkQueue() : _exitFlag(false) 
-    {
-        
-    }
+    WorkQueue() : _exitFlag(false) {}
 
-    ~WorkQueue() 
-    {
-        Stop();
-    }
+    ~WorkQueue() { Stop(); }
 
     void Start()
     {
         if (_started)
             return;
 
-        _worker = std::thread([this] { this->WorkerThread(); });
+        _worker = std::thread(
+            [this]
+            {
+                this->WorkerThread();
+            });
         _worker.detach();
         _started = true;
         LOG(INFO) << "Work queue started.";
@@ -40,7 +39,8 @@ public:
         {
             std::unique_lock lock(_mutex);
             _exitFlag = true;
-            while (!_queue.empty()) {
+            while (!_queue.empty())
+            {
                 _queue.pop();
             }
         }
@@ -75,14 +75,18 @@ private:
     std::thread _worker;
     bool _started = false;
 
-    void WorkerThread() 
+    void WorkerThread()
     {
-        while (true) 
+        while (true)
         {
             std::function<void()> work;
             {
                 std::unique_lock<std::mutex> lock(_mutex);
-                _condition.wait(lock, [this] { return _exitFlag || !_queue.empty(); });
+                _condition.wait(lock,
+                                [this]
+                                {
+                                    return _exitFlag || !_queue.empty();
+                                });
                 if (_exitFlag)
                 {
                     LOG(INFO) << "Worker thread shutting down.";
@@ -101,4 +105,4 @@ private:
     }
 };
 
-#endif //WORK_QUEUE_H
+#endif // WORK_QUEUE_H

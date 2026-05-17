@@ -1,15 +1,15 @@
 #ifndef THREAD_POOL_H
 #define THREAD_POOL_H
 
-#include <vector>
-#include <queue>
-#include <thread>
-#include <mutex>
 #include <condition_variable>
 #include <functional>
+#include <mutex>
+#include <queue>
 #include <stdexcept>
+#include <thread>
+#include <vector>
 
-class ThreadPool 
+class ThreadPool
 {
 public:
     ThreadPool();
@@ -19,6 +19,7 @@ public:
     bool Enqueue(std::function<void()> task);
 
     void Stop();
+
 private:
     std::vector<std::thread> _workers;
     std::queue<std::function<void()>> _tasks;
@@ -28,4 +29,4 @@ private:
     bool _stop;
 };
 
-#endif //THREAD_POOL_H
+#endif // THREAD_POOL_H

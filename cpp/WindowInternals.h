@@ -1,8 +1,8 @@
 #pragma once
 
 #include "AsyncSignal.h"
-#include "JustCefWindow.h"
 #include "IpcTypes.h"
+#include "JustCefWindow.h"
 #include "asio.h"
 
 #include <atomic>
@@ -13,9 +13,11 @@
 #include <string>
 #include <vector>
 
-namespace justcef {
+namespace justcef
+{
 
-class WindowCommandTarget {
+class WindowCommandTarget
+{
 public:
     virtual ~WindowCommandTarget() = default;
 
@@ -34,28 +36,16 @@ public:
     virtual asio::awaitable<Size> WindowGetSizeAsync(int identifier) = 0;
     virtual asio::awaitable<void> WindowSetZoomAsync(int identifier, double zoom) = 0;
     virtual asio::awaitable<double> WindowGetZoomAsync(int identifier) = 0;
-    virtual asio::awaitable<std::vector<std::string>> WindowPickFileAsync(
-        int identifier,
-        bool multiple,
-        std::vector<FileFilter> filters) = 0;
+    virtual asio::awaitable<std::vector<std::string>> WindowPickFileAsync(int identifier, bool multiple, std::vector<FileFilter> filters) = 0;
     virtual asio::awaitable<std::string> WindowPickDirectoryAsync(int identifier) = 0;
-    virtual asio::awaitable<std::string> WindowSaveFileAsync(
-        int identifier,
-        std::string default_name,
-        std::vector<FileFilter> filters) = 0;
+    virtual asio::awaitable<std::string> WindowSaveFileAsync(int identifier, std::string default_name, std::vector<FileFilter> filters) = 0;
     virtual asio::awaitable<void> WindowCloseAsync(int identifier, bool force_close) = 0;
     virtual asio::awaitable<void> WindowSetFullscreenAsync(int identifier, bool fullscreen) = 0;
     virtual asio::awaitable<void> RequestFocusAsync(int identifier) = 0;
     virtual asio::awaitable<void> WindowSetDevelopmentToolsEnabledAsync(int identifier, bool enabled) = 0;
     virtual asio::awaitable<void> WindowSetDevelopmentToolsVisibleAsync(int identifier, bool visible) = 0;
-    virtual asio::awaitable<DevToolsMethodResult> WindowExecuteDevToolsMethodAsync(
-        int identifier,
-        std::string method_name,
-        std::optional<std::string> json) = 0;
-    virtual asio::awaitable<std::string> WindowBridgeRpcAsync(
-        int identifier,
-        std::string method,
-        std::optional<std::string> json) = 0;
+    virtual asio::awaitable<DevToolsMethodResult> WindowExecuteDevToolsMethodAsync(int identifier, std::string method_name, std::optional<std::string> json) = 0;
+    virtual asio::awaitable<std::string> WindowBridgeRpcAsync(int identifier, std::string method, std::optional<std::string> json) = 0;
     virtual asio::awaitable<void> WindowSetTitleAsync(int identifier, std::string title) = 0;
     virtual asio::awaitable<void> WindowSetIconAsync(int identifier, std::string icon_path) = 0;
     virtual asio::awaitable<void> WindowAddUrlToProxyAsync(int identifier, std::string url) = 0;
@@ -71,7 +61,8 @@ public:
     virtual asio::awaitable<void> WindowSetModifyRequestsAsync(int identifier, bool enable_modify_requests, bool enable_modify_body) = 0;
 };
 
-struct WindowShared {
+struct WindowShared
+{
     asio::any_io_executor executor;
     std::mutex request_mutex;
     RequestModifier request_modifier;
@@ -89,4 +80,4 @@ struct WindowShared {
     std::string loading_error;
 };
 
-}  // namespace justcef
+} // namespace justcef

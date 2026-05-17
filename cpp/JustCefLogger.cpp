@@ -8,14 +8,14 @@
 #include <sstream>
 #include <utility>
 
-namespace justcef {
-namespace {
+namespace justcef
+{
+namespace
+{
 
 std::mutex g_logger_mutex;
-Logger::LogCallback g_log_callback = [](LogLevel level,
-                                        std::string_view tag,
-                                        std::string_view message,
-                                        std::exception_ptr exception) {
+Logger::LogCallback g_log_callback = [](LogLevel level, std::string_view tag, std::string_view message, std::exception_ptr exception)
+{
     std::ostringstream stream;
 
     const auto now = std::chrono::system_clock::now();
@@ -29,39 +29,45 @@ Logger::LogCallback g_log_callback = [](LogLevel level,
     localtime_r(&now_time, &local_time);
 #endif
 
-    stream << '[' << std::put_time(&local_time, "%Y-%m-%d %H:%M:%S") << '.'
-           << std::setw(3) << std::setfill('0') << milliseconds.count() << "] [";
+    stream << '[' << std::put_time(&local_time, "%Y-%m-%d %H:%M:%S") << '.' << std::setw(3) << std::setfill('0') << milliseconds.count() << "] [";
 
-    switch (level) {
-        case LogLevel::Error:
-            stream << "ERROR";
-            break;
-        case LogLevel::Warning:
-            stream << "WARNING";
-            break;
-        case LogLevel::Info:
-            stream << "INFO";
-            break;
-        case LogLevel::Verbose:
-            stream << "VERBOSE";
-            break;
-        case LogLevel::Debug:
-            stream << "DEBUG";
-            break;
-        case LogLevel::None:
-        default:
-            stream << "NONE";
-            break;
+    switch (level)
+    {
+    case LogLevel::Error:
+        stream << "ERROR";
+        break;
+    case LogLevel::Warning:
+        stream << "WARNING";
+        break;
+    case LogLevel::Info:
+        stream << "INFO";
+        break;
+    case LogLevel::Verbose:
+        stream << "VERBOSE";
+        break;
+    case LogLevel::Debug:
+        stream << "DEBUG";
+        break;
+    case LogLevel::None:
+    default:
+        stream << "NONE";
+        break;
     }
 
     stream << "] [" << tag << "] " << message;
 
-    if (exception) {
-        try {
+    if (exception)
+    {
+        try
+        {
             std::rethrow_exception(exception);
-        } catch (const std::exception& ex) {
+        }
+        catch (const std::exception& ex)
+        {
             stream << "\nException: " << ex.what();
-        } catch (...) {
+        }
+        catch (...)
+        {
             stream << "\nException: unknown";
         }
     }
@@ -69,46 +75,58 @@ Logger::LogCallback g_log_callback = [](LogLevel level,
     std::cerr << stream.str() << std::endl;
 };
 
-Logger::WillLogCallback g_will_log = [](LogLevel) { return true; };
+Logger::WillLogCallback g_will_log = [](LogLevel)
+{
+    return true;
+};
 
-}  // namespace
+} // namespace
 
-void Logger::SetLogCallback(LogCallback callback) {
+void Logger::SetLogCallback(LogCallback callback)
+{
     std::lock_guard<std::mutex> lock(g_logger_mutex);
     g_log_callback = std::move(callback);
 }
 
-void Logger::SetWillLogCallback(WillLogCallback callback) {
+void Logger::SetWillLogCallback(WillLogCallback callback)
+{
     std::lock_guard<std::mutex> lock(g_logger_mutex);
     g_will_log = std::move(callback);
 }
 
-bool Logger::WillLog(LogLevel level) {
+bool Logger::WillLog(LogLevel level)
+{
     std::lock_guard<std::mutex> lock(g_logger_mutex);
     return g_will_log ? g_will_log(level) : false;
 }
 
-void Logger::Debug(std::string_view tag, std::string_view message, std::exception_ptr exception) {
+void Logger::Debug(std::string_view tag, std::string_view message, std::exception_ptr exception)
+{
     Write(LogLevel::Debug, tag, message, exception);
 }
 
-void Logger::Verbose(std::string_view tag, std::string_view message, std::exception_ptr exception) {
+void Logger::Verbose(std::string_view tag, std::string_view message, std::exception_ptr exception)
+{
     Write(LogLevel::Verbose, tag, message, exception);
 }
 
-void Logger::Info(std::string_view tag, std::string_view message, std::exception_ptr exception) {
+void Logger::Info(std::string_view tag, std::string_view message, std::exception_ptr exception)
+{
     Write(LogLevel::Info, tag, message, exception);
 }
 
-void Logger::Warning(std::string_view tag, std::string_view message, std::exception_ptr exception) {
+void Logger::Warning(std::string_view tag, std::string_view message, std::exception_ptr exception)
+{
     Write(LogLevel::Warning, tag, message, exception);
 }
 
-void Logger::Error(std::string_view tag, std::string_view message, std::exception_ptr exception) {
+void Logger::Error(std::string_view tag, std::string_view message, std::exception_ptr exception)
+{
     Write(LogLevel::Error, tag, message, exception);
 }
 
-void Logger::Write(LogLevel level, std::string_view tag, std::string_view message, std::exception_ptr exception) {
+void Logger::Write(LogLevel level, std::string_view tag, std::string_view message, std::exception_ptr exception)
+{
     LogCallback callback;
     WillLogCallback will_log;
     {
@@ -117,13 +135,15 @@ void Logger::Write(LogLevel level, std::string_view tag, std::string_view messag
         will_log = g_will_log;
     }
 
-    if (will_log && !will_log(level)) {
+    if (will_log && !will_log(level))
+    {
         return;
     }
 
-    if (callback) {
+    if (callback)
+    {
         callback(level, tag, message, exception);
     }
 }
 
-}  // namespace justcef
+} // namespace justcef

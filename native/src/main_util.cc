@@ -4,42 +4,45 @@
 #include <windows.h>
 #endif
 
-namespace shared {
-  
-  // These flags must match the Chromium values.
-  const char kProcessType[] = "type";
-  const char kRendererProcess[] = "renderer";
-  #if defined(OS_LINUX)
-  const char kZygoteProcess[] = "zygote";
-  #endif
+namespace shared
+{
 
-  CefRefPtr<CefCommandLine> CreateCommandLine(const CefMainArgs& main_args) {
+// These flags must match the Chromium values.
+const char kProcessType[] = "type";
+const char kRendererProcess[] = "renderer";
+#if defined(OS_LINUX)
+const char kZygoteProcess[] = "zygote";
+#endif
+
+CefRefPtr<CefCommandLine> CreateCommandLine(const CefMainArgs& main_args)
+{
     CefRefPtr<CefCommandLine> command_line = CefCommandLine::CreateCommandLine();
-  #if defined(OS_WIN)
+#if defined(OS_WIN)
     command_line->InitFromString(::GetCommandLineW());
-  #else
+#else
     command_line->InitFromArgv(main_args.argc, main_args.argv);
-  #endif
+#endif
     return command_line;
-  }
+}
 
-  ProcessType GetProcessType(const CefRefPtr<CefCommandLine>& command_line) {
+ProcessType GetProcessType(const CefRefPtr<CefCommandLine>& command_line)
+{
     // The command-line flag won't be specified for the browser process.
     if (!command_line->HasSwitch(kProcessType))
-      return PROCESS_TYPE_BROWSER;
+        return PROCESS_TYPE_BROWSER;
 
     const std::string& process_type = command_line->GetSwitchValue(kProcessType);
     if (process_type == kRendererProcess)
-      return PROCESS_TYPE_RENDERER;
+        return PROCESS_TYPE_RENDERER;
 
-  #if defined(OS_LINUX)
+#if defined(OS_LINUX)
     // On Linux the zygote process is used to spawn other process types. Since we
     // don't know what type of process it will be we give it the renderer app.
     if (process_type == kZygoteProcess)
-      return PROCESS_TYPE_RENDERER;
-  #endif
+        return PROCESS_TYPE_RENDERER;
+#endif
 
     return PROCESS_TYPE_OTHER;
-  }
-
 }
+
+} // namespace shared

@@ -10,36 +10,34 @@
 #include <string>
 #include <vector>
 
-namespace justcef {
+namespace justcef
+{
 
 class JustCefProcessImpl;
 class WindowCommandTarget;
 struct WindowShared;
 class JustCefWindow;
 
-using BridgeRpcHandler = std::function<asio::awaitable<std::optional<std::string>>(
-    JustCefWindow&,
-    std::string,
-    std::string)>;
-using SyncBridgeRpcHandler = std::function<std::optional<std::string>(
-    JustCefWindow&,
-    std::string,
-    std::string)>;
+using BridgeRpcHandler = std::function<asio::awaitable<std::optional<std::string>>(JustCefWindow&, std::string, std::string)>;
+using SyncBridgeRpcHandler = std::function<std::optional<std::string>(JustCefWindow&, std::string, std::string)>;
 
-struct FrameLoadStartInfo {
+struct FrameLoadStartInfo
+{
     std::optional<std::string> frame_identifier;
     bool is_main_frame = false;
     std::optional<std::string> url;
 };
 
-struct FrameLoadEndInfo {
+struct FrameLoadEndInfo
+{
     std::optional<std::string> frame_identifier;
     bool is_main_frame = false;
     std::optional<std::string> url;
     int http_status_code = 0;
 };
 
-struct FrameLoadErrorInfo {
+struct FrameLoadErrorInfo
+{
     std::optional<std::string> frame_identifier;
     bool is_main_frame = false;
     int error_code = 0;
@@ -47,13 +45,15 @@ struct FrameLoadErrorInfo {
     std::optional<std::string> failed_url;
 };
 
-struct LoadingStateChangedInfo {
+struct LoadingStateChangedInfo
+{
     bool is_loading = false;
     bool can_go_back = false;
     bool can_go_forward = false;
 };
 
-class JustCefWindow {
+class JustCefWindow
+{
 public:
     Event<> OnClose;
     Event<> OnFocused;
@@ -138,4 +138,4 @@ private:
     friend class JustCefProcessImpl;
 };
 
-}  // namespace justcef
+} // namespace justcef

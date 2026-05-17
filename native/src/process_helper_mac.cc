@@ -13,45 +13,48 @@
 #include "include/cef_sandbox_mac.h"
 #endif
 
-namespace shared {
+namespace shared
+{
 
 // Entry point function for sub-processes.
-int main(int argc, char* argv[]) {
+int main(int argc, char* argv[])
+{
 #if defined(CEF_USE_SANDBOX)
-  // Initialize the macOS sandbox for this helper process.
-  CefScopedSandboxContext sandbox_context;
-  if (!sandbox_context.Initialize(argc, argv))
-    return 1;
+    // Initialize the macOS sandbox for this helper process.
+    CefScopedSandboxContext sandbox_context;
+    if (!sandbox_context.Initialize(argc, argv))
+        return 1;
 #endif
 
-  // Load the CEF framework library at runtime instead of linking directly
-  // as required by the macOS sandbox implementation.
-  CefScopedLibraryLoader library_loader;
-  if (!library_loader.LoadInHelper())
-    return 1;
+    // Load the CEF framework library at runtime instead of linking directly
+    // as required by the macOS sandbox implementation.
+    CefScopedLibraryLoader library_loader;
+    if (!library_loader.LoadInHelper())
+        return 1;
 
-  // Provide CEF with command-line arguments.
-  CefMainArgs main_args(argc, argv);
+    // Provide CEF with command-line arguments.
+    CefMainArgs main_args(argc, argv);
 
-  // Create a temporary CommandLine object.
-  CefRefPtr<CefCommandLine> command_line = CreateCommandLine(main_args);
+    // Create a temporary CommandLine object.
+    CefRefPtr<CefCommandLine> command_line = CreateCommandLine(main_args);
 
-  // Create a CefApp of the correct process type. The browser process is handled
-  // by main_mac.mm.
-  CefRefPtr<CefApp> app;
-  switch (GetProcessType(command_line)) {
+    // Create a CefApp of the correct process type. The browser process is handled
+    // by main_mac.mm.
+    CefRefPtr<CefApp> app;
+    switch (GetProcessType(command_line))
+    {
     case PROCESS_TYPE_RENDERER:
-      app = CreateRendererProcessApp();
-      break;
+        app = CreateRendererProcessApp();
+        break;
     case PROCESS_TYPE_OTHER:
-      app = CreateOtherProcessApp();
-      break;
+        app = CreateOtherProcessApp();
+        break;
     default:
-      break;
-  }
+        break;
+    }
 
-  // Execute the sub-process.
-  return CefExecuteProcess(main_args, app, nullptr);
+    // Execute the sub-process.
+    return CefExecuteProcess(main_args, app, nullptr);
 }
 
-}
+} // namespace shared

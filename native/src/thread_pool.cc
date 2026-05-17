@@ -1,34 +1,41 @@
 #include "thread_pool.h"
 #include "ipc.h"
 
-ThreadPool::ThreadPool() : _stop(false) { }
-ThreadPool::~ThreadPool() 
-{ 
-    Stop(); 
+ThreadPool::ThreadPool() : _stop(false)
+{
+}
+ThreadPool::~ThreadPool()
+{
+    Stop();
 }
 
 void ThreadPool::AddWorkers(size_t count)
 {
-    for (size_t i = 0; i < count; ++i) 
+    for (size_t i = 0; i < count; ++i)
     {
-        std::thread thread([this] 
-        {
-            for (;;)
+        std::thread thread(
+            [this]
             {
-                std::function<void()> task;
-
+                for (;;)
                 {
-                    std::unique_lock<std::mutex> lock(_queue_mutex);
-                    _condition.wait(lock, [this] { return _stop || !_tasks.empty(); });
-                    if (_stop && _tasks.empty())
-                        return;
-                    task = std::move(_tasks.front());
-                    _tasks.pop();
-                }
+                    std::function<void()> task;
 
-                task();
-            }
-        });
+                    {
+                        std::unique_lock<std::mutex> lock(_queue_mutex);
+                        _condition.wait(lock,
+                                        [this]
+                                        {
+                                            return _stop || !_tasks.empty();
+                                        });
+                        if (_stop && _tasks.empty())
+                            return;
+                        task = std::move(_tasks.front());
+                        _tasks.pop();
+                    }
+
+                    task();
+                }
+            });
         thread.detach();
         _workers.emplace_back(std::move(thread));
     }
@@ -40,7 +47,7 @@ bool ThreadPool::Enqueue(std::function<void()> task)
         std::unique_lock<std::mutex> lock(_queue_mutex);
         if (_stop)
             return false;
-            
+
         _tasks.emplace(std::move(task));
     }
     _condition.notify_one();

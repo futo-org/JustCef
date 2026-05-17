@@ -9,7 +9,8 @@
 #include <string>
 #include <unordered_map>
 
-namespace {
+namespace
+{
 
 constexpr char kBridgeObjectName[] = "bridge";
 constexpr char kBridgeFilesObjectName[] = "files";
@@ -22,37 +23,38 @@ constexpr char kBridgeRpcNativeFailHostCallMethodName[] = "__nativeFailHostCall"
 constexpr size_t kBridgeRpcSharedMemoryThreshold = 16 * 1024;
 
 #pragma pack(push, 1)
-struct BridgeRpcCallMessageHeader {
+struct BridgeRpcCallMessageHeader
+{
     int32_t request_id;
     uint32_t method_size;
     uint32_t payload_size;
 };
 
-struct BridgeRpcResultMessageHeader {
+struct BridgeRpcResultMessageHeader
+{
     int32_t request_id;
     uint8_t success;
     uint32_t payload_size;
 };
 #pragma pack(pop)
 
-bool ShouldUseBridgeRpcSharedMemory(size_t payload_size) {
+bool ShouldUseBridgeRpcSharedMemory(size_t payload_size)
+{
     return payload_size >= kBridgeRpcSharedMemoryThreshold;
 }
 
-bool TryBuildBridgeRpcCallSharedMessage(const char* message_name,
-                                        int32_t request_id,
-                                        const std::string& method,
-                                        const std::string& payload_json,
-                                        CefRefPtr<CefProcessMessage>& message_out) {
-    if (method.size() > std::numeric_limits<uint32_t>::max() ||
-        payload_json.size() > std::numeric_limits<uint32_t>::max()) {
+bool TryBuildBridgeRpcCallSharedMessage(const char* message_name, int32_t request_id, const std::string& method, const std::string& payload_json,
+                                        CefRefPtr<CefProcessMessage>& message_out)
+{
+    if (method.size() > std::numeric_limits<uint32_t>::max() || payload_json.size() > std::numeric_limits<uint32_t>::max())
+    {
         return false;
     }
 
-    const size_t message_size =
-        sizeof(BridgeRpcCallMessageHeader) + method.size() + payload_json.size();
+    const size_t message_size = sizeof(BridgeRpcCallMessageHeader) + method.size() + payload_json.size();
     auto builder = CefSharedProcessMessageBuilder::Create(message_name, message_size);
-    if (!builder || !builder->IsValid()) {
+    if (!builder || !builder->IsValid())
+    {
         return false;
     }
 
@@ -62,11 +64,13 @@ bool TryBuildBridgeRpcCallSharedMessage(const char* message_name,
     header->payload_size = static_cast<uint32_t>(payload_json.size());
 
     uint8_t* cursor = static_cast<uint8_t*>(builder->Memory()) + sizeof(BridgeRpcCallMessageHeader);
-    if (!method.empty()) {
+    if (!method.empty())
+    {
         std::memcpy(cursor, method.data(), method.size());
         cursor += method.size();
     }
-    if (!payload_json.empty()) {
+    if (!payload_json.empty())
+    {
         std::memcpy(cursor, payload_json.data(), payload_json.size());
     }
 
@@ -74,19 +78,17 @@ bool TryBuildBridgeRpcCallSharedMessage(const char* message_name,
     return message_out != nullptr;
 }
 
-bool TryBuildBridgeRpcResultSharedMessage(const char* message_name,
-                                          int32_t request_id,
-                                          bool success,
-                                          const std::string& payload,
-                                          CefRefPtr<CefProcessMessage>& message_out) {
-    if (payload.size() > std::numeric_limits<uint32_t>::max()) {
+bool TryBuildBridgeRpcResultSharedMessage(const char* message_name, int32_t request_id, bool success, const std::string& payload, CefRefPtr<CefProcessMessage>& message_out)
+{
+    if (payload.size() > std::numeric_limits<uint32_t>::max())
+    {
         return false;
     }
 
-    const size_t message_size =
-        sizeof(BridgeRpcResultMessageHeader) + payload.size();
+    const size_t message_size = sizeof(BridgeRpcResultMessageHeader) + payload.size();
     auto builder = CefSharedProcessMessageBuilder::Create(message_name, message_size);
-    if (!builder || !builder->IsValid()) {
+    if (!builder || !builder->IsValid())
+    {
         return false;
     }
 
@@ -96,7 +98,8 @@ bool TryBuildBridgeRpcResultSharedMessage(const char* message_name,
     header->payload_size = static_cast<uint32_t>(payload.size());
 
     uint8_t* cursor = static_cast<uint8_t*>(builder->Memory()) + sizeof(BridgeRpcResultMessageHeader);
-    if (!payload.empty()) {
+    if (!payload.empty())
+    {
         std::memcpy(cursor, payload.data(), payload.size());
     }
 
@@ -222,41 +225,50 @@ constexpr char kBridgeBootstrapScript[] = R"JS(
 })();
 )JS";
 
-struct PendingBridgePromise {
+struct PendingBridgePromise
+{
     CefRefPtr<CefV8Context> context;
     CefRefPtr<CefV8Value> promise;
 };
 
-struct BrowserBridgeState {
+struct BrowserBridgeState
+{
     int32_t next_request_id = 0;
     std::unordered_map<int32_t, PendingBridgePromise> pending_host_calls;
 };
 
 std::unordered_map<int, BrowserBridgeState> g_bridge_states;
 
-CefV8Value::PropertyAttribute GetBridgePropertyAttributes() {
+CefV8Value::PropertyAttribute GetBridgePropertyAttributes()
+{
     return static_cast<CefV8Value::PropertyAttribute>(V8_PROPERTY_ATTRIBUTE_READONLY | V8_PROPERTY_ATTRIBUTE_DONTDELETE);
 }
 
-CefV8Value::PropertyAttribute GetBridgeInternalPropertyAttributes() {
+CefV8Value::PropertyAttribute GetBridgeInternalPropertyAttributes()
+{
     return static_cast<CefV8Value::PropertyAttribute>(V8_PROPERTY_ATTRIBUTE_READONLY | V8_PROPERTY_ATTRIBUTE_DONTDELETE | V8_PROPERTY_ATTRIBUTE_DONTENUM);
 }
 
-void SetBridgeValue(CefRefPtr<CefV8Value> object, const char* key, CefRefPtr<CefV8Value> value, bool internal_value = false) {
+void SetBridgeValue(CefRefPtr<CefV8Value> object, const char* key, CefRefPtr<CefV8Value> value, bool internal_value = false)
+{
     object->SetValue(key, value, internal_value ? GetBridgeInternalPropertyAttributes() : GetBridgePropertyAttributes());
 }
 
-BrowserBridgeState& GetBridgeState(int browser_identifier) {
+BrowserBridgeState& GetBridgeState(int browser_identifier)
+{
     return g_bridge_states[browser_identifier];
 }
 
-std::string GetV8ExceptionMessage(CefRefPtr<CefV8Value> value, const std::string& fallback) {
-    if (!value || !value->HasException()) {
+std::string GetV8ExceptionMessage(CefRefPtr<CefV8Value> value, const std::string& fallback)
+{
+    if (!value || !value->HasException())
+    {
         return fallback;
     }
 
     CefRefPtr<CefV8Exception> exception = value->GetException();
-    if (!exception) {
+    if (!exception)
+    {
         return fallback;
     }
 
@@ -264,14 +276,17 @@ std::string GetV8ExceptionMessage(CefRefPtr<CefV8Value> value, const std::string
     return message.empty() ? fallback : message;
 }
 
-std::optional<PendingBridgePromise> TakePendingHostCall(int browser_identifier, int32_t request_id) {
+std::optional<PendingBridgePromise> TakePendingHostCall(int browser_identifier, int32_t request_id)
+{
     auto browser_it = g_bridge_states.find(browser_identifier);
-    if (browser_it == g_bridge_states.end()) {
+    if (browser_it == g_bridge_states.end())
+    {
         return std::nullopt;
     }
 
     auto request_it = browser_it->second.pending_host_calls.find(request_id);
-    if (request_it == browser_it->second.pending_host_calls.end()) {
+    if (request_it == browser_it->second.pending_host_calls.end())
+    {
         return std::nullopt;
     }
 
@@ -280,58 +295,75 @@ std::optional<PendingBridgePromise> TakePendingHostCall(int browser_identifier, 
     return pending;
 }
 
-void SendBridgeRpcResult(CefRefPtr<CefFrame> frame, CefProcessId target_process, const char* message_name, int32_t request_id, bool success, const std::string& payload) {
+void SendBridgeRpcResult(CefRefPtr<CefFrame> frame, CefProcessId target_process, const char* message_name, int32_t request_id, bool success, const std::string& payload)
+{
     SendBridgeRpcResultMessage(frame, target_process, message_name, request_id, success, payload);
 }
 
-void CompletePendingHostCall(int browser_identifier, int32_t request_id, bool success, const std::string& payload) {
+void CompletePendingHostCall(int browser_identifier, int32_t request_id, bool success, const std::string& payload)
+{
     std::optional<PendingBridgePromise> pending = TakePendingHostCall(browser_identifier, request_id);
-    if (!pending || !pending->context || !pending->promise) {
+    if (!pending || !pending->context || !pending->promise)
+    {
         return;
     }
 
-    if (!pending->context->Enter()) {
+    if (!pending->context->Enter())
+    {
         return;
     }
 
-    if (success) {
+    if (success)
+    {
         pending->promise->ResolvePromise(CefV8Value::CreateString(payload));
-    } else {
+    }
+    else
+    {
         pending->promise->RejectPromise(payload);
     }
 
     pending->context->Exit();
 }
 
-void DropPendingHostCallsForContext(int browser_identifier, CefRefPtr<CefV8Context> context) {
+void DropPendingHostCallsForContext(int browser_identifier, CefRefPtr<CefV8Context> context)
+{
     auto browser_it = g_bridge_states.find(browser_identifier);
-    if (browser_it == g_bridge_states.end()) {
+    if (browser_it == g_bridge_states.end())
+    {
         return;
     }
 
     auto& pending_host_calls = browser_it->second.pending_host_calls;
-    for (auto it = pending_host_calls.begin(); it != pending_host_calls.end();) {
-        if (it->second.context && context && it->second.context->IsSame(context)) {
+    for (auto it = pending_host_calls.begin(); it != pending_host_calls.end();)
+    {
+        if (it->second.context && context && it->second.context->IsSame(context))
+        {
             it = pending_host_calls.erase(it);
-        } else {
+        }
+        else
+        {
             ++it;
         }
     }
 }
 
-bool DispatchHostCallToJavascript(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int32_t request_id, const std::string& method, const std::string& payload_json) {
-    if (!browser || !frame || !frame->IsMain()) {
+bool DispatchHostCallToJavascript(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int32_t request_id, const std::string& method, const std::string& payload_json)
+{
+    if (!browser || !frame || !frame->IsMain())
+    {
         SendBridgeRpcResult(frame, PID_BROWSER, kBridgeRpcCallJsResultMessageName, request_id, false, "Bridge RPC requires the main frame context.");
         return true;
     }
 
     CefRefPtr<CefV8Context> context = frame->GetV8Context();
-    if (!context) {
+    if (!context)
+    {
         SendBridgeRpcResult(frame, PID_BROWSER, kBridgeRpcCallJsResultMessageName, request_id, false, "Bridge RPC main frame context is not available.");
         return true;
     }
 
-    if (!context->Enter()) {
+    if (!context->Enter())
+    {
         SendBridgeRpcResult(frame, PID_BROWSER, kBridgeRpcCallJsResultMessageName, request_id, false, "Failed to enter the bridge RPC V8 context.");
         return true;
     }
@@ -341,65 +373,80 @@ bool DispatchHostCallToJavascript(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFr
     CefRefPtr<CefV8Value> bridge = global ? global->GetValue(kBridgeObjectName) : nullptr;
     CefRefPtr<CefV8Value> rpc = bridge ? bridge->GetValue(kBridgeRpcObjectName) : nullptr;
     CefRefPtr<CefV8Value> dispatch = rpc ? rpc->GetValue(kBridgeRpcDispatchMethodName) : nullptr;
-    if (!dispatch || !dispatch->IsFunction()) {
+    if (!dispatch || !dispatch->IsFunction())
+    {
         error = "Bridge RPC dispatcher is not available in the main frame.";
-    } else {
+    }
+    else
+    {
         CefV8ValueList arguments;
         arguments.push_back(CefV8Value::CreateInt(request_id));
         arguments.push_back(CefV8Value::CreateString(method));
         arguments.push_back(CefV8Value::CreateString(payload_json));
 
         CefRefPtr<CefV8Value> result = dispatch->ExecuteFunctionWithContext(context, rpc, arguments);
-        if (!result && dispatch->HasException()) {
+        if (!result && dispatch->HasException())
+        {
             error = GetV8ExceptionMessage(dispatch, "JavaScript bridge RPC dispatch failed.");
         }
     }
 
     context->Exit();
 
-    if (!error.empty()) {
+    if (!error.empty())
+    {
         SendBridgeRpcResult(frame, PID_BROWSER, kBridgeRpcCallJsResultMessageName, request_id, false, error);
     }
 
     return true;
 }
 
-class BridgeV8Handler final : public CefV8Handler {
- public:
+class BridgeV8Handler final : public CefV8Handler
+{
+public:
     BridgeV8Handler() = default;
 
-    bool Execute(const CefString& name, CefRefPtr<CefV8Value> object, const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval, CefString& exception) override {
-        if (name == kBridgeFilesGetPathMethodName) {
+    bool Execute(const CefString& name, CefRefPtr<CefV8Value> object, const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval, CefString& exception) override
+    {
+        if (name == kBridgeFilesGetPathMethodName)
+        {
             return ExecuteGetPath(arguments, retval, exception);
         }
-        if (name == kBridgeRpcNativeCallHostMethodName) {
+        if (name == kBridgeRpcNativeCallHostMethodName)
+        {
             return ExecuteCallHost(arguments, retval, exception);
         }
-        if (name == kBridgeRpcNativeCompleteHostCallMethodName) {
+        if (name == kBridgeRpcNativeCompleteHostCallMethodName)
+        {
             return ExecuteHostCallCompletion(arguments, retval, exception, true);
         }
-        if (name == kBridgeRpcNativeFailHostCallMethodName) {
+        if (name == kBridgeRpcNativeFailHostCallMethodName)
+        {
             return ExecuteHostCallCompletion(arguments, retval, exception, false);
         }
 
         return false;
     }
 
- private:
-    bool ExecuteGetPath(const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval, CefString& exception) {
-        if (arguments.size() != 1) {
+private:
+    bool ExecuteGetPath(const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval, CefString& exception)
+    {
+        if (arguments.size() != 1)
+        {
             exception = "bridge.files.getPath(file) expects exactly one argument.";
             return true;
         }
 
         const CefRefPtr<CefV8Value>& file_value = arguments[0];
-        if (!file_value) {
+        if (!file_value)
+        {
             retval = CefV8Value::CreateNull();
             return true;
         }
 
         CefString path = file_value->GetPathForFile();
-        if (path.empty()) {
+        if (path.empty())
+        {
             retval = CefV8Value::CreateNull();
             return true;
         }
@@ -408,8 +455,10 @@ class BridgeV8Handler final : public CefV8Handler {
         return true;
     }
 
-    bool ExecuteCallHost(const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval, CefString& exception) {
-        if (arguments.size() != 2 || !arguments[0] || !arguments[0]->IsString()) {
+    bool ExecuteCallHost(const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval, CefString& exception)
+    {
+        if (arguments.size() != 2 || !arguments[0] || !arguments[0]->IsString())
+        {
             exception = "bridge.rpc.call(method, payload) expects a string method and JSON payload.";
             return true;
         }
@@ -417,45 +466,43 @@ class BridgeV8Handler final : public CefV8Handler {
         CefRefPtr<CefV8Context> context = CefV8Context::GetCurrentContext();
         CefRefPtr<CefBrowser> browser = context ? context->GetBrowser() : nullptr;
         CefRefPtr<CefFrame> frame = context ? context->GetFrame() : nullptr;
-        if (!context || !browser || !frame || !frame->IsMain()) {
+        if (!context || !browser || !frame || !frame->IsMain())
+        {
             exception = "bridge.rpc.call(method, payload) is only available in the main frame.";
             return true;
         }
 
         CefRefPtr<CefV8Value> promise = CefV8Value::CreatePromise();
-        if (!promise) {
+        if (!promise)
+        {
             exception = "Failed to create bridge RPC promise.";
             return true;
         }
 
-        const std::string payload_json = arguments[1] && arguments[1]->IsString() ? arguments[1]->GetStringValue()  : "null";
+        const std::string payload_json = arguments[1] && arguments[1]->IsString() ? arguments[1]->GetStringValue() : "null";
         BrowserBridgeState& bridge_state = GetBridgeState(browser->GetIdentifier());
         const int32_t request_id = ++bridge_state.next_request_id;
         bridge_state.pending_host_calls[request_id] = {context, promise};
 
-        SendBridgeRpcCallMessage(
-            frame,
-            PID_BROWSER,
-            kBridgeRpcCallHostMessageName,
-            request_id,
-            arguments[0]->GetStringValue(),
-            payload_json);
+        SendBridgeRpcCallMessage(frame, PID_BROWSER, kBridgeRpcCallHostMessageName, request_id, arguments[0]->GetStringValue(), payload_json);
 
         retval = promise;
         return true;
     }
 
-    bool ExecuteHostCallCompletion(const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval, CefString& exception, bool success) {
-        if (arguments.size() != 2 || !arguments[0] || !arguments[0]->IsInt()) {
-            exception = success
-                ? "__nativeCompleteHostCall(requestId, json) expects an integer request id."
-                : "__nativeFailHostCall(requestId, error) expects an integer request id.";
+    bool ExecuteHostCallCompletion(const CefV8ValueList& arguments, CefRefPtr<CefV8Value>& retval, CefString& exception, bool success)
+    {
+        if (arguments.size() != 2 || !arguments[0] || !arguments[0]->IsInt())
+        {
+            exception =
+                success ? "__nativeCompleteHostCall(requestId, json) expects an integer request id." : "__nativeFailHostCall(requestId, error) expects an integer request id.";
             return true;
         }
 
         CefRefPtr<CefV8Context> context = CefV8Context::GetCurrentContext();
         CefRefPtr<CefFrame> frame = context ? context->GetFrame() : nullptr;
-        if (!frame || !frame->IsMain()) {
+        if (!frame || !frame->IsMain())
+        {
             exception = "Bridge RPC host call completion is only available in the main frame.";
             return true;
         }
@@ -470,18 +517,20 @@ class BridgeV8Handler final : public CefV8Handler {
     DISALLOW_COPY_AND_ASSIGN(BridgeV8Handler);
 };
 
-}    // namespace
+} // namespace
 
-bool SendBridgeRpcCallMessage(CefRefPtr<CefFrame> frame, CefProcessId target_process, const char* message_name, int32_t request_id, const std::string& method, const std::string& payload_json) {
-    if (!frame) {
+bool SendBridgeRpcCallMessage(CefRefPtr<CefFrame> frame, CefProcessId target_process, const char* message_name, int32_t request_id, const std::string& method,
+                              const std::string& payload_json)
+{
+    if (!frame)
+    {
         return false;
     }
 
-    const size_t message_size =
-        sizeof(BridgeRpcCallMessageHeader) + method.size() + payload_json.size();
+    const size_t message_size = sizeof(BridgeRpcCallMessageHeader) + method.size() + payload_json.size();
     CefRefPtr<CefProcessMessage> message;
-    if (ShouldUseBridgeRpcSharedMemory(message_size) &&
-        TryBuildBridgeRpcCallSharedMessage(message_name, request_id, method, payload_json, message)) {
+    if (ShouldUseBridgeRpcSharedMemory(message_size) && TryBuildBridgeRpcCallSharedMessage(message_name, request_id, method, payload_json, message))
+    {
         frame->SendProcessMessage(target_process, message);
         return true;
     }
@@ -495,16 +544,17 @@ bool SendBridgeRpcCallMessage(CefRefPtr<CefFrame> frame, CefProcessId target_pro
     return true;
 }
 
-bool SendBridgeRpcResultMessage(CefRefPtr<CefFrame> frame, CefProcessId target_process, const char* message_name, int32_t request_id, bool success, const std::string& payload) {
-    if (!frame) {
+bool SendBridgeRpcResultMessage(CefRefPtr<CefFrame> frame, CefProcessId target_process, const char* message_name, int32_t request_id, bool success, const std::string& payload)
+{
+    if (!frame)
+    {
         return false;
     }
 
-    const size_t message_size =
-        sizeof(BridgeRpcResultMessageHeader) + payload.size();
+    const size_t message_size = sizeof(BridgeRpcResultMessageHeader) + payload.size();
     CefRefPtr<CefProcessMessage> message;
-    if (ShouldUseBridgeRpcSharedMemory(message_size) &&
-        TryBuildBridgeRpcResultSharedMessage(message_name, request_id, success, payload, message)) {
+    if (ShouldUseBridgeRpcSharedMemory(message_size) && TryBuildBridgeRpcResultSharedMessage(message_name, request_id, success, payload, message))
+    {
         frame->SendProcessMessage(target_process, message);
         return true;
     }
@@ -518,16 +568,17 @@ bool SendBridgeRpcResultMessage(CefRefPtr<CefFrame> frame, CefProcessId target_p
     return true;
 }
 
-bool ParseBridgeRpcCallMessage(CefRefPtr<CefProcessMessage> message, int32_t& request_id, std::string& method, std::string& payload_json) {
-    if (!message) {
+bool ParseBridgeRpcCallMessage(CefRefPtr<CefProcessMessage> message, int32_t& request_id, std::string& method, std::string& payload_json)
+{
+    if (!message)
+    {
         return false;
     }
 
-    if (auto arguments = message->GetArgumentList()) {
-        if (arguments->GetSize() < 3 ||
-            arguments->GetType(0) != VTYPE_INT ||
-            arguments->GetType(1) != VTYPE_STRING ||
-            arguments->GetType(2) != VTYPE_STRING) {
+    if (auto arguments = message->GetArgumentList())
+    {
+        if (arguments->GetSize() < 3 || arguments->GetType(0) != VTYPE_INT || arguments->GetType(1) != VTYPE_STRING || arguments->GetType(2) != VTYPE_STRING)
+        {
             return false;
         }
 
@@ -538,16 +589,15 @@ bool ParseBridgeRpcCallMessage(CefRefPtr<CefProcessMessage> message, int32_t& re
     }
 
     auto region = message->GetSharedMemoryRegion();
-    if (!region || !region->IsValid() || region->Size() < sizeof(BridgeRpcCallMessageHeader)) {
+    if (!region || !region->IsValid() || region->Size() < sizeof(BridgeRpcCallMessageHeader))
+    {
         return false;
     }
 
     const auto* header = static_cast<const BridgeRpcCallMessageHeader*>(region->Memory());
-    const size_t expected_size =
-        sizeof(BridgeRpcCallMessageHeader) +
-        static_cast<size_t>(header->method_size) +
-        static_cast<size_t>(header->payload_size);
-    if (region->Size() < expected_size) {
+    const size_t expected_size = sizeof(BridgeRpcCallMessageHeader) + static_cast<size_t>(header->method_size) + static_cast<size_t>(header->payload_size);
+    if (region->Size() < expected_size)
+    {
         return false;
     }
 
@@ -559,16 +609,17 @@ bool ParseBridgeRpcCallMessage(CefRefPtr<CefProcessMessage> message, int32_t& re
     return true;
 }
 
-bool ParseBridgeRpcResultMessage(CefRefPtr<CefProcessMessage> message, int32_t& request_id, bool& success, std::string& payload) {
-    if (!message) {
+bool ParseBridgeRpcResultMessage(CefRefPtr<CefProcessMessage> message, int32_t& request_id, bool& success, std::string& payload)
+{
+    if (!message)
+    {
         return false;
     }
 
-    if (auto arguments = message->GetArgumentList()) {
-        if (arguments->GetSize() < 3 ||
-            arguments->GetType(0) != VTYPE_INT ||
-            arguments->GetType(1) != VTYPE_BOOL ||
-            arguments->GetType(2) != VTYPE_STRING) {
+    if (auto arguments = message->GetArgumentList())
+    {
+        if (arguments->GetSize() < 3 || arguments->GetType(0) != VTYPE_INT || arguments->GetType(1) != VTYPE_BOOL || arguments->GetType(2) != VTYPE_STRING)
+        {
             return false;
         }
 
@@ -579,15 +630,15 @@ bool ParseBridgeRpcResultMessage(CefRefPtr<CefProcessMessage> message, int32_t& 
     }
 
     auto region = message->GetSharedMemoryRegion();
-    if (!region || !region->IsValid() || region->Size() < sizeof(BridgeRpcResultMessageHeader)) {
+    if (!region || !region->IsValid() || region->Size() < sizeof(BridgeRpcResultMessageHeader))
+    {
         return false;
     }
 
     const auto* header = static_cast<const BridgeRpcResultMessageHeader*>(region->Memory());
-    const size_t expected_size =
-        sizeof(BridgeRpcResultMessageHeader) +
-        static_cast<size_t>(header->payload_size);
-    if (region->Size() < expected_size) {
+    const size_t expected_size = sizeof(BridgeRpcResultMessageHeader) + static_cast<size_t>(header->payload_size);
+    if (region->Size() < expected_size)
+    {
         return false;
     }
 
@@ -598,13 +649,16 @@ bool ParseBridgeRpcResultMessage(CefRefPtr<CefProcessMessage> message, int32_t& 
     return true;
 }
 
-void InstallBridge(CefRefPtr<CefV8Context> context) {
-    if (!context) {
+void InstallBridge(CefRefPtr<CefV8Context> context)
+{
+    if (!context)
+    {
         return;
     }
 
     CefRefPtr<CefV8Value> window = context->GetGlobal();
-    if (!window) {
+    if (!window)
+    {
         return;
     }
 
@@ -623,50 +677,61 @@ void InstallBridge(CefRefPtr<CefV8Context> context) {
 
     CefRefPtr<CefV8Value> eval_result;
     CefRefPtr<CefV8Exception> eval_exception;
-    if (!context->Eval(kBridgeBootstrapScript, "justcef://bridge/bootstrap.js", 1, eval_result, eval_exception)) {
+    if (!context->Eval(kBridgeBootstrapScript, "justcef://bridge/bootstrap.js", 1, eval_result, eval_exception))
+    {
         const std::string message = eval_exception ? eval_exception->GetMessage() : "Unknown bridge bootstrap error.";
         LOG(ERROR) << "Failed to bootstrap bridge RPC runtime: " << message;
     }
 }
 
-CefRefPtr<CefDictionaryValue> CreateBridgeExtraInfo(bool bridge_enabled, CefRefPtr<CefDictionaryValue> base_info) {
-    if (!bridge_enabled && !base_info) {
+CefRefPtr<CefDictionaryValue> CreateBridgeExtraInfo(bool bridge_enabled, CefRefPtr<CefDictionaryValue> base_info)
+{
+    if (!bridge_enabled && !base_info)
+    {
         return nullptr;
     }
 
     CefRefPtr<CefDictionaryValue> extra_info = base_info ? base_info->Copy(false) : CefDictionaryValue::Create();
-    if (!extra_info) {
+    if (!extra_info)
+    {
         return nullptr;
     }
 
-    if (bridge_enabled) {
+    if (bridge_enabled)
+    {
         extra_info->SetBool(kBridgeEnabledExtraInfoKey, true);
         return extra_info;
     }
 
     extra_info->Remove(kBridgeEnabledExtraInfoKey);
-    if (extra_info->GetSize() == 0) {
+    if (extra_info->GetSize() == 0)
+    {
         return nullptr;
     }
 
     return extra_info;
 }
 
-bool IsBridgeEnabled(CefRefPtr<CefDictionaryValue> extra_info) {
+bool IsBridgeEnabled(CefRefPtr<CefDictionaryValue> extra_info)
+{
     return extra_info && extra_info->HasKey(kBridgeEnabledExtraInfoKey) && extra_info->GetBool(kBridgeEnabledExtraInfoKey);
 }
 
-bool HandleBridgeProcessMessage(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefRefPtr<CefProcessMessage> message) {
-    if (!browser || !message) {
+bool HandleBridgeProcessMessage(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefRefPtr<CefProcessMessage> message)
+{
+    if (!browser || !message)
+    {
         return false;
     }
 
     const std::string message_name = message->GetName();
-    if (message_name == kBridgeRpcCallHostResultMessageName) {
+    if (message_name == kBridgeRpcCallHostResultMessageName)
+    {
         int32_t request_id = 0;
         bool success = false;
         std::string payload;
-        if (!ParseBridgeRpcResultMessage(message, request_id, success, payload)) {
+        if (!ParseBridgeRpcResultMessage(message, request_id, success, payload))
+        {
             return true;
         }
 
@@ -674,11 +739,13 @@ bool HandleBridgeProcessMessage(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFram
         return true;
     }
 
-    if (message_name == kBridgeRpcCallJsMessageName) {
+    if (message_name == kBridgeRpcCallJsMessageName)
+    {
         int32_t request_id = 0;
         std::string method;
         std::string payload_json;
-        if (!ParseBridgeRpcCallMessage(message, request_id, method, payload_json)) {
+        if (!ParseBridgeRpcCallMessage(message, request_id, method, payload_json))
+        {
             return true;
         }
 
@@ -688,8 +755,10 @@ bool HandleBridgeProcessMessage(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFram
     return false;
 }
 
-void ReleaseBridgeContext(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefRefPtr<CefV8Context> context) {
-    if (!browser || !frame || !frame->IsMain()) {
+void ReleaseBridgeContext(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefRefPtr<CefV8Context> context)
+{
+    if (!browser || !frame || !frame->IsMain())
+    {
         return;
     }
 
@@ -699,8 +768,10 @@ void ReleaseBridgeContext(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> fra
     frame->SendProcessMessage(PID_BROWSER, message);
 }
 
-void ClearBridgeState(CefRefPtr<CefBrowser> browser) {
-    if (!browser) {
+void ClearBridgeState(CefRefPtr<CefBrowser> browser)
+{
+    if (!browser)
+    {
         return;
     }
 

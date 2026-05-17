@@ -10,36 +10,43 @@
 #include <utility>
 #include <vector>
 
-namespace justcef::detail {
+namespace justcef::detail
+{
 
-class AsyncSignal {
+class AsyncSignal
+{
 public:
     using Waiter = std::function<void(std::exception_ptr)>;
 
-    bool IsSignaled() const {
+    bool IsSignaled() const
+    {
         std::lock_guard<std::mutex> lock(mutex_);
         return signaled_;
     }
 
-    void SignalSuccess() {
-        Complete(nullptr);
-    }
+    void SignalSuccess() { Complete(nullptr); }
 
-    void SignalFailure(std::exception_ptr exception) {
-        Complete(std::move(exception));
-    }
+    void SignalFailure(std::exception_ptr exception) { Complete(std::move(exception)); }
 
-    void Wait() const {
+    void Wait() const
+    {
         std::unique_lock<std::mutex> lock(mutex_);
-        condition_.wait(lock, [this]() { return signaled_; });
-        if (exception_) {
+        condition_.wait(lock,
+                        [this]()
+                        {
+                            return signaled_;
+                        });
+        if (exception_)
+        {
             std::rethrow_exception(exception_);
         }
     }
 
-    asio::awaitable<void> AsyncWait(const asio::any_io_executor& fallback_executor) const {
+    asio::awaitable<void> AsyncWait(const asio::any_io_executor& fallback_executor) const
+    {
         co_return co_await asio::async_initiate<decltype(asio::use_awaitable), void(std::exception_ptr)>(
-            [this, fallback_executor](auto handler) mutable {
+            [this, fallback_executor](auto handler) mutable
+            {
                 using Handler = std::decay_t<decltype(handler)>;
 
                 auto handler_ptr = std::make_shared<Handler>(std::move(handler));
@@ -50,35 +57,47 @@ public:
 
                 {
                     std::lock_guard<std::mutex> lock(mutex_);
-                    if (signaled_) {
+                    if (signaled_)
+                    {
                         dispatch_immediately = true;
                         exception = exception_;
-                    } else {
-                        waiters_.push_back([handler_ptr, handler_executor](std::exception_ptr completion_exception) mutable {
-                            asio::dispatch(handler_executor, [handler_ptr, completion_exception]() mutable {
-                                auto completion_handler = std::move(*handler_ptr);
-                                completion_handler(completion_exception);
+                    }
+                    else
+                    {
+                        waiters_.push_back(
+                            [handler_ptr, handler_executor](std::exception_ptr completion_exception) mutable
+                            {
+                                asio::dispatch(handler_executor,
+                                               [handler_ptr, completion_exception]() mutable
+                                               {
+                                                   auto completion_handler = std::move(*handler_ptr);
+                                                   completion_handler(completion_exception);
+                                               });
                             });
-                        });
                     }
                 }
 
-                if (dispatch_immediately) {
-                    asio::dispatch(handler_executor, [handler_ptr, exception]() mutable {
-                        auto completion_handler = std::move(*handler_ptr);
-                        completion_handler(exception);
-                    });
+                if (dispatch_immediately)
+                {
+                    asio::dispatch(handler_executor,
+                                   [handler_ptr, exception]() mutable
+                                   {
+                                       auto completion_handler = std::move(*handler_ptr);
+                                       completion_handler(exception);
+                                   });
                 }
             },
             asio::use_awaitable);
     }
 
 private:
-    void Complete(std::exception_ptr exception) {
+    void Complete(std::exception_ptr exception)
+    {
         std::vector<Waiter> waiters;
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            if (signaled_) {
+            if (signaled_)
+            {
                 return;
             }
 
@@ -88,8 +107,10 @@ private:
         }
 
         condition_.notify_all();
-        for (auto& waiter : waiters) {
-            if (waiter) {
+        for (auto& waiter : waiters)
+        {
+            if (waiter)
+            {
                 waiter(exception_);
             }
         }
@@ -102,4 +123,4 @@ private:
     std::exception_ptr exception_;
 };
 
-}  // namespace justcef::detail
+} // namespace justcef::detail

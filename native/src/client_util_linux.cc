@@ -1,5 +1,5 @@
-#include "client_util.h"
 #include "client.h"
+#include "client_util.h"
 
 #if defined(CEF_X11)
 #include <X11/Xatom.h>
@@ -18,521 +18,549 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
-namespace shared {
-    void PlatformTitleChange(CefRefPtr<CefBrowser> browser, const std::string& title) 
-    {
-        std::string titleStr(title);
+namespace shared
+{
+void PlatformTitleChange(CefRefPtr<CefBrowser> browser, const std::string& title)
+{
+    std::string titleStr(title);
 
 #if defined(CEF_X11)
-        ::Display* display = cef_get_xdisplay();
-        DCHECK(display);
+    ::Display* display = cef_get_xdisplay();
+    DCHECK(display);
 
-        ::Window window = browser->GetHost()->GetWindowHandle();
-        if (window == kNullWindowHandle) return;
+    ::Window window = browser->GetHost()->GetWindowHandle();
+    if (window == kNullWindowHandle)
+        return;
 
-        Atom _NET_WM_NAME = XInternAtom(display, "_NET_WM_NAME", False);
-        Atom UTF8_STRING = XInternAtom(display, "UTF8_STRING", False);
+    Atom _NET_WM_NAME = XInternAtom(display, "_NET_WM_NAME", False);
+    Atom UTF8_STRING = XInternAtom(display, "UTF8_STRING", False);
 
-        XChangeProperty(display, window, _NET_WM_NAME, UTF8_STRING, 8, PropModeReplace,
-                        reinterpret_cast<const unsigned char*>(titleStr.c_str()), titleStr.size());
+    XChangeProperty(display, window, _NET_WM_NAME, UTF8_STRING, 8, PropModeReplace, reinterpret_cast<const unsigned char*>(titleStr.c_str()), titleStr.size());
 
-        XTextProperty textProperty;
-        char* cTitle = const_cast<char*>(titleStr.c_str());
-        Xutf8TextListToTextProperty(display, &cTitle, 1, XUTF8StringStyle, &textProperty);
-        XSetWMName(display, window, &textProperty);
-        XFree(textProperty.value);
+    XTextProperty textProperty;
+    char* cTitle = const_cast<char*>(titleStr.c_str());
+    Xutf8TextListToTextProperty(display, &cTitle, 1, XUTF8StringStyle, &textProperty);
+    XSetWMName(display, window, &textProperty);
+    XFree(textProperty.value);
 
-        XFlush(display);
+    XFlush(display);
 #endif // defined(CEF_X11)
-    }
-
-    void PlatformIconChange(CefRefPtr<CefBrowser> browser, const std::string& iconPath) 
-    {
-        int width, height, channels;
-        unsigned char* image = stbi_load(iconPath.c_str(), &width, &height, &channels, 4);
-        if (!image) {
-            LOG(ERROR) << "Failed to load image from path: " << iconPath;
-            return;
-        }
-
-#if defined(CEF_X11)
-        Display* display = XOpenDisplay(NULL);
-        if (!display) {
-            LOG(ERROR) << "Failed to open X display.";
-            stbi_image_free(image);
-            return;
-        }
-
-        Window window = (Window)browser->GetHost()->GetWindowHandle();
-        if (!window) {
-            LOG(ERROR) << "Invalid window handle.";
-            stbi_image_free(image);
-            XCloseDisplay(display);
-            return;
-        }
-
-        Atom _NET_WM_ICON = XInternAtom(display, "_NET_WM_ICON", False);
-        if (_NET_WM_ICON == None) {
-            LOG(ERROR) << "Failed to get _NET_WM_ICON atom.";
-            stbi_image_free(image);
-            XCloseDisplay(display);
-            return;
-        }
-
-        Atom cardinal = XInternAtom(display, "CARDINAL", False);
-        if (cardinal == None) {
-            LOG(ERROR) << "Failed to get CARDINAL atom.";
-            stbi_image_free(image);
-            XCloseDisplay(display);
-            return;
-        }
-
-        size_t sz = width * height;
-        size_t asz = sz + 2;
-        unsigned long* iconData = (unsigned long*)malloc(asz * sizeof(unsigned long));
-        if (!iconData) {
-            LOG(ERROR) << "Failed to allocate memory for icon data.";
-            stbi_image_free(image);
-            XCloseDisplay(display);
-            return;
-        }
-
-        iconData[0] = width;
-        iconData[1] = height;
-        for (int y = 0; y < height; ++y) {
-            for (int x = 0; x < width; ++x) {
-                size_t srcIndex = (y * width + x) * 4;
-                size_t dstIndex = (x + y * width) + 2;
-                uint32_t pixel = *((uint32_t*)(image + srcIndex));
-                uint32_t bgra = ((pixel & 0x000000FF) << 16) | (pixel & 0x0000FF00) | ((pixel & 0x00FF0000) >> 16) | (pixel & 0xFF000000);
-                iconData[dstIndex] = bgra;
-            }
-        }
-
-        XChangeProperty(display, window, _NET_WM_ICON, cardinal, 32, PropModeReplace, (const unsigned char*)iconData, asz);
-        XFlush(display);
-        XCloseDisplay(display);
-        free(iconData);
-#endif // defined(CEF_X11)
-
-        stbi_image_free(image);
-    }
-
-    bool PlatformGetFullscreen(CefRefPtr<CefBrowser> browser)
-    {
-#if defined(CEF_X11)
-        ::Display* display = cef_get_xdisplay();
-        DCHECK(display);
-
-        ::Window window = browser->GetHost()->GetWindowHandle();
-        if (window == kNullWindowHandle) return false;
-
-        Atom wmState = XInternAtom(display, "_NET_WM_STATE", False);
-        Atom fullscreen = XInternAtom(display, "_NET_WM_STATE_FULLSCREEN", False);
-        
-        Atom actualType;
-        int actualFormat;
-        unsigned long numItems, bytesAfter;
-        unsigned char* prop = NULL;
-
-        int status = XGetWindowProperty(display, window, wmState, 0, LONG_MAX, False, AnyPropertyType,
-                                        &actualType, &actualFormat, &numItems, &bytesAfter, &prop);
-        if (status != Success)
-        {
-            XFree(prop);
-            return false;
-        }
-
-        bool isFullscreen = false;
-        Atom* p = (Atom*)prop;
-        for (unsigned long i = 0; i < numItems; i++)
-        {
-            if (p[i] == fullscreen)
-            {
-                isFullscreen = true;
-                break;
-            }
-        }
-
-        XFree(prop);
-        return isFullscreen;
-#endif // defined(CEF_X11)
-    }
-
-    void PlatformSetMinimumWindowSize(CefRefPtr<CefBrowser> browser, int minWidth, int minHeight)
-    {
-#if defined(CEF_X11)
-        ::Display* display = cef_get_xdisplay();
-        DCHECK(display);
-
-        ::Window window = browser->GetHost()->GetWindowHandle();
-        if (window == kNullWindowHandle) return;
-
-        XSizeHints* sizeHints = XAllocSizeHints();
-        sizeHints->flags = PMinSize;
-        sizeHints->min_width = minWidth;
-        sizeHints->min_height = minHeight;
-
-        XSetWMNormalHints(display, window, sizeHints);
-        XFree(sizeHints);
-        XFlush(display);
-#endif // defined(CEF_X11)
-    }
-
-    void PlatformSetFrameless(CefRefPtr<CefBrowser> browser, bool frameless)
-    {
-#if defined(CEF_X11)
-        ::Display* display = cef_get_xdisplay();
-        DCHECK(display);
-
-        ::Window window = browser->GetHost()->GetWindowHandle();
-        if (window == kNullWindowHandle) return;
-
-        Atom wmHints = XInternAtom(display, "_MOTIF_WM_HINTS", True);
-        if (wmHints != None) {
-            struct MotifWmHints {
-                unsigned long flags;
-                unsigned long functions;
-                unsigned long decorations;
-                long input_mode;
-                unsigned long status;
-            };
-
-            MotifWmHints hints;
-            hints.flags = 2; // MWM_HINTS_DECORATIONS
-            hints.decorations = frameless ? 0 : 1; // No decorations if frameless, otherwise default decorations
-
-            XChangeProperty(display, window, wmHints, wmHints, 32, PropModeReplace, (unsigned char*)&hints, 5);
-        }
-
-        XFlush(display);
-#endif // defined(CEF_X11)
-    }
-
-    void PlatformSetResizable(CefRefPtr<CefBrowser> browser, bool resizable)
-    {
-#if defined(CEF_X11)
-        ::Display* display = cef_get_xdisplay();
-        DCHECK(display);
-
-        ::Window window = browser->GetHost()->GetWindowHandle();
-        if (window == kNullWindowHandle) return;
-
-        XSizeHints* sizeHints = XAllocSizeHints();
-        long supplied_return;
-
-        XGetWMNormalHints(display, window, sizeHints, &supplied_return);
-        if (resizable) {
-            sizeHints->flags &= ~PMaxSize;
-        } else {
-            sizeHints->flags |= PMaxSize;
-        }
-
-        XSetWMNormalHints(display, window, sizeHints);
-        XFree(sizeHints);
-        XFlush(display);
-#endif // defined(CEF_X11)
-    }
-
-    void PlatformSetFullscreen(CefRefPtr<CefBrowser> browser, bool fullscreen)
-    {
-#if defined(CEF_X11)
-        ::Display* display = cef_get_xdisplay();
-        DCHECK(display);
-
-        ::Window window = browser->GetHost()->GetWindowHandle();
-        if (window == kNullWindowHandle) return;
-
-        Atom wmState = XInternAtom(display, "_NET_WM_STATE", False);
-        Atom fullscreenAtom = XInternAtom(display, "_NET_WM_STATE_FULLSCREEN", False);
-
-        XEvent xev;
-        memset(&xev, 0, sizeof(xev));
-        xev.type = ClientMessage;
-        xev.xclient.window = window;
-        xev.xclient.message_type = wmState;
-        xev.xclient.format = 32;
-        xev.xclient.data.l[0] = fullscreen ? 1 : 0; // 1 for _NET_WM_STATE_ADD, 0 for _NET_WM_STATE_REMOVE
-        xev.xclient.data.l[1] = fullscreenAtom;
-        xev.xclient.data.l[2] = 0; // No second property to toggle
-        xev.xclient.data.l[3] = 0; // No source indication
-
-        XSendEvent(display, DefaultRootWindow(display), False,
-                SubstructureRedirectMask | SubstructureNotifyMask, &xev);
-
-        XFlush(display);
-#endif // defined(CEF_X11)
-    }
-
-    void PlatformMaximize(CefRefPtr<CefBrowser> browser)
-    {
-#if defined(CEF_X11)
-        ::Display* display = cef_get_xdisplay();
-        DCHECK(display);
-
-        ::Window window = browser->GetHost()->GetWindowHandle();
-        if (window == kNullWindowHandle) return;
-
-        const char* kAtoms[] = {"_NET_WM_STATE", "UTF8_STRING", "_NET_WM_STATE_MAXIMIZED_VERT", "_NET_WM_STATE_MAXIMIZED_HORZ"};
-        Atom atoms[4];
-        int result = XInternAtoms(display, const_cast<char**>(kAtoms), 4, false, atoms);
-        DCHECK(result);
-
-        XEvent xev;
-        memset(&xev, 0, sizeof(xev));
-        xev.type = ClientMessage;
-        xev.xclient.window = window;
-        xev.xclient.message_type = atoms[0]; // _NET_WM_STATE
-        xev.xclient.format = 32;
-        xev.xclient.data.l[0] = 1; // _NET_WM_STATE_ADD
-        xev.xclient.data.l[1] = atoms[2]; // _NET_WM_STATE_MAXIMIZED_VERT
-        xev.xclient.data.l[2] = atoms[3]; // _NET_WM_STATE_MAXIMIZED_HORZ
-        xev.xclient.data.l[3] = 0; // no source indication
-
-        XSendEvent(display, DefaultRootWindow(display), False,
-                SubstructureRedirectMask | SubstructureNotifyMask, &xev);
-
-        XFlush(display);
-#endif // defined(CEF_X11)
-    }
-
-    void PlatformMinimize(CefRefPtr<CefBrowser> browser)
-    {
-#if defined(CEF_X11)
-        ::Display* display = cef_get_xdisplay();
-        DCHECK(display);
-
-        ::Window window = browser->GetHost()->GetWindowHandle();
-        if (window == kNullWindowHandle) return;
-
-        XIconifyWindow(display, window, DefaultScreen(display));
-        XFlush(display);
-#endif // defined(CEF_X11)
-    }
-
-    void PlatformRestore(CefRefPtr<CefBrowser> browser)
-    {
-#if defined(CEF_X11)
-        ::Display* display = cef_get_xdisplay();
-        DCHECK(display);
-
-        ::Window window = browser->GetHost()->GetWindowHandle();
-        if (window == kNullWindowHandle) return;
-
-        XMapWindow(display, window);
-        XFlush(display);
-#endif // defined(CEF_X11)
-    }
-
-    void PlatformShow(CefRefPtr<CefBrowser> browser)
-    {
-#if defined(CEF_X11)
-        ::Display* display = cef_get_xdisplay();
-        DCHECK(display);
-
-        ::Window window = browser->GetHost()->GetWindowHandle();
-        if (window == kNullWindowHandle) return;
-
-        XMapRaised(display, window);
-        XFlush(display);
-#endif // defined(CEF_X11)
-    }
-
-    void PlatformHide(CefRefPtr<CefBrowser> browser)
-    {
-#if defined(CEF_X11)
-        ::Display* display = cef_get_xdisplay();
-        DCHECK(display);
-
-        ::Window window = browser->GetHost()->GetWindowHandle();
-        if (window == kNullWindowHandle) return;
-
-        XUnmapWindow(display, window);
-        XFlush(display);
-#endif // defined(CEF_X11)
-    }
-
-    void PlatformActivate(CefRefPtr<CefBrowser> browser)
-    {
-#if defined(CEF_X11)
-        ::Display* display = cef_get_xdisplay();
-        DCHECK(display);
-
-        ::Window window = browser->GetHost()->GetWindowHandle();
-        if (window == kNullWindowHandle) return;
-
-        Atom wmActivate = XInternAtom(display, "_NET_ACTIVE_WINDOW", False);
-
-        XEvent xev;
-        memset(&xev, 0, sizeof(xev));
-        xev.type = ClientMessage;
-        xev.xclient.window = window;
-        xev.xclient.message_type = wmActivate;
-        xev.xclient.format = 32;
-        xev.xclient.data.l[0] = 2; // 2 means the request comes from a window or application
-        xev.xclient.data.l[1] = CurrentTime; // We use CurrentTime for simplicity
-        xev.xclient.data.l[2] = 0;
-        xev.xclient.data.l[3] = 0;
-        xev.xclient.data.l[4] = 0;
-
-        XSendEvent(display, DefaultRootWindow(display), False,
-                SubstructureRedirectMask | SubstructureNotifyMask, &xev);
-
-        XFlush(display);
-#endif // defined(CEF_X11)
-    }
-
-    void PlatformBringToTop(CefRefPtr<CefBrowser> browser)
-    {
-#if defined(CEF_X11)
-        ::Display* display = cef_get_xdisplay();
-        DCHECK(display);
-
-        ::Window window = browser->GetHost()->GetWindowHandle();
-        if (window == kNullWindowHandle) return;
-
-        XRaiseWindow(display, window);
-        XFlush(display);
-#endif // defined(CEF_X11)
-    }
-
-    void PlatformSetAlwaysOnTop(CefRefPtr<CefBrowser> browser, bool alwaysOnTop)
-    {
-#if defined(CEF_X11)
-        ::Display* display = cef_get_xdisplay();
-        DCHECK(display);
-
-        ::Window window = browser->GetHost()->GetWindowHandle();
-        if (window == kNullWindowHandle) return;
-
-        Atom wmState = XInternAtom(display, "_NET_WM_STATE", False);
-        Atom wmStateAbove = XInternAtom(display, "_NET_WM_STATE_ABOVE", False);
-
-        XEvent xev;
-        memset(&xev, 0, sizeof(xev));
-        xev.type = ClientMessage;
-        xev.xclient.window = window;
-        xev.xclient.message_type = wmState;
-        xev.xclient.format = 32;
-        xev.xclient.data.l[0] = alwaysOnTop ? 1 : 0; // 1 to add, 0 to remove the state
-        xev.xclient.data.l[1] = wmStateAbove;
-        xev.xclient.data.l[2] = 0; // No second property to toggle
-        xev.xclient.data.l[3] = 0; // No source indication
-        xev.xclient.data.l[4] = 0; // Unused
-
-        XSendEvent(display, DefaultRootWindow(display), False,
-                SubstructureRedirectMask | SubstructureNotifyMask, &xev);
-
-        XFlush(display);
-#endif // defined(CEF_X11)
-    }
-
-    CefSize PlatformGetWindowSize(CefRefPtr<CefBrowser> browser)
-    {
-#if defined(CEF_X11)
-        ::Display* display = cef_get_xdisplay();
-        DCHECK(display);
-
-        ::Window window = browser->GetHost()->GetWindowHandle();
-        if (window == kNullWindowHandle) { 
-            CefRefPtr<CefClient> client = browser->GetHost()->GetClient();
-            Client* pClient = (Client*)client.get();
-            return CefSize { pClient->settings.preferredWidth, pClient->settings.preferredHeight };
-        }
-
-        XWindowAttributes attrs;
-        XGetWindowAttributes(display, window, &attrs);
-
-        return CefSize(attrs.width, attrs.height);
-#endif // defined(CEF_X11)
-    }
-
-    void PlatformCenterWindow(CefRefPtr<CefBrowser> browser, const CefSize& size)
-    {
-#if defined(CEF_X11)
-        ::Display* display = cef_get_xdisplay();
-        DCHECK(display);
-
-        ::Window window = browser->GetHost()->GetWindowHandle();
-        if (window == kNullWindowHandle) return;
-
-        Screen* screen = DefaultScreenOfDisplay(display);
-        int screenWidth = screen->width;
-        int screenHeight = screen->height;
-
-        int x = (screenWidth - size.width) / 2;
-        int y = (screenHeight - size.height) / 2;
-
-        XMoveResizeWindow(display, window, x, y, size.width, size.height);
-        XFlush(display);
-#endif // defined(CEF_X11)
-    }
-
-    void PlatformSetWindowSize(CefRefPtr<CefBrowser> browser, const CefSize& size)
-    {
-#if defined(CEF_X11)
-        ::Display* display = cef_get_xdisplay();
-        DCHECK(display);
-
-        ::Window window = browser->GetHost()->GetWindowHandle();
-        if (window == kNullWindowHandle) return;
-
-        XResizeWindow(display, window, size.width, size.height);
-        XFlush(display);
-#endif // defined(CEF_X11)
-    }
-
-    CefPoint PlatformGetWindowPosition(CefRefPtr<CefBrowser> browser)
-    {
-#if defined(CEF_X11)
-        ::Display* display = cef_get_xdisplay();
-        DCHECK(display);
-
-        ::Window window = browser->GetHost()->GetWindowHandle();
-        if (window == kNullWindowHandle) return CefPoint { 0, 0 };
-
-        ::Window root;
-        int x, y;
-        unsigned int width, height, border_width, depth;
-        
-        if (XGetGeometry(display, window, &root, &x, &y, &width, &height, &border_width, &depth))
-        {
-            int root_x, root_y;
-            ::Window child;
-            XTranslateCoordinates(display, window, root, 0, 0, &root_x, &root_y, &child);
-            return CefPoint(root_x, root_y);
-        }
-
-        return CefPoint(0, 0);
-#endif // defined(CEF_X11)
-    }
-
-    void PlatformSetWindowPosition(CefRefPtr<CefBrowser> browser, const CefPoint& position)
-    {
-#if defined(CEF_X11)
-        ::Display* display = cef_get_xdisplay();
-        DCHECK(display);
-
-        ::Window window = browser->GetHost()->GetWindowHandle();
-        if (window == kNullWindowHandle) return;
-
-        XMoveWindow(display, window, position.x, position.y);
-        XFlush(display);
-#endif // defined(CEF_X11)
-    }
-
-    void PlatformWindowRequestFocus(CefRefPtr<CefBrowser> browser)
-    {
-#if defined(CEF_X11)
-        ::Display* display = cef_get_xdisplay();
-        DCHECK(display);
-
-        ::Window window = browser->GetHost()->GetWindowHandle();
-        if (window == kNullWindowHandle) return;
-
-        XSetInputFocus(display, window, RevertToParent, CurrentTime);
-        XFlush(display);
-#endif // defined(CEF_X11)
-    }
-
 }
+
+void PlatformIconChange(CefRefPtr<CefBrowser> browser, const std::string& iconPath)
+{
+    int width, height, channels;
+    unsigned char* image = stbi_load(iconPath.c_str(), &width, &height, &channels, 4);
+    if (!image)
+    {
+        LOG(ERROR) << "Failed to load image from path: " << iconPath;
+        return;
+    }
+
+#if defined(CEF_X11)
+    Display* display = XOpenDisplay(NULL);
+    if (!display)
+    {
+        LOG(ERROR) << "Failed to open X display.";
+        stbi_image_free(image);
+        return;
+    }
+
+    Window window = (Window)browser->GetHost()->GetWindowHandle();
+    if (!window)
+    {
+        LOG(ERROR) << "Invalid window handle.";
+        stbi_image_free(image);
+        XCloseDisplay(display);
+        return;
+    }
+
+    Atom _NET_WM_ICON = XInternAtom(display, "_NET_WM_ICON", False);
+    if (_NET_WM_ICON == None)
+    {
+        LOG(ERROR) << "Failed to get _NET_WM_ICON atom.";
+        stbi_image_free(image);
+        XCloseDisplay(display);
+        return;
+    }
+
+    Atom cardinal = XInternAtom(display, "CARDINAL", False);
+    if (cardinal == None)
+    {
+        LOG(ERROR) << "Failed to get CARDINAL atom.";
+        stbi_image_free(image);
+        XCloseDisplay(display);
+        return;
+    }
+
+    size_t sz = width * height;
+    size_t asz = sz + 2;
+    unsigned long* iconData = (unsigned long*)malloc(asz * sizeof(unsigned long));
+    if (!iconData)
+    {
+        LOG(ERROR) << "Failed to allocate memory for icon data.";
+        stbi_image_free(image);
+        XCloseDisplay(display);
+        return;
+    }
+
+    iconData[0] = width;
+    iconData[1] = height;
+    for (int y = 0; y < height; ++y)
+    {
+        for (int x = 0; x < width; ++x)
+        {
+            size_t srcIndex = (y * width + x) * 4;
+            size_t dstIndex = (x + y * width) + 2;
+            uint32_t pixel = *((uint32_t*)(image + srcIndex));
+            uint32_t bgra = ((pixel & 0x000000FF) << 16) | (pixel & 0x0000FF00) | ((pixel & 0x00FF0000) >> 16) | (pixel & 0xFF000000);
+            iconData[dstIndex] = bgra;
+        }
+    }
+
+    XChangeProperty(display, window, _NET_WM_ICON, cardinal, 32, PropModeReplace, (const unsigned char*)iconData, asz);
+    XFlush(display);
+    XCloseDisplay(display);
+    free(iconData);
+#endif // defined(CEF_X11)
+
+    stbi_image_free(image);
+}
+
+bool PlatformGetFullscreen(CefRefPtr<CefBrowser> browser)
+{
+#if defined(CEF_X11)
+    ::Display* display = cef_get_xdisplay();
+    DCHECK(display);
+
+    ::Window window = browser->GetHost()->GetWindowHandle();
+    if (window == kNullWindowHandle)
+        return false;
+
+    Atom wmState = XInternAtom(display, "_NET_WM_STATE", False);
+    Atom fullscreen = XInternAtom(display, "_NET_WM_STATE_FULLSCREEN", False);
+
+    Atom actualType;
+    int actualFormat;
+    unsigned long numItems, bytesAfter;
+    unsigned char* prop = NULL;
+
+    int status = XGetWindowProperty(display, window, wmState, 0, LONG_MAX, False, AnyPropertyType, &actualType, &actualFormat, &numItems, &bytesAfter, &prop);
+    if (status != Success)
+    {
+        XFree(prop);
+        return false;
+    }
+
+    bool isFullscreen = false;
+    Atom* p = (Atom*)prop;
+    for (unsigned long i = 0; i < numItems; i++)
+    {
+        if (p[i] == fullscreen)
+        {
+            isFullscreen = true;
+            break;
+        }
+    }
+
+    XFree(prop);
+    return isFullscreen;
+#endif // defined(CEF_X11)
+}
+
+void PlatformSetMinimumWindowSize(CefRefPtr<CefBrowser> browser, int minWidth, int minHeight)
+{
+#if defined(CEF_X11)
+    ::Display* display = cef_get_xdisplay();
+    DCHECK(display);
+
+    ::Window window = browser->GetHost()->GetWindowHandle();
+    if (window == kNullWindowHandle)
+        return;
+
+    XSizeHints* sizeHints = XAllocSizeHints();
+    sizeHints->flags = PMinSize;
+    sizeHints->min_width = minWidth;
+    sizeHints->min_height = minHeight;
+
+    XSetWMNormalHints(display, window, sizeHints);
+    XFree(sizeHints);
+    XFlush(display);
+#endif // defined(CEF_X11)
+}
+
+void PlatformSetFrameless(CefRefPtr<CefBrowser> browser, bool frameless)
+{
+#if defined(CEF_X11)
+    ::Display* display = cef_get_xdisplay();
+    DCHECK(display);
+
+    ::Window window = browser->GetHost()->GetWindowHandle();
+    if (window == kNullWindowHandle)
+        return;
+
+    Atom wmHints = XInternAtom(display, "_MOTIF_WM_HINTS", True);
+    if (wmHints != None)
+    {
+        struct MotifWmHints
+        {
+            unsigned long flags;
+            unsigned long functions;
+            unsigned long decorations;
+            long input_mode;
+            unsigned long status;
+        };
+
+        MotifWmHints hints;
+        hints.flags = 2;                       // MWM_HINTS_DECORATIONS
+        hints.decorations = frameless ? 0 : 1; // No decorations if frameless, otherwise default decorations
+
+        XChangeProperty(display, window, wmHints, wmHints, 32, PropModeReplace, (unsigned char*)&hints, 5);
+    }
+
+    XFlush(display);
+#endif // defined(CEF_X11)
+}
+
+void PlatformSetResizable(CefRefPtr<CefBrowser> browser, bool resizable)
+{
+#if defined(CEF_X11)
+    ::Display* display = cef_get_xdisplay();
+    DCHECK(display);
+
+    ::Window window = browser->GetHost()->GetWindowHandle();
+    if (window == kNullWindowHandle)
+        return;
+
+    XSizeHints* sizeHints = XAllocSizeHints();
+    long supplied_return;
+
+    XGetWMNormalHints(display, window, sizeHints, &supplied_return);
+    if (resizable)
+    {
+        sizeHints->flags &= ~PMaxSize;
+    }
+    else
+    {
+        sizeHints->flags |= PMaxSize;
+    }
+
+    XSetWMNormalHints(display, window, sizeHints);
+    XFree(sizeHints);
+    XFlush(display);
+#endif // defined(CEF_X11)
+}
+
+void PlatformSetFullscreen(CefRefPtr<CefBrowser> browser, bool fullscreen)
+{
+#if defined(CEF_X11)
+    ::Display* display = cef_get_xdisplay();
+    DCHECK(display);
+
+    ::Window window = browser->GetHost()->GetWindowHandle();
+    if (window == kNullWindowHandle)
+        return;
+
+    Atom wmState = XInternAtom(display, "_NET_WM_STATE", False);
+    Atom fullscreenAtom = XInternAtom(display, "_NET_WM_STATE_FULLSCREEN", False);
+
+    XEvent xev;
+    memset(&xev, 0, sizeof(xev));
+    xev.type = ClientMessage;
+    xev.xclient.window = window;
+    xev.xclient.message_type = wmState;
+    xev.xclient.format = 32;
+    xev.xclient.data.l[0] = fullscreen ? 1 : 0; // 1 for _NET_WM_STATE_ADD, 0 for _NET_WM_STATE_REMOVE
+    xev.xclient.data.l[1] = fullscreenAtom;
+    xev.xclient.data.l[2] = 0; // No second property to toggle
+    xev.xclient.data.l[3] = 0; // No source indication
+
+    XSendEvent(display, DefaultRootWindow(display), False, SubstructureRedirectMask | SubstructureNotifyMask, &xev);
+
+    XFlush(display);
+#endif // defined(CEF_X11)
+}
+
+void PlatformMaximize(CefRefPtr<CefBrowser> browser)
+{
+#if defined(CEF_X11)
+    ::Display* display = cef_get_xdisplay();
+    DCHECK(display);
+
+    ::Window window = browser->GetHost()->GetWindowHandle();
+    if (window == kNullWindowHandle)
+        return;
+
+    const char* kAtoms[] = {"_NET_WM_STATE", "UTF8_STRING", "_NET_WM_STATE_MAXIMIZED_VERT", "_NET_WM_STATE_MAXIMIZED_HORZ"};
+    Atom atoms[4];
+    int result = XInternAtoms(display, const_cast<char**>(kAtoms), 4, false, atoms);
+    DCHECK(result);
+
+    XEvent xev;
+    memset(&xev, 0, sizeof(xev));
+    xev.type = ClientMessage;
+    xev.xclient.window = window;
+    xev.xclient.message_type = atoms[0]; // _NET_WM_STATE
+    xev.xclient.format = 32;
+    xev.xclient.data.l[0] = 1;        // _NET_WM_STATE_ADD
+    xev.xclient.data.l[1] = atoms[2]; // _NET_WM_STATE_MAXIMIZED_VERT
+    xev.xclient.data.l[2] = atoms[3]; // _NET_WM_STATE_MAXIMIZED_HORZ
+    xev.xclient.data.l[3] = 0;        // no source indication
+
+    XSendEvent(display, DefaultRootWindow(display), False, SubstructureRedirectMask | SubstructureNotifyMask, &xev);
+
+    XFlush(display);
+#endif // defined(CEF_X11)
+}
+
+void PlatformMinimize(CefRefPtr<CefBrowser> browser)
+{
+#if defined(CEF_X11)
+    ::Display* display = cef_get_xdisplay();
+    DCHECK(display);
+
+    ::Window window = browser->GetHost()->GetWindowHandle();
+    if (window == kNullWindowHandle)
+        return;
+
+    XIconifyWindow(display, window, DefaultScreen(display));
+    XFlush(display);
+#endif // defined(CEF_X11)
+}
+
+void PlatformRestore(CefRefPtr<CefBrowser> browser)
+{
+#if defined(CEF_X11)
+    ::Display* display = cef_get_xdisplay();
+    DCHECK(display);
+
+    ::Window window = browser->GetHost()->GetWindowHandle();
+    if (window == kNullWindowHandle)
+        return;
+
+    XMapWindow(display, window);
+    XFlush(display);
+#endif // defined(CEF_X11)
+}
+
+void PlatformShow(CefRefPtr<CefBrowser> browser)
+{
+#if defined(CEF_X11)
+    ::Display* display = cef_get_xdisplay();
+    DCHECK(display);
+
+    ::Window window = browser->GetHost()->GetWindowHandle();
+    if (window == kNullWindowHandle)
+        return;
+
+    XMapRaised(display, window);
+    XFlush(display);
+#endif // defined(CEF_X11)
+}
+
+void PlatformHide(CefRefPtr<CefBrowser> browser)
+{
+#if defined(CEF_X11)
+    ::Display* display = cef_get_xdisplay();
+    DCHECK(display);
+
+    ::Window window = browser->GetHost()->GetWindowHandle();
+    if (window == kNullWindowHandle)
+        return;
+
+    XUnmapWindow(display, window);
+    XFlush(display);
+#endif // defined(CEF_X11)
+}
+
+void PlatformActivate(CefRefPtr<CefBrowser> browser)
+{
+#if defined(CEF_X11)
+    ::Display* display = cef_get_xdisplay();
+    DCHECK(display);
+
+    ::Window window = browser->GetHost()->GetWindowHandle();
+    if (window == kNullWindowHandle)
+        return;
+
+    Atom wmActivate = XInternAtom(display, "_NET_ACTIVE_WINDOW", False);
+
+    XEvent xev;
+    memset(&xev, 0, sizeof(xev));
+    xev.type = ClientMessage;
+    xev.xclient.window = window;
+    xev.xclient.message_type = wmActivate;
+    xev.xclient.format = 32;
+    xev.xclient.data.l[0] = 2;           // 2 means the request comes from a window or application
+    xev.xclient.data.l[1] = CurrentTime; // We use CurrentTime for simplicity
+    xev.xclient.data.l[2] = 0;
+    xev.xclient.data.l[3] = 0;
+    xev.xclient.data.l[4] = 0;
+
+    XSendEvent(display, DefaultRootWindow(display), False, SubstructureRedirectMask | SubstructureNotifyMask, &xev);
+
+    XFlush(display);
+#endif // defined(CEF_X11)
+}
+
+void PlatformBringToTop(CefRefPtr<CefBrowser> browser)
+{
+#if defined(CEF_X11)
+    ::Display* display = cef_get_xdisplay();
+    DCHECK(display);
+
+    ::Window window = browser->GetHost()->GetWindowHandle();
+    if (window == kNullWindowHandle)
+        return;
+
+    XRaiseWindow(display, window);
+    XFlush(display);
+#endif // defined(CEF_X11)
+}
+
+void PlatformSetAlwaysOnTop(CefRefPtr<CefBrowser> browser, bool alwaysOnTop)
+{
+#if defined(CEF_X11)
+    ::Display* display = cef_get_xdisplay();
+    DCHECK(display);
+
+    ::Window window = browser->GetHost()->GetWindowHandle();
+    if (window == kNullWindowHandle)
+        return;
+
+    Atom wmState = XInternAtom(display, "_NET_WM_STATE", False);
+    Atom wmStateAbove = XInternAtom(display, "_NET_WM_STATE_ABOVE", False);
+
+    XEvent xev;
+    memset(&xev, 0, sizeof(xev));
+    xev.type = ClientMessage;
+    xev.xclient.window = window;
+    xev.xclient.message_type = wmState;
+    xev.xclient.format = 32;
+    xev.xclient.data.l[0] = alwaysOnTop ? 1 : 0; // 1 to add, 0 to remove the state
+    xev.xclient.data.l[1] = wmStateAbove;
+    xev.xclient.data.l[2] = 0; // No second property to toggle
+    xev.xclient.data.l[3] = 0; // No source indication
+    xev.xclient.data.l[4] = 0; // Unused
+
+    XSendEvent(display, DefaultRootWindow(display), False, SubstructureRedirectMask | SubstructureNotifyMask, &xev);
+
+    XFlush(display);
+#endif // defined(CEF_X11)
+}
+
+CefSize PlatformGetWindowSize(CefRefPtr<CefBrowser> browser)
+{
+#if defined(CEF_X11)
+    ::Display* display = cef_get_xdisplay();
+    DCHECK(display);
+
+    ::Window window = browser->GetHost()->GetWindowHandle();
+    if (window == kNullWindowHandle)
+    {
+        CefRefPtr<CefClient> client = browser->GetHost()->GetClient();
+        Client* pClient = (Client*)client.get();
+        return CefSize{pClient->settings.preferredWidth, pClient->settings.preferredHeight};
+    }
+
+    XWindowAttributes attrs;
+    XGetWindowAttributes(display, window, &attrs);
+
+    return CefSize(attrs.width, attrs.height);
+#endif // defined(CEF_X11)
+}
+
+void PlatformCenterWindow(CefRefPtr<CefBrowser> browser, const CefSize& size)
+{
+#if defined(CEF_X11)
+    ::Display* display = cef_get_xdisplay();
+    DCHECK(display);
+
+    ::Window window = browser->GetHost()->GetWindowHandle();
+    if (window == kNullWindowHandle)
+        return;
+
+    Screen* screen = DefaultScreenOfDisplay(display);
+    int screenWidth = screen->width;
+    int screenHeight = screen->height;
+
+    int x = (screenWidth - size.width) / 2;
+    int y = (screenHeight - size.height) / 2;
+
+    XMoveResizeWindow(display, window, x, y, size.width, size.height);
+    XFlush(display);
+#endif // defined(CEF_X11)
+}
+
+void PlatformSetWindowSize(CefRefPtr<CefBrowser> browser, const CefSize& size)
+{
+#if defined(CEF_X11)
+    ::Display* display = cef_get_xdisplay();
+    DCHECK(display);
+
+    ::Window window = browser->GetHost()->GetWindowHandle();
+    if (window == kNullWindowHandle)
+        return;
+
+    XResizeWindow(display, window, size.width, size.height);
+    XFlush(display);
+#endif // defined(CEF_X11)
+}
+
+CefPoint PlatformGetWindowPosition(CefRefPtr<CefBrowser> browser)
+{
+#if defined(CEF_X11)
+    ::Display* display = cef_get_xdisplay();
+    DCHECK(display);
+
+    ::Window window = browser->GetHost()->GetWindowHandle();
+    if (window == kNullWindowHandle)
+        return CefPoint{0, 0};
+
+    ::Window root;
+    int x, y;
+    unsigned int width, height, border_width, depth;
+
+    if (XGetGeometry(display, window, &root, &x, &y, &width, &height, &border_width, &depth))
+    {
+        int root_x, root_y;
+        ::Window child;
+        XTranslateCoordinates(display, window, root, 0, 0, &root_x, &root_y, &child);
+        return CefPoint(root_x, root_y);
+    }
+
+    return CefPoint(0, 0);
+#endif // defined(CEF_X11)
+}
+
+void PlatformSetWindowPosition(CefRefPtr<CefBrowser> browser, const CefPoint& position)
+{
+#if defined(CEF_X11)
+    ::Display* display = cef_get_xdisplay();
+    DCHECK(display);
+
+    ::Window window = browser->GetHost()->GetWindowHandle();
+    if (window == kNullWindowHandle)
+        return;
+
+    XMoveWindow(display, window, position.x, position.y);
+    XFlush(display);
+#endif // defined(CEF_X11)
+}
+
+void PlatformWindowRequestFocus(CefRefPtr<CefBrowser> browser)
+{
+#if defined(CEF_X11)
+    ::Display* display = cef_get_xdisplay();
+    DCHECK(display);
+
+    ::Window window = browser->GetHost()->GetWindowHandle();
+    if (window == kNullWindowHandle)
+        return;
+
+    XSetInputFocus(display, window, RevertToParent, CurrentTime);
+    XFlush(display);
+#endif // defined(CEF_X11)
+}
+
+} // namespace shared

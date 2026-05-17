@@ -1,37 +1,39 @@
 #pragma once
 
 #include <cstdint>
-#include <string>
 #include <mutex>
+#include <string>
 
 #if defined(_WIN32)
-    #include <windows.h>
-    #define DYNLIB HMODULE
-    #define LOADLIB(path) ::LoadLibraryW(path)
-    #define GETSYM ::GetProcAddress
-    #define CLOSELIB ::FreeLibrary
-    #define STEAM_CALL __cdecl
+#include <windows.h>
+#define DYNLIB HMODULE
+#define LOADLIB(path) ::LoadLibraryW(path)
+#define GETSYM ::GetProcAddress
+#define CLOSELIB ::FreeLibrary
+#define STEAM_CALL __cdecl
 #elif defined(__APPLE__) || defined(__linux__)
-    #include <dlfcn.h>
-    #define DYNLIB void*
-    #define LOADLIB(path) dlopen(path, RTLD_LAZY | RTLD_LOCAL)
-    #define GETSYM dlsym
-    #define CLOSELIB dlclose
-    #define STEAM_CALL
+#include <dlfcn.h>
+#define DYNLIB void*
+#define LOADLIB(path) dlopen(path, RTLD_LAZY | RTLD_LOCAL)
+#define GETSYM dlsym
+#define CLOSELIB dlclose
+#define STEAM_CALL
 #else
-    #error Unsupported platform
+#error Unsupported platform
 #endif
 
 static constexpr char kOskMsg[] = "steam_osk";
 
-enum EFloatingGamepadTextInputMode {
+enum EFloatingGamepadTextInputMode
+{
     k_EFloatingGamepadTextInputModeModeSingleLine = 0,
     k_EFloatingGamepadTextInputModeModeMultipleLines = 1,
     k_EFloatingGamepadTextInputModeModeEmail = 2,
     k_EFloatingGamepadTextInputModeModeNumeric = 3
 };
 
-enum SteamAPIInitResult {
+enum SteamAPIInitResult
+{
     SteamAPIInitResult_OK = 0,
     SteamAPIInitResult_FailedGeneric = 1,
     SteamAPIInitResult_NoSteamClient = 2,
@@ -40,22 +42,27 @@ enum SteamAPIInitResult {
 
 struct ISteamUtils;
 
-class Steam {
+class Steam
+{
 public:
-    static Steam& Instance() { 
-        static Steam s; 
-        return s; 
+    static Steam& Instance()
+    {
+        static Steam s;
+        return s;
     }
 
-    bool ShouldShowOsk() {
+    bool ShouldShowOsk()
+    {
         std::lock_guard<std::mutex> lk(_mutex);
-        if (!ensureLoadedAndInit()) {
+        if (!ensureLoadedAndInit())
+        {
             LOG(INFO) << "Steam ShouldShowOsk is false because ensureLoadedAndInit is false.";
             return false;
         }
 
         ISteamUtils* utils = getUtils();
-        if (!utils) {
+        if (!utils)
+        {
             LOG(INFO) << "Steam ShouldShowOsk is false because getUtils is null.";
             return false;
         }
@@ -68,19 +75,25 @@ public:
         return overlayOK && (inBP || onDeck);
     }
 
-    bool ShowOsk(int x, int y, int w, int h, EFloatingGamepadTextInputMode mode) {
+    bool ShowOsk(int x, int y, int w, int h, EFloatingGamepadTextInputMode mode)
+    {
         std::lock_guard<std::mutex> lk(_mutex);
-        if (!ensureLoadedAndInit()) return false;
+        if (!ensureLoadedAndInit())
+            return false;
         ISteamUtils* utils = getUtils();
-        if (!utils || !p_SteamAPI_ISteamUtils_ShowFloatingGamepadTextInput) return false;
+        if (!utils || !p_SteamAPI_ISteamUtils_ShowFloatingGamepadTextInput)
+            return false;
         _shown = p_SteamAPI_ISteamUtils_ShowFloatingGamepadTextInput(utils, (int)mode, x, y, w, h);
         return _shown;
     }
 
-    void DismissOsk() {
+    void DismissOsk()
+    {
         std::lock_guard<std::mutex> lk(_mutex);
-        if (!_shown) return;
-        if (auto* utils = getUtils()) {
+        if (!_shown)
+            return;
+        if (auto* utils = getUtils())
+        {
             if (p_SteamAPI_ISteamUtils_DismissFloatingGamepadTextInput)
                 p_SteamAPI_ISteamUtils_DismissFloatingGamepadTextInput(utils);
         }
@@ -89,26 +102,29 @@ public:
 
 private:
     Steam() = default;
-    ~Steam() {
-        if (p_SteamAPI_Shutdown && _didInit) p_SteamAPI_Shutdown();
+    ~Steam()
+    {
+        if (p_SteamAPI_Shutdown && _didInit)
+            p_SteamAPI_Shutdown();
         unload();
     }
     Steam(const Steam&) = delete;
     Steam& operator=(const Steam&) = delete;
 
-    using fnSteamAPI_Init = bool (STEAM_CALL*)();
-    using fnSteamAPI_InitSafe = bool (STEAM_CALL*)();
-    using fnSteamAPI_InitFlat = SteamAPIInitResult (STEAM_CALL*)(char* /*outErr*/);
-    using fnSteamAPI_Shutdown = void (STEAM_CALL*)();
-    using fnSteamAPI_IsSteamRunning = bool (STEAM_CALL*)();
-    using fnSteamAPI_SteamUtils_ver = ISteamUtils* (STEAM_CALL*)();
-    using fnSteamAPI_ISteamUtils_IsOverlayEnabled = bool (STEAM_CALL*)(ISteamUtils*);
-    using fnSteamAPI_ISteamUtils_IsSteamInBigPictureMode = bool (STEAM_CALL*)(ISteamUtils*);
-    using fnSteamAPI_ISteamUtils_IsSteamRunningOnSteamDeck = bool (STEAM_CALL*)(ISteamUtils*);
-    using fnSteamAPI_ISteamUtils_ShowFloatingGamepadTextInput = bool (STEAM_CALL*)(ISteamUtils*, int /*mode*/, int,int,int,int);
-    using fnSteamAPI_ISteamUtils_DismissFloatingGamepadTextInput = bool (STEAM_CALL*)(ISteamUtils*);
+    using fnSteamAPI_Init = bool(STEAM_CALL*)();
+    using fnSteamAPI_InitSafe = bool(STEAM_CALL*)();
+    using fnSteamAPI_InitFlat = SteamAPIInitResult(STEAM_CALL*)(char* /*outErr*/);
+    using fnSteamAPI_Shutdown = void(STEAM_CALL*)();
+    using fnSteamAPI_IsSteamRunning = bool(STEAM_CALL*)();
+    using fnSteamAPI_SteamUtils_ver = ISteamUtils*(STEAM_CALL*)();
+    using fnSteamAPI_ISteamUtils_IsOverlayEnabled = bool(STEAM_CALL*)(ISteamUtils*);
+    using fnSteamAPI_ISteamUtils_IsSteamInBigPictureMode = bool(STEAM_CALL*)(ISteamUtils*);
+    using fnSteamAPI_ISteamUtils_IsSteamRunningOnSteamDeck = bool(STEAM_CALL*)(ISteamUtils*);
+    using fnSteamAPI_ISteamUtils_ShowFloatingGamepadTextInput = bool(STEAM_CALL*)(ISteamUtils*, int /*mode*/, int, int, int, int);
+    using fnSteamAPI_ISteamUtils_DismissFloatingGamepadTextInput = bool(STEAM_CALL*)(ISteamUtils*);
 
-    template<class T> void resolve(T& fp, const char* name) {
+    template <class T> void resolve(T& fp, const char* name)
+    {
 #if defined(_WIN32)
         fp = reinterpret_cast<T>(GETSYM(_dll, name));
 #else
@@ -118,12 +134,16 @@ private:
 
 #define RESOLVE(var, name) resolve(var, name)
 
-    bool ensureLoadedAndInit() {
-        if (_didInit) return true;
+    bool ensureLoadedAndInit()
+    {
+        if (_didInit)
+            return true;
 
         LOG(INFO) << "Steam tryInit.";
-        if (!_dll) {
-            if (!loadAnySteamApi()) {
+        if (!_dll)
+        {
+            if (!loadAnySteamApi())
+            {
                 LOG(INFO) << "Steam failed to init because loadAnySteamApi returned false.";
                 return false;
             }
@@ -135,7 +155,8 @@ private:
         RESOLVE(p_SteamAPI_Shutdown, "SteamAPI_Shutdown");
         RESOLVE(p_SteamAPI_IsSteamRunning, "SteamAPI_IsSteamRunning");
 
-        if (!resolveUtilsGetter()) {
+        if (!resolveUtilsGetter())
+        {
             LOG(INFO) << "Steam failed to init because resolveUtilsGetter returned false.";
             return false;
         }
@@ -145,34 +166,46 @@ private:
         RESOLVE(p_SteamAPI_ISteamUtils_IsSteamRunningOnSteamDeck, "SteamAPI_ISteamUtils_IsSteamRunningOnSteamDeck");
         RESOLVE(p_SteamAPI_ISteamUtils_ShowFloatingGamepadTextInput, "SteamAPI_ISteamUtils_ShowFloatingGamepadTextInput");
         RESOLVE(p_SteamAPI_ISteamUtils_DismissFloatingGamepadTextInput, "SteamAPI_ISteamUtils_DismissFloatingGamepadTextInput");
-        if (!p_SteamAPI_ISteamUtils_DismissFloatingGamepadTextInput) {
+        if (!p_SteamAPI_ISteamUtils_DismissFloatingGamepadTextInput)
+        {
             RESOLVE(p_SteamAPI_ISteamUtils_DismissFloatingGamepadTextInput, "SteamAPI_ISteamUtils_DismissGamepadTextInput");
         }
 
-        if (!p_SteamAPI_IsSteamRunning) {
+        if (!p_SteamAPI_IsSteamRunning)
+        {
             LOG(INFO) << "Steam warning: p_SteamAPI_IsSteamRunning is null.";
-        } else if (!p_SteamAPI_IsSteamRunning()) {
+        }
+        else if (!p_SteamAPI_IsSteamRunning())
+        {
             LOG(INFO) << "Steam failed to init because Steam is not running.";
             return false;
         }
 
-        if (p_SteamAPI_InitFlat) {
+        if (p_SteamAPI_InitFlat)
+        {
             char err[1024] = {};
             SteamAPIInitResult r = p_SteamAPI_InitFlat(err);
             _didInit = (r == SteamAPIInitResult_OK);
-            LOG(INFO) << "Steam initialized using SteamAPI_InitFlat: " << _didInit << ( _didInit ? "" : std::string(" (reason: ") + err + ")" );
-        } else if (p_SteamAPI_InitSafe) {
+            LOG(INFO) << "Steam initialized using SteamAPI_InitFlat: " << _didInit << (_didInit ? "" : std::string(" (reason: ") + err + ")");
+        }
+        else if (p_SteamAPI_InitSafe)
+        {
             _didInit = p_SteamAPI_InitSafe();
             LOG(INFO) << "Steam initialized using SteamAPI_InitSafe: " << _didInit;
-        } else if (p_SteamAPI_Init) {
+        }
+        else if (p_SteamAPI_Init)
+        {
             _didInit = p_SteamAPI_Init();
             LOG(INFO) << "Steam initialized using SteamAPI_Init: " << _didInit;
-        } else {
+        }
+        else
+        {
             LOG(INFO) << "Steam failed to init because no suitable Init symbol was found.";
             return false;
         }
 
-        if (!_didInit) {
+        if (!_didInit)
+        {
             LOG(INFO) << "Steam failed to init because Init returned false.";
             return false;
         }
@@ -181,42 +214,70 @@ private:
         return _didInit;
     }
 
-    bool loadAnySteamApi() {
+    bool loadAnySteamApi()
+    {
 #if defined(_WIN64)
-        const wchar_t* candsW[] = { L"steam_api64.dll", L"steam_api.dll" };
-        for (auto* n : candsW) { _dll = LOADLIB(n); if (_dll) return true; }
+        const wchar_t* candsW[] = {L"steam_api64.dll", L"steam_api.dll"};
+        for (auto* n : candsW)
+        {
+            _dll = LOADLIB(n);
+            if (_dll)
+                return true;
+        }
 #elif defined(_WIN32)
-        const wchar_t* candsW[] = { L"steam_api.dll" };
-        for (auto* n : candsW) { _dll = LOADLIB(n); if (_dll) return true; }
+        const wchar_t* candsW[] = {L"steam_api.dll"};
+        for (auto* n : candsW)
+        {
+            _dll = LOADLIB(n);
+            if (_dll)
+                return true;
+        }
 #elif defined(__APPLE__)
-        const char* cands[] = { "libsteam_api.dylib" };
-        for (auto* n : cands) { _dll = LOADLIB(n); if (_dll) return true; }
+        const char* cands[] = {"libsteam_api.dylib"};
+        for (auto* n : cands)
+        {
+            _dll = LOADLIB(n);
+            if (_dll)
+                return true;
+        }
 #elif defined(__linux__)
-        const char* cands[] = { "libsteam_api.so" };
-        for (auto* n : cands) { _dll = LOADLIB(n); if (_dll) return true; }
+        const char* cands[] = {"libsteam_api.so"};
+        for (auto* n : cands)
+        {
+            _dll = LOADLIB(n);
+            if (_dll)
+                return true;
+        }
 #endif
         return false;
     }
 
-    void unload() {
-        if (_dll) { CLOSELIB(_dll); _dll = nullptr; }
+    void unload()
+    {
+        if (_dll)
+        {
+            CLOSELIB(_dll);
+            _dll = nullptr;
+        }
     }
 
-    bool resolveUtilsGetter() {
-        const char* getters[] = {
-            "SteamAPI_SteamUtils_v014", "SteamAPI_SteamUtils_v013", "SteamAPI_SteamUtils_v012",
-            "SteamAPI_SteamUtils_v011", "SteamAPI_SteamUtils_v010", "SteamAPI_SteamUtils_v009"
-        };
-        for (auto* g : getters) {
+    bool resolveUtilsGetter()
+    {
+        const char* getters[] = {"SteamAPI_SteamUtils_v014", "SteamAPI_SteamUtils_v013", "SteamAPI_SteamUtils_v012",
+                                 "SteamAPI_SteamUtils_v011", "SteamAPI_SteamUtils_v010", "SteamAPI_SteamUtils_v009"};
+        for (auto* g : getters)
+        {
             auto* sym = (fnSteamAPI_SteamUtils_ver)GETSYM(_dll, g);
-            if (sym) { p_SteamAPI_SteamUtils_any = sym; return true; }
+            if (sym)
+            {
+                p_SteamAPI_SteamUtils_any = sym;
+                return true;
+            }
         }
         return false;
     }
 
-    ISteamUtils* getUtils() {
-        return p_SteamAPI_SteamUtils_any ? p_SteamAPI_SteamUtils_any() : nullptr;
-    }
+    ISteamUtils* getUtils() { return p_SteamAPI_SteamUtils_any ? p_SteamAPI_SteamUtils_any() : nullptr; }
 
     std::mutex _mutex;
     DYNLIB _dll = nullptr;

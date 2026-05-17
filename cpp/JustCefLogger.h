@@ -5,9 +5,11 @@
 #include <string>
 #include <string_view>
 
-namespace justcef {
+namespace justcef
+{
 
-enum class LogLevel : int {
+enum class LogLevel : int
+{
     None,
     Error,
     Warning,
@@ -16,10 +18,10 @@ enum class LogLevel : int {
     Debug,
 };
 
-class Logger {
+class Logger
+{
 public:
-    using LogCallback =
-        std::function<void(LogLevel level, std::string_view tag, std::string_view message, std::exception_ptr exception)>;
+    using LogCallback = std::function<void(LogLevel level, std::string_view tag, std::string_view message, std::exception_ptr exception)>;
     using WillLogCallback = std::function<bool(LogLevel level)>;
 
     static void SetLogCallback(LogCallback callback);
@@ -37,4 +39,4 @@ private:
     static void Write(LogLevel level, std::string_view tag, std::string_view message, std::exception_ptr exception);
 };
 
-}  // namespace justcef
+} // namespace justcef

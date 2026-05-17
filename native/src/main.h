@@ -7,14 +7,15 @@
 #include <windows.h>
 #endif
 
-namespace shared {
+namespace shared
+{
 
-    // Entry point function shared by executable targets.
-    #if defined(OS_WIN)
-    int APIENTRY wWinMain(HINSTANCE hInstance);
-    #else
-    int main(int argc, char* argv[]);
-    #endif
+// Entry point function shared by executable targets.
+#if defined(OS_WIN)
+int APIENTRY wWinMain(HINSTANCE hInstance);
+#else
+int main(int argc, char* argv[]);
+#endif
 
-}
-#endif  // CEF_DOTCEF_MAIN_H_
+} // namespace shared
+#endif // CEF_DOTCEF_MAIN_H_

@@ -1,13 +1,14 @@
 #ifndef DATASTREAM_H
 #define DATASTREAM_H
 
-#include <vector>
-#include <mutex>
 #include <condition_variable>
 #include <cstdint>
 #include <cstring>
+#include <mutex>
+#include <vector>
 
-class DataStream {
+class DataStream
+{
 public:
     DataStream(uint32_t identifier, size_t bufferSize = 10 * 1024 * 1024);
 
@@ -30,4 +31,3 @@ private:
 };
 
 #endif // DATASTREAM_H
-
