@@ -85,6 +85,8 @@ macro(SET_DOTCEF_EXECUTABLE_TARGET_PROPERTIES target)
   SET_EXECUTABLE_TARGET_PROPERTIES(${target})
   SET_DOTCEF_PROPERTIES(${target})
 
+  target_compile_definitions(${target} PRIVATE JUSTCEF_NATIVE_VERSION=7)
+
   if(OS_LINUX)
     # Set rpath so that libraries can be placed next to the executable.
     set_target_properties(${target} PROPERTIES INSTALL_RPATH "$ORIGIN")
@@ -221,7 +223,6 @@ if(OS_LINUX)
   # Executable target.
   add_executable(${DOTCEF_TARGET} ${DOTCEF_SRCS})
   SET_DOTCEF_EXECUTABLE_TARGET_PROPERTIES(${DOTCEF_TARGET})
-  target_compile_definitions(${DOTCEF_TARGET} PRIVATE JUSTCEF_NATIVE_VERSION=7)
   add_dependencies(${DOTCEF_TARGET} libcef_dll_wrapper)
   #target_link_libraries(${DOTCEF_TARGET} libcef_lib libcef_dll_wrapper ${CEF_STANDARD_LIBS} ${GTK3_LIBRARIES})
   target_link_libraries(${DOTCEF_TARGET} libcef_lib libcef_dll_wrapper ${CEF_STANDARD_LIBS} dl)
