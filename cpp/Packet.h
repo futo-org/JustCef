@@ -20,6 +20,13 @@ enum class PacketType : std::uint8_t
     Notification = 2,
 };
 
+enum class StreamDataStatus : std::uint8_t
+{
+    Accepted = 0,
+    Canceled = 1,
+    Closed = 2,
+};
+
 enum class OpcodeController : uint8_t
 {
     Ping = 0,
@@ -79,7 +86,8 @@ enum class OpcodeController : uint8_t
     WindowAddDomainToProxy = 54,
     WindowRemoveDomainToProxy = 55,
     WindowGetZoom = 56,
-    WindowBridgeRpc = 57
+    WindowBridgeRpc = 57,
+    StreamEnd = 58
 };
 
 // Notifications from controller
@@ -100,7 +108,8 @@ enum class OpcodeClient : uint8_t
     StreamData = 6,
     StreamClose = 7,
     StreamCancel = 8,
-    WindowBridgeRpc = 9
+    WindowBridgeRpc = 9,
+    StreamEnd = 10
 };
 
 // Notifications from client

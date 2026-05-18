@@ -81,7 +81,8 @@ namespace JustCef
             WindowAddDomainToProxy = 54,
             WindowRemoveDomainToProxy = 55,
             WindowGetZoom = 56,
-            WindowBridgeRpc = 57
+            WindowBridgeRpc = 57,
+            StreamEnd = 58
         }
 
         public enum OpcodeControllerNotification : byte
@@ -100,7 +101,8 @@ namespace JustCef
             StreamData = 6,
             StreamClose = 7,
             StreamCancel = 8,
-            WindowBridgeRpc = 9
+            WindowBridgeRpc = 9,
+            StreamEnd = 10
         }
 
         public enum OpcodeClientNotification : byte
@@ -123,6 +125,13 @@ namespace JustCef
             WindowFrameLoadError = 15,
             WindowDevToolsEvent = 16,
             WindowLoadingStateChanged = 17
+        }
+
+        private enum StreamDataStatus : byte
+        {
+            Accepted = 0,
+            Canceled = 1,
+            Closed = 2
         }
 
         private enum BridgeRpcPayloadEncoding : byte
@@ -940,6 +949,7 @@ namespace JustCef
                     {
                         writer.Write((byte)2);
                         writer.Write(bodyLength);
+                        writer.Write((byte)0);
                         HandleLargeBufferedContent(response.Body, writer, deferredOutgoingStreams);
                     }
                 }
@@ -976,6 +986,7 @@ namespace JustCef
                         {
                             writer.Write((byte)2);
                             writer.Write(contentLength.Value);
+                            writer.Write((byte)0);
                             HandleLargeOrChunkedContent(response.DataSource, writer, deferredOutgoingStreams, contentLength);
                         }
                     }
@@ -983,6 +994,7 @@ namespace JustCef
                     {
                         writer.Write((byte)2);
                         writer.Write(UnknownStreamLength);
+                        writer.Write((byte)1);
                         HandleLargeOrChunkedContent(response.DataSource, writer, deferredOutgoingStreams, null);
                     }
                 }
@@ -1010,12 +1022,14 @@ namespace JustCef
                         cancellationToken.ThrowIfCancellationRequested();
 
                         int chunkSize = Math.Min(StreamChunkSize, remaining);
-                        if (!await StreamDataAsync(identifier, body, offset, chunkSize, cancellationToken))
-                            throw new Exception("Stream closed.");
+                        if (await StreamDataStatusAsync(identifier, body, offset, chunkSize, cancellationToken) != StreamDataStatus.Accepted)
+                            return;
 
                         remaining -= chunkSize;
                         offset += chunkSize;
                     }
+
+                    await StreamEndAsync(identifier, (ulong)offset, cancellationToken);
                 });
         }
 
@@ -1045,11 +1059,13 @@ namespace JustCef
 
                             cancellationToken.ThrowIfCancellationRequested();
 
-                            if (!await StreamDataAsync(identifier, buffer, 0, bytesRead, cancellationToken))
-                                throw new Exception("Stream closed.");
+                            if (await StreamDataStatusAsync(identifier, buffer, 0, bytesRead, cancellationToken) != StreamDataStatus.Accepted)
+                                return;
 
                             totalBytesRead += bytesRead;
                         }
+
+                        await StreamEndAsync(identifier, (ulong)totalBytesRead, cancellationToken);
                     }
                     finally
                     {
@@ -1108,12 +1124,14 @@ namespace JustCef
                         transferCancellationToken.ThrowIfCancellationRequested();
 
                         int chunkSize = Math.Min(StreamChunkSize, remaining);
-                        if (!await StreamDataAsync(identifier, payloadBytes, offset, chunkSize, transferCancellationToken))
-                            throw new Exception("Stream closed.");
+                        if (await StreamDataStatusAsync(identifier, payloadBytes, offset, chunkSize, transferCancellationToken) != StreamDataStatus.Accepted)
+                            return;
 
                         remaining -= chunkSize;
                         offset += chunkSize;
                     }
+
+                    await StreamEndAsync(identifier, (ulong)offset, transferCancellationToken);
                 },
                 () => cancellationRegistration.Dispose(),
                 cancellationTokenSource =>
@@ -1265,12 +1283,14 @@ namespace JustCef
                                     cancellationToken.ThrowIfCancellationRequested();
 
                                     int chunkSize = Math.Min(StreamChunkSize, remaining);
-                                    if (!await StreamDataAsync(identifier, bytesElement.Data, offset, chunkSize, cancellationToken))
-                                        throw new Exception("Stream closed.");
+                                    if (await StreamDataStatusAsync(identifier, bytesElement.Data, offset, chunkSize, cancellationToken) != StreamDataStatus.Accepted)
+                                        return;
 
                                     remaining -= chunkSize;
                                     offset += chunkSize;
                                 }
+
+                                await StreamEndAsync(identifier, (ulong)offset, cancellationToken);
                             });
                         break;
                     case IPCProxyBodyElementFile fileElement:
@@ -1306,11 +1326,13 @@ namespace JustCef
 
                                         cancellationToken.ThrowIfCancellationRequested();
 
-                                        if (!await StreamDataAsync(identifier, buffer, 0, bytesRead, cancellationToken))
-                                            throw new Exception("Stream closed.");
+                                        if (await StreamDataStatusAsync(identifier, buffer, 0, bytesRead, cancellationToken) != StreamDataStatus.Accepted)
+                                            return;
 
                                         totalBytesRead += bytesRead;
                                     }
+
+                                    await StreamEndAsync(identifier, (ulong)totalBytesRead, cancellationToken);
                                 }
                                 finally
                                 {
@@ -1983,6 +2005,9 @@ namespace JustCef
         }
 
         public async Task<bool> StreamDataAsync(uint identifier, byte[] data, int offset, int size, CancellationToken cancellationToken = default)
+            => await StreamDataStatusAsync(identifier, data, offset, size, cancellationToken) == StreamDataStatus.Accepted;
+
+        private async Task<StreamDataStatus> StreamDataStatusAsync(uint identifier, byte[] data, int offset, int size, CancellationToken cancellationToken = default)
         {
             var packetSize = size + sizeof(uint);
             byte[] packet = BufferPool.Rent(packetSize);
@@ -1997,7 +2022,29 @@ namespace JustCef
                 }
 
                 var response = await CallAsync(OpcodeController.StreamData, packet, 0, packetSize, cancellationToken);
-                return response.Read<bool>();
+                return (StreamDataStatus)response.Read<byte>();
+            }
+            finally
+            {
+                BufferPool.Return(packet);
+            }
+        }
+
+        private async Task StreamEndAsync(uint identifier, ulong totalBytes, CancellationToken cancellationToken = default)
+        {
+            var packetSize = sizeof(uint) + sizeof(ulong);
+            byte[] packet = BufferPool.Rent(packetSize);
+
+            try
+            {
+                using (var stream = new MemoryStream(packet, 0, packetSize))
+                using (var writer = new BinaryWriter(stream))
+                {
+                    writer.Write(identifier);
+                    writer.Write(totalBytes);
+                }
+
+                await CallAsync(OpcodeController.StreamEnd, packet, 0, packetSize, cancellationToken);
             }
             finally
             {

@@ -34,6 +34,13 @@ enum class PacketType : uint8_t
     Notification = 2
 };
 
+enum class StreamDataStatus : uint8_t
+{
+    Accepted = 0,
+    Canceled = 1,
+    Closed = 2
+};
+
 // Requests from controller
 enum class OpcodeController : uint8_t
 {
@@ -94,7 +101,8 @@ enum class OpcodeController : uint8_t
     WindowAddDomainToProxy = 54,
     WindowRemoveDomainToProxy = 55,
     WindowGetZoom = 56,
-    WindowBridgeRpc = 57
+    WindowBridgeRpc = 57,
+    StreamEnd = 58
 };
 
 // Notifications from controller
@@ -115,7 +123,8 @@ enum class OpcodeClient : uint8_t
     StreamData = 6,
     StreamClose = 7,
     StreamCancel = 8,
-    WindowBridgeRpc = 9
+    WindowBridgeRpc = 9,
+    StreamEnd = 10
 };
 
 // Notifications from client
@@ -186,6 +195,7 @@ typedef struct _IPCProxyResponse
     std::optional<std::vector<uint8_t>> body = std::nullopt;
     std::shared_ptr<DataStream> bodyStream = nullptr;
     int64_t bodyLength = -1;
+    uint8_t lengthMode = 0;
 } IPCProxyResponse;
 
 typedef struct _IPCBridgeRpcResult
@@ -298,6 +308,15 @@ private:
         bool running = false;
     };
 
+    struct PendingStreamReply
+    {
+        uint32_t requestId = 0;
+        uint8_t opcode = 0;
+        std::vector<uint8_t> buf;
+        size_t written = 0;
+        uint32_t streamId = 0;
+    };
+
     void Run();
     std::vector<uint8_t> Call(OpcodeClient opcode, const uint8_t* body = nullptr, size_t size = 0, std::function<void()> afterWrite = nullptr);
     void Notify(OpcodeClientNotification opcode, const uint8_t* body = nullptr, size_t size = 0, std::function<void()> afterWrite = nullptr,
@@ -311,6 +330,7 @@ private:
     void ProcessIncomingStreamDispatcher(uint32_t identifier, std::shared_ptr<IncomingStreamDispatcher> dispatcher);
     std::shared_ptr<DataStream> FindIncomingStream(uint32_t identifier);
     std::shared_ptr<DataStream> GetOrCreateIncomingStream(uint32_t identifier);
+    void ResumePendingStreamReply(uint32_t streamId);
     void QueueDeferredStreamWriters(std::vector<std::function<void()>> streamWriters);
     bool OpenClientStream(uint32_t identifier);
     bool StreamClientData(uint32_t identifier, const uint8_t* data, size_t size);
@@ -340,6 +360,8 @@ private:
     std::vector<uint8_t> _readBuffer;
     std::unordered_map<uint32_t, std::shared_ptr<IPCPendingRequest>> _pendingRequests;
     std::map<uint32_t, std::shared_ptr<DataStream>> _dataStreams;
+    std::mutex _pendingStreamRepliesMutex;
+    std::unordered_map<uint32_t, PendingStreamReply> _pendingStreamReplies;
     std::unordered_set<uint32_t> _canceledIncomingStreams;
     std::unordered_map<uint32_t, std::shared_ptr<IncomingStreamDispatcher>> _incomingStreamDispatchers;
     std::unordered_map<uint32_t, std::shared_ptr<std::atomic<bool>>> _outgoingStreams;

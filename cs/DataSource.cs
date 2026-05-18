@@ -6,6 +6,14 @@ public interface IDataSource : IDisposable
     ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default);
 }
 
+public enum StreamTerminal : byte
+{
+    Active = 0,
+    Completed = 1,
+    Canceled = 2,
+    Error = 3
+}
+
 public sealed class DataStream : IDataSource
 {
     private readonly uint _identifier;
@@ -19,6 +27,9 @@ public sealed class DataStream : IDataSource
     private int _size;
     private bool _writerClosed;
     private bool _disposed;
+    private StreamTerminal _state = StreamTerminal.Active;
+    private long _finalTotal;
+    private long _consumedTotal;
 
     public DataStream(int bufferSize = 10 * 1024 * 1024)
         : this(0, null, bufferSize)
@@ -88,6 +99,59 @@ public sealed class DataStream : IDataSource
 
     internal void CloseFromRemote()
         => Close();
+
+    internal int TryWriteData(byte[] data, int offset, int length)
+    {
+        if (length == 0)
+            return 0;
+
+        lock (_stateLock)
+        {
+            if (_state != StreamTerminal.Active || _disposed)
+                return 0;
+            return WriteAvailable(data.AsSpan(offset, length));
+        }
+    }
+
+    internal void MarkCompleted(long totalBytes)
+        => SetTerminal(StreamTerminal.Completed, totalBytes);
+
+    internal void MarkCanceled()
+        => SetTerminal(StreamTerminal.Canceled, 0);
+
+    internal void MarkError()
+        => SetTerminal(StreamTerminal.Error, 0);
+
+    private void SetTerminal(StreamTerminal state, long totalBytes)
+    {
+        lock (_stateLock)
+        {
+            if (_state != StreamTerminal.Active)
+                return;
+            _state = state;
+            _finalTotal = totalBytes;
+            _writerClosed = true;
+            SignalDataAvailableNoLock();
+            Monitor.PulseAll(_stateLock);
+        }
+    }
+
+    public StreamTerminal TerminalState
+    {
+        get { lock (_stateLock) return _state; }
+    }
+
+    public bool Drained
+    {
+        get { lock (_stateLock) return _size == 0 && _state != StreamTerminal.Active; }
+    }
+
+    public long ConsumedTotal
+    {
+        get { lock (_stateLock) return _consumedTotal; }
+    }
+
+    public long Capacity => _buffer.Length;
 
     public int Read(byte[] buffer, int offset, int count)
         => Read(buffer.AsSpan(offset, count));
@@ -227,6 +291,7 @@ public sealed class DataStream : IDataSource
             _size -= secondPart;
         }
 
+        _consumedTotal += bytesToRead;
         Monitor.PulseAll(_stateLock);
         return bytesToRead;
     }

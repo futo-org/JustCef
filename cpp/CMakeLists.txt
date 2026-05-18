@@ -24,6 +24,8 @@ set(LIBJUSTCEF_SOURCES
 add_library(libjustcef STATIC ${LIBJUSTCEF_SOURCES})
 set_target_properties(libjustcef PROPERTIES OUTPUT_NAME justcef)
 
+target_compile_definitions(libjustcef PRIVATE JUSTCEF_EXPECTED_VERSION=${JUSTCEF_VERSION})
+
 target_link_libraries(libjustcef PUBLIC Threads::Threads)
 target_include_directories(libjustcef PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>

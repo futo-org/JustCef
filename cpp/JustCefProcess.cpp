@@ -591,6 +591,10 @@ public:
             }
             Logger::Info("JustCefProcess", "Working directory '" + working_directory.string() + "'.");
             Logger::Info("JustCefProcess", "CEF exe path '" + native_path.string() + "'.");
+#ifndef JUSTCEF_EXPECTED_VERSION
+#define JUSTCEF_EXPECTED_VERSION 0
+#endif
+            Logger::Info("JustCefProcess", "JustCef expected native runtime v" + std::to_string(JUSTCEF_EXPECTED_VERSION) + ".");
 
 #ifdef _WIN32
             SECURITY_ATTRIBUTES security_attributes{};
@@ -871,13 +875,21 @@ public:
         co_await AsyncVoidCall(detail::OpcodeController::StreamOpen, std::move(writer));
     }
 
-    asio::awaitable<bool> StreamDataAsync(std::uint32_t identifier, std::vector<std::uint8_t> data)
+    asio::awaitable<detail::StreamDataStatus> StreamDataAsync(std::uint32_t identifier, std::vector<std::uint8_t> data)
     {
         detail::PacketWriter writer;
         writer.Write<std::uint32_t>(identifier);
         writer.WriteBytes(data);
         detail::PacketReader reader(co_await AsyncRawCall(detail::OpcodeController::StreamData, std::move(writer)));
-        co_return ReadRequired<bool>(reader, "streamWritable");
+        co_return static_cast<detail::StreamDataStatus>(ReadRequired<std::uint8_t>(reader, "streamStatus"));
+    }
+
+    asio::awaitable<void> StreamEndAsync(std::uint32_t identifier, std::uint64_t totalBytes)
+    {
+        detail::PacketWriter writer;
+        writer.Write<std::uint32_t>(identifier);
+        writer.Write<std::uint64_t>(totalBytes);
+        co_await AsyncVoidCall(detail::OpcodeController::StreamEnd, std::move(writer));
     }
 
     asio::awaitable<void> StreamCloseAsync(std::uint32_t identifier)
@@ -1971,14 +1983,14 @@ private:
                 std::size_t offset = 0;
                 while (offset < bytes->size() && !state->canceled.load())
                 {
-                    const auto chunk_size = std::min<std::size_t>(65536, bytes->size() - offset);
-                    if (!co_await StreamDataAsync(stream_identifier, std::vector<std::uint8_t>(bytes->begin() + static_cast<std::ptrdiff_t>(offset),
-                                                                                               bytes->begin() + static_cast<std::ptrdiff_t>(offset + chunk_size))))
-                    {
-                        throw std::runtime_error("Stream closed.");
-                    }
+                    const std::size_t chunk_size = std::min<std::size_t>(65536, bytes->size() - offset);
+                    if (co_await StreamDataAsync(stream_identifier, std::vector<std::uint8_t>(bytes->begin() + static_cast<std::ptrdiff_t>(offset),
+                                                                                              bytes->begin() + static_cast<std::ptrdiff_t>(offset + chunk_size)))
+                        != detail::StreamDataStatus::Accepted)
+                        co_return;
                     offset += chunk_size;
                 }
+                co_await StreamEndAsync(stream_identifier, offset);
                 co_return;
             });
     }
@@ -2015,14 +2027,14 @@ private:
                         std::size_t offset = 0;
                         while (offset < bytes->size() && !state->canceled.load())
                         {
-                            const auto chunk_size = std::min<std::size_t>(65536, bytes->size() - offset);
-                            if (!co_await StreamDataAsync(stream_identifier, std::vector<std::uint8_t>(bytes->begin() + static_cast<std::ptrdiff_t>(offset),
-                                                                                                       bytes->begin() + static_cast<std::ptrdiff_t>(offset + chunk_size))))
-                            {
-                                throw std::runtime_error("Stream closed.");
-                            }
+                            const std::size_t chunk_size = std::min<std::size_t>(65536, bytes->size() - offset);
+                            if (co_await StreamDataAsync(stream_identifier, std::vector<std::uint8_t>(bytes->begin() + static_cast<std::ptrdiff_t>(offset),
+                                                                                                      bytes->begin() + static_cast<std::ptrdiff_t>(offset + chunk_size)))
+                                != detail::StreamDataStatus::Accepted)
+                                co_return;
                             offset += chunk_size;
                         }
+                        co_await StreamEndAsync(stream_identifier, offset);
                         co_return;
                     });
                 continue;
@@ -2400,6 +2412,7 @@ private:
 
         writer.Write<std::uint8_t>(2);
         writer.Write<std::int64_t>(content_length ? static_cast<std::int64_t>(*content_length) : static_cast<std::int64_t>(-1));
+        writer.Write<std::uint8_t>(content_length ? 0 : 1);
         HandleLargeOrChunkedContent(response->body_stream, writer, deferred, content_length);
     }
 
@@ -2427,19 +2440,22 @@ private:
                         request_size = static_cast<std::size_t>(std::min<std::uint64_t>(request_size, *content_length - total_read));
                     }
 
+                    if (state->canceled.load())
+                        co_return;
+
                     const std::size_t bytes_read = state->stream ? co_await state->stream->ReadAsync(buffer.data(), request_size) : 0;
                     if (bytes_read == 0)
                     {
                         break;
                     }
 
-                    if (!co_await StreamDataAsync(stream_identifier, std::vector<std::uint8_t>(buffer.begin(), buffer.begin() + static_cast<std::ptrdiff_t>(bytes_read))))
-                    {
-                        throw std::runtime_error("Stream closed.");
-                    }
+                    if (co_await StreamDataAsync(stream_identifier, std::vector<std::uint8_t>(buffer.begin(), buffer.begin() + static_cast<std::ptrdiff_t>(bytes_read)))
+                        != detail::StreamDataStatus::Accepted)
+                        co_return;
 
                     total_read += bytes_read;
                 }
+                co_await StreamEndAsync(stream_identifier, total_read);
                 co_return;
             });
     }
@@ -2960,7 +2976,7 @@ asio::awaitable<void> JustCefProcess::StreamOpenAsync(std::uint32_t identifier)
 
 asio::awaitable<bool> JustCefProcess::StreamDataAsync(std::uint32_t identifier, std::vector<std::uint8_t> data)
 {
-    return impl_->StreamDataAsync(identifier, std::move(data));
+    co_return (co_await impl_->StreamDataAsync(identifier, std::move(data))) == detail::StreamDataStatus::Accepted;
 }
 
 asio::awaitable<void> JustCefProcess::StreamCloseAsync(std::uint32_t identifier)

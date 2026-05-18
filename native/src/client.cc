@@ -15,6 +15,9 @@
 #include "stb_image.h"
 #include "steam.h"
 
+#include <cctype>
+#include <cstring>
+
 #ifdef _WIN32
 typedef HRESULT(WINAPI* DwmSetWindowAttributeProc)(HWND, DWORD, LPCVOID, DWORD);
 
@@ -627,6 +630,73 @@ void Client::OnDevToolsEvent(CefRefPtr<CefBrowser> browser, const CefString& met
         });
 }
 
+
+static bool FindHeaderCI(const std::multimap<std::string, std::string>& headers, const char* name, std::string& out)
+{
+    for (const auto& [k, v] : headers)
+    {
+        if (k.size() != std::strlen(name))
+            continue;
+        bool eq = true;
+        for (std::size_t i = 0; i < k.size(); ++i)
+        {
+            if (std::tolower(static_cast<unsigned char>(k[i])) != std::tolower(static_cast<unsigned char>(name[i])))
+            {
+                eq = false;
+                break;
+            }
+        }
+        if (eq)
+        {
+            out = v;
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool ParseU64(const std::string& s, std::size_t b, std::size_t e, int64_t& out)
+{
+    if (b >= e)
+        return false;
+    int64_t v = 0;
+    for (std::size_t i = b; i < e; ++i)
+    {
+        const char c = s[i];
+        if (c < '0' || c > '9')
+            return false;
+        v = v * 10 + (c - '0');
+    }
+    out = v;
+    return true;
+}
+
+static bool ParseContentRange(const std::string& value, int64_t& start, int64_t& end, int64_t& total)
+{
+    std::size_t p = value.find("bytes");
+    if (p == std::string::npos)
+        return false;
+    p += 5;
+    while (p < value.size() && value[p] == ' ')
+        ++p;
+    const std::size_t dash = value.find('-', p);
+    if (dash == std::string::npos || dash <= p)
+        return false;
+    const std::size_t slash = value.find('/', dash);
+    if (slash == std::string::npos || slash <= dash + 1)
+        return false;
+    if (!ParseU64(value, p, dash, start) || !ParseU64(value, dash + 1, slash, end))
+        return false;
+    const std::string totalStr = value.substr(slash + 1);
+    if (totalStr == "*")
+        total = -1;
+    else if (!ParseU64(totalStr, 0, totalStr.size(), total))
+        return false;
+    if (start < 0 || end < start)
+        return false;
+    return true;
+}
+
 class ProxyResourceHandler : public CefResourceHandler
 {
 public:
@@ -645,6 +715,8 @@ public:
 
         handle_request = true;
         _response = std::move(response);
+
+        InitRangeState();
         return true;
     }
 
@@ -653,19 +725,41 @@ public:
         if (!_response)
             return;
 
-        response->SetStatus(_response->status_code);
-        response->SetStatusText(_response->status_text);
         if (_response->media_type)
             response->SetMimeType(*_response->media_type);
 
+        const bool hasRange = (_entityTotal >= 0);
+
+        response->SetStatus(_response->status_code);
+        response->SetStatusText(_response->status_text);
+
         CefResponse::HeaderMap headerMap;
         for (auto& header : _response->headers)
-        {
             headerMap.insert({header.first, header.second});
+        response->SetHeaderMap(headerMap);
+
+        if (hasRange)
+            response_length = _entityTotal;
+        else if (_response->body)
+            response_length = static_cast<int64_t>((*_response->body).size());
+        else if (_response->lengthMode == 0)
+            response_length = _response->bodyLength;
+        else
+            response_length = -1;
+    }
+
+    bool Skip(int64_t bytes_to_skip, int64_t& bytes_skipped, CefRefPtr<CefResourceSkipCallback>) override
+    {
+        if (!_response || bytes_to_skip < 0)
+        {
+            bytes_skipped = -2;
+            return false;
         }
 
-        response->SetHeaderMap(headerMap);
-        response_length = _response->body ? static_cast<int64_t>((*_response->body).size()) : _response->bodyLength;
+        const int64_t skipped = std::min<int64_t>(bytes_to_skip, _skipRemaining);
+        _skipRemaining -= skipped;
+        bytes_skipped = skipped;
+        return true;
     }
 
     bool Read(void* data_out, int bytes_to_read, int& bytes_read, CefRefPtr<CefResourceReadCallback> callback) override
@@ -682,22 +776,34 @@ public:
                 size_t bytes_to_copy = std::min(static_cast<size_t>(bytes_to_read), (*_response->body).size() - _offset);
                 memcpy(data_out, (*_response->body).data() + _offset, bytes_to_copy);
                 _offset += bytes_to_copy;
-                bytes_read = (int)bytes_to_copy;
+                bytes_read = static_cast<int>(bytes_to_copy);
                 return true;
             }
+            return false;
         }
-        else if (_response->bodyStream)
-        {
-            size_t bytesRead = _response->bodyStream->Read((uint8_t*)data_out, static_cast<size_t>(bytes_to_read));
 
-            if (bytesRead > 0)
+        if (_response->bodyStream)
+        {
+            auto stream = _response->bodyStream;
+            size_t n = 0;
+            switch (PumpOnce(stream, data_out, static_cast<size_t>(bytes_to_read), n))
             {
-                bytes_read = (int)bytesRead;
+            case PumpState::Delivered:
+                bytes_read = static_cast<int>(n);
+                return true;
+            case PumpState::NeedMore:
+            {
+                _pendingData = data_out;
+                _pendingSize = static_cast<size_t>(bytes_to_read);
+                _pendingCb = callback;
+                CefRefPtr<ProxyResourceHandler> self(this);
+                stream->RegisterReadWakeup([self]() { self->PumpAsync(); });
                 return true;
             }
-
-            IPC::Singleton.ReleaseIncomingStream(_response->bodyStream->GetIdentifier());
-            _response->bodyStream = nullptr;
+            case PumpState::Eof:
+                return false;
+            }
+            return false;
         }
 
         return false;
@@ -707,18 +813,106 @@ public:
     {
         if (_response && _response->bodyStream)
         {
-            LOG(INFO) << "Closing stream " << _response->bodyStream->GetIdentifier() << ".";
-            _response->bodyStream->Close();
-            IPC::Singleton.CloseStream(_response->bodyStream->GetIdentifier());
+            const uint32_t id = _response->bodyStream->GetIdentifier();
+            LOG(INFO) << "Canceling stream " << id << ".";
+            _response->bodyStream->MarkCanceled();
+            IPC::Singleton.CloseStream(id);
             _response->bodyStream = nullptr;
         }
+        _pendingCb = nullptr;
     }
 
 private:
+    void InitRangeState()
+    {
+        if (!_response)
+            return;
+        std::string crVal;
+        int64_t crStart = 0, crEnd = 0, crTotal = -1;
+        const bool hasRange =
+            FindHeaderCI(_response->headers, "Content-Range", crVal) && ParseContentRange(crVal, crStart, crEnd, crTotal) && crTotal >= 0;
+        if (hasRange)
+        {
+            _entityStart = crStart;
+            _entityTotal = crTotal;
+            _skipRemaining = crStart;
+        }
+    }
+
+    enum class PumpState
+    {
+        Delivered,
+        NeedMore,
+        Eof
+    };
+
+    PumpState PumpOnce(const std::shared_ptr<DataStream>& stream, void* out, size_t size, size_t& n)
+    {
+        n = stream->ReadSome(reinterpret_cast<uint8_t*>(out), size);
+        if (n > 0)
+            return PumpState::Delivered;
+        if (stream->State() == StreamState::Active)
+            return PumpState::NeedMore;
+        CheckStreamIntegrity(stream);
+        return PumpState::Eof;
+    }
+
+    void PumpAsync()
+    {
+        auto stream = _response ? _response->bodyStream : nullptr;
+        if (!_pendingCb || !stream)
+            return;
+
+        size_t n = 0;
+        switch (PumpOnce(stream, _pendingData, _pendingSize, n))
+        {
+        case PumpState::Delivered:
+        {
+            auto cb = _pendingCb;
+            _pendingCb = nullptr;
+            cb->Continue(static_cast<int>(n));
+            return;
+        }
+        case PumpState::NeedMore:
+        {
+            CefRefPtr<ProxyResourceHandler> self(this);
+            stream->RegisterReadWakeup([self]() { self->PumpAsync(); });
+            return;
+        }
+        case PumpState::Eof:
+        {
+            auto cb = _pendingCb;
+            _pendingCb = nullptr;
+            cb->Continue(0);
+            return;
+        }
+        }
+    }
+
+    void CheckStreamIntegrity(const std::shared_ptr<DataStream>& stream)
+    {
+        if (!_response || _response->lengthMode != 0)
+            return;
+        if (stream->State() != StreamState::Completed)
+            return;
+        const uint64_t got = stream->ConsumedTotal();
+        const uint64_t want = stream->FinalTotal();
+        if (got != want)
+            LOG(ERROR) << "Stream " << stream->GetIdentifier() << " truncated: consumed " << got << " of declared " << want << " bytes.";
+    }
+
     int32_t _identifier;
     CefRefPtr<CefRequest> _request;
     std::unique_ptr<IPCProxyResponse> _response;
     size_t _offset;
+
+    void* _pendingData = nullptr;
+    size_t _pendingSize = 0;
+    CefRefPtr<CefResourceReadCallback> _pendingCb;
+
+    int64_t _entityStart = 0;
+    int64_t _entityTotal = -1;
+    int64_t _skipRemaining = 0;
 
     IMPLEMENT_REFCOUNTING(ProxyResourceHandler);
 };
