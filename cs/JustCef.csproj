@@ -42,6 +42,9 @@
     <JustCefCacheDir>$([System.IO.Path]::Combine('$(JustCefCacheRoot)','$(JustCefVersion)','$(JustCefRid)'))</JustCefCacheDir>
     <JustCefZipPath>$([System.IO.Path]::Combine('$(JustCefCacheDir)','$(JustCefArchiveName)'))</JustCefZipPath>
     <JustCefExtractDir>$([System.IO.Path]::Combine('$(JustCefCacheDir)','extracted'))</JustCefExtractDir>
+
+    <JustCefOutputSubdir Condition="$(JustCefRid.StartsWith('osx-'))">justcefnative.app</JustCefOutputSubdir>
+    <JustCefOutputSubdir Condition="'$(JustCefOutputSubdir)' == ''">cef</JustCefOutputSubdir>
   </PropertyGroup>
 
   <Target Name="PrintRuntimeInfo" BeforeTargets="Build" Condition="'$(DesignTimeBuild)' != 'true'">
@@ -84,7 +87,7 @@
 
     <ItemGroup>
       <Content Include="@(_JustCefFiles)">
-        <TargetPath>cef/%(_JustCefFiles.RecursiveDir)%(_JustCefFiles.Filename)%(_JustCefFiles.Extension)</TargetPath>
+        <TargetPath>$(JustCefOutputSubdir)/%(_JustCefFiles.RecursiveDir)%(_JustCefFiles.Filename)%(_JustCefFiles.Extension)</TargetPath>
         <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
         <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
       </Content>
