@@ -81,7 +81,8 @@ namespace JustCef
             WindowAddDomainToProxy = 54,
             WindowRemoveDomainToProxy = 55,
             WindowGetZoom = 56,
-            WindowBridgeRpc = 57
+            WindowBridgeRpc = 57,
+            GetWidevineStatus = 58
         }
 
         public enum OpcodeControllerNotification : byte
@@ -225,6 +226,32 @@ namespace JustCef
         private readonly HashSet<Task> _backgroundStreamTasks = new HashSet<Task>();
         private readonly TaskCompletionSource _exitTaskCompletionSource = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+        private const int CefResultCodeProfileInUse = 21;
+        private const int CefResultCodeNormalExitProcessNotified = 24;
+
+        private void SignalStartupFailed(int exitCode)
+        {
+            if (_readyTaskCompletionSource.Task.IsCompleted)
+                return;
+
+            var failure = exitCode switch
+            {
+                CefResultCodeProfileInUse => JustCefStartupFailure.ProfileInUse,
+                CefResultCodeNormalExitProcessNotified => JustCefStartupFailure.ProcessNotified,
+                _ => JustCefStartupFailure.Unknown
+            };
+
+            var message = failure switch
+            {
+                JustCefStartupFailure.ProfileInUse => "Another process is already using the root cache path.",
+                JustCefStartupFailure.ProcessNotified => "The launch arguments were forwarded to the process that already owns the root cache path.",
+                _ => "The native process exited before it became ready."
+            };
+
+            Logger.Info<JustCefProcess>(message);
+            _readyTaskCompletionSource.TrySetException(new JustCefStartupException(exitCode, failure, message));
+        }
+
         private void SignalExited()
         {
             _exitTaskCompletionSource.TrySetResult();
@@ -348,7 +375,18 @@ namespace JustCef
             process.EnableRaisingEvents = true;
             process.Exited += (_, _) =>
             {
-                Logger.Info<JustCefProcess>("Child process exited.");
+                int exitCode;
+                try
+                {
+                    exitCode = process.ExitCode;
+                }
+                catch
+                {
+                    exitCode = -1;
+                }
+
+                Logger.Info<JustCefProcess>($"Child process exited with code {exitCode}.");
+                SignalStartupFailed(exitCode);
                 SignalExited();
             };
             process.ErrorDataReceived += (_, args) =>
@@ -2176,6 +2214,21 @@ namespace JustCef
         {
             var reader = await CallAsync(OpcodeController.WindowGetZoom, new PacketWriter().Write(identifier), cancellationToken);
             return reader.Read<double>();
+        }
+
+        public async Task<WidevineStatus> GetWidevineStatusAsync(CancellationToken cancellationToken = default)
+        {
+            var reader = await CallAsync(OpcodeController.GetWidevineStatus, new PacketWriter(), cancellationToken);
+            var state = (WidevineComponentState)reader.Read<int>();
+            var version = reader.ReadSizePrefixedString();
+            return new WidevineStatus
+            {
+                State = state,
+                Version = version,
+                Registered = reader.Read<byte>() != 0,
+                Installed = reader.Read<byte>() != 0,
+                RequiresRestart = reader.Read<byte>() != 0
+            };
         }
 
         public async Task WindowSetDevelopmentToolsEnabledAsync(int identifier, bool developmentToolsEnabled, CancellationToken cancellationToken = default)

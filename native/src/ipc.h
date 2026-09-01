@@ -92,7 +92,8 @@ enum class OpcodeController : uint8_t {
     WindowAddDomainToProxy = 54,
     WindowRemoveDomainToProxy = 55,
     WindowGetZoom = 56,
-    WindowBridgeRpc = 57
+    WindowBridgeRpc = 57,
+    GetWidevineStatus = 58
 };
 
 //Notifications from controller
@@ -378,6 +379,7 @@ void HandleAddDevToolsEventMethod(PacketReader& reader, PacketWriter& writer);
 void HandleRemoveDevToolsEventMethod(PacketReader& reader, PacketWriter& writer);
 void HandleWindowSetZoom(PacketReader& reader, PacketWriter& writer);
 void HandleWindowGetZoom(PacketReader& reader, PacketWriter& writer);
+void HandleGetWidevineStatus(PacketReader& reader, PacketWriter& writer);
 bool HandleWindowBridgeRpc(uint32_t requestId, PacketReader& reader, PacketWriter& writer);
 CefRefPtr<Client> CreateBrowserWindow(const IPCWindowCreate& windowCreate);
 

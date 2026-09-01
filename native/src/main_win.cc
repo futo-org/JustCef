@@ -16,6 +16,7 @@
 #include "app_factory.h"
 #include "client_manager.h"
 #include "main_util.h"
+#include "widevine_util.h"
 
 namespace shared {
     std::filesystem::path GetExecutablePath() {
@@ -123,37 +124,22 @@ int RunMain(HINSTANCE hInstance, LPTSTR /*lpCmdLine*/, int /*nCmdShow*/, void* s
         settings.windowless_rendering_enabled = true;
     }
 
-    std::filesystem::path cachePath;
-    bool autoRemoveCachePath = true;
-    if (command_line->HasSwitch("cache-path")) {
-        std::string userCachePath = command_line->GetSwitchValue("cache-path");
-        cachePath = std::filesystem::u8path(userCachePath);
-        autoRemoveCachePath = false;
-    } else {
-        const auto now = std::chrono::system_clock::now();
-        const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
-        cachePath = std::filesystem::temp_directory_path() / ("justcef_" + std::to_string(ms));
+    CachePaths cachePaths = ResolveCachePaths(command_line);
+    CefString(&settings.root_cache_path) = cachePaths.rootCachePath;
+    if (!cachePaths.cachePath.empty()) {
+        CefString(&settings.cache_path) = cachePaths.cachePath;
     }
 
-    CefString(&settings.cache_path) = cachePath.string();
-    CefString(&settings.root_cache_path) = cachePath.string();
+    InitializeWidevineState(command_line, cachePaths.rootCachePath);
 
     if (!CefInitialize(main_args, settings, app, sandbox_info)) {
-        return 1;
+        return CefGetExitCode();
     }
 
     CefRunMessageLoop();
     CefShutdown();
 
-    if (autoRemoveCachePath) {
-        std::error_code ec;
-        const auto removedCount = std::filesystem::remove_all(cachePath, ec);
-        if (ec) {
-            LOG(ERROR) << "Failed to delete cache path: " << cachePath.string() << ". Error: " << ec.message();
-        } else {
-            LOG(INFO) << "Deleted " << removedCount << " items from cache path: " << cachePath.string();
-        }
-    }
+    RemoveTemporaryCachePath(cachePaths);
 
     return 0;
 }

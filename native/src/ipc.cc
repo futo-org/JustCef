@@ -3,6 +3,7 @@
 #include "client.h"
 #include "client_manager.h"
 #include "client_util.h"
+#include "widevine_util.h"
 
 #include "include/base/cef_callback.h"
 #include "include/base/cef_logging.h"
@@ -762,6 +763,9 @@ bool IPC::HandleRequest(uint32_t requestId, OpcodeController opcode, PacketReade
             return true;
         case OpcodeController::WindowGetZoom:
             HandleWindowGetZoom(reader, writer);
+            return true;
+        case OpcodeController::GetWidevineStatus:
+            HandleGetWidevineStatus(reader, writer);
             return true;
         case OpcodeController::WindowRequestFocus:
             HandleWindowRequestFocus(reader, writer);
@@ -2915,6 +2919,31 @@ void HandleWindowSetZoom(PacketReader& reader, PacketWriter& writer)
     }
     
     browser->GetHost()->SetZoomLevel(*zoom);
+}
+
+void HandleGetWidevineStatus(PacketReader& reader, PacketWriter& writer)
+{
+    if (!CefCurrentlyOn(TID_UI))
+    {
+        std::promise<void> promise;
+        std::future<void> future = promise.get_future();
+
+        CefPostTask(TID_UI, base::BindOnce([](std::promise<void> promise, PacketReader& reader, PacketWriter& writer) {
+            HandleGetWidevineStatus(reader, writer);
+            promise.set_value();
+        }, std::move(promise), std::ref(reader), std::ref(writer)));
+
+        future.wait();
+        return;
+    }
+
+    const shared::WidevineStatus status = shared::GetWidevineStatus();
+
+    writer.write<int32_t>(status.state);
+    writer.writeSizePrefixedString(status.version);
+    writer.write<uint8_t>(status.registered ? 1 : 0);
+    writer.write<uint8_t>(status.installed ? 1 : 0);
+    writer.write<uint8_t>(status.requiresRestart ? 1 : 0);
 }
 
 void HandleWindowGetZoom(PacketReader& reader, PacketWriter& writer)

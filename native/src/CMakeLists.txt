@@ -151,6 +151,8 @@ set(DOTCEF_SRCS
   work_queue.h
   simple_handler.cc
   simple_handler.h
+  widevine_util.cc
+  widevine_util.h
   )
 
 if(OS_LINUX)

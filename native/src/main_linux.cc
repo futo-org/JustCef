@@ -15,6 +15,7 @@
 #include "app_factory.h"
 #include "client_manager.h"
 #include "main_util.h"
+#include "widevine_util.h"
 #include "ipc.h"
 
 namespace shared {
@@ -168,27 +169,13 @@ namespace shared {
     //settings.log_severity = LOGSEVERITY_WARNING;
     //settings.single_process = true;
 
-    // Support a command line switch to specify a cache path.
-    // If --cache-path is provided the directory is used and not removed on exit.
-    // Otherwise, a temporary directory is created and removed after shutdown.
-    std::filesystem::path cachePath;
-    bool autoRemoveCachePath = true;
-    if (command_line->HasSwitch("cache-path")) {
-      std::string userCachePath = command_line->GetSwitchValue("cache-path");
-      cachePath = std::filesystem::path(userCachePath);
-      autoRemoveCachePath = false;
-    } else {
-      auto now = std::chrono::system_clock::now();
-      auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
-      std::stringstream ss;
-      ss << ms;
-      std::string uniqueIdentifier = ss.str();
-      cachePath = std::filesystem::temp_directory_path() / ("justcef_" + uniqueIdentifier);
+    CachePaths cachePaths = ResolveCachePaths(command_line);
+    CefString(&settings.root_cache_path) = cachePaths.rootCachePath;
+    if (!cachePaths.cachePath.empty()) {
+      CefString(&settings.cache_path) = cachePaths.cachePath;
     }
 
-    LOG(INFO) << "Cache path: " << cachePath.string();
-    CefString(&settings.cache_path) = cachePath.string();
-    CefString(&settings.root_cache_path) = cachePath.string();
+    InitializeWidevineState(command_line, cachePaths.rootCachePath);
 
     // Initialize the CEF browser process. The first browser instance will be
     // created in CefBrowserProcessHandler::OnContextInitialized() after CEF has
@@ -208,15 +195,7 @@ namespace shared {
     CefShutdown();
 
     // Remove the cache directory only if it was auto-generated.
-    if (autoRemoveCachePath) {
-      std::error_code ec;
-      auto removedCount = std::filesystem::remove_all(cachePath, ec);
-      if (ec) {
-        LOG(ERROR) << "Failed to delete cache path: " << cachePath.string() << ". Error: " << ec.message();
-      } else {
-        LOG(INFO) << "Deleted " << removedCount << " items from cache path: " << cachePath.string();
-      }
-    }
+    RemoveTemporaryCachePath(cachePaths);
 
     return 0;
   }

@@ -9,6 +9,7 @@
 #include "app_factory.h"
 #include "client_manager.h"
 #include "main_util.h"
+#include "widevine_util.h"
 #include "ipc.h"
 
 // Receives notifications from the application.
@@ -206,31 +207,20 @@ int main(int argc, char* argv[]) {
             settings.windowless_rendering_enabled = true;
         }
 
-        // Support a command-line switch to specify a cache path.
-        // If --cache-path is provided, its value is used and not removed on exit.
-        // Otherwise, generate a temporary cache directory.
-        bool autoRemoveCachePath = true;
-        std::string cachePathStd;
-        if (command_line->HasSwitch("cache-path")) {
-            cachePathStd = command_line->GetSwitchValue("cache-path");
-            autoRemoveCachePath = false;
-        } else {
-            NSDate *now = [NSDate date];
-            NSTimeInterval s = [now timeIntervalSince1970];
-            NSString *uniqueIdentifier = [NSString stringWithFormat:@"%lld", (long long)s];
-            NSString *cacheDirectoryName = [@"justcef_" stringByAppendingString:uniqueIdentifier];
-            NSString *tempCachePath = [NSTemporaryDirectory() stringByAppendingPathComponent:cacheDirectoryName];
-            cachePathStd = std::string([tempCachePath UTF8String]);
+        CachePaths cachePaths = ResolveCachePaths(command_line);
+        CefString(&settings.root_cache_path) = cachePaths.rootCachePath;
+        if (!cachePaths.cachePath.empty()) {
+            CefString(&settings.cache_path) = cachePaths.cachePath;
         }
-        CefString(&settings.cache_path) = cachePathStd;
-        CefString(&settings.root_cache_path) = cachePathStd;
+
+        InitializeWidevineState(command_line, cachePaths.rootCachePath);
 
         // Initialize the CEF browser process. The first browser instance will be
         // created in CefBrowserProcessHandler::OnContextInitialized() after CEF has
         // been initialized. May return false if initialization fails or if early exit
         // is desired (for example, due to process singleton relaunch behavior).
         if (!CefInitialize(main_args, settings, app, nullptr)) {
-            return 1;
+            return CefGetExitCode();
         }
 
         // Create the application delegate.
@@ -254,23 +244,7 @@ int main(int argc, char* argv[]) {
         CefShutdown();
 
         // Remove the cache directory only if it was auto-generated.
-        if (autoRemoveCachePath) {
-            NSError *error = nil;
-            NSFileManager *fileManager = [NSFileManager defaultManager];
-            NSString *cachePathStr = [NSString stringWithUTF8String:cachePathStd.c_str()];
-            if ([fileManager fileExistsAtPath:cachePathStr]) {
-                BOOL removed = [fileManager removeItemAtPath:cachePathStr error:&error];
-                if (!removed) {
-                    NSLog(@"Error deleting cache directory at path %@: %@", cachePathStr, error);
-                } else {
-                    NSLog(@"Successfully deleted cache directory at path %@", cachePathStr);
-                }
-            } else {
-                NSLog(@"Cache directory does not exist: %@", cachePathStr);
-            }
-        } else {
-            NSLog(@"User-specified cache path preserved: %s", cachePathStd.c_str());
-        }
+        RemoveTemporaryCachePath(cachePaths);
 
         // Release the delegate.
         #if !__has_feature(objc_arc)

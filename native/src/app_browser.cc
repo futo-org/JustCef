@@ -1,7 +1,10 @@
 #include "client.h"
 #include "app_factory.h"
+#include "client_manager.h"
 #include "ipc.h"
+#include "main_util.h"
 #include "simple_handler.h"
+#include "widevine_util.h"
 
 #include "include/base/cef_logging.h"
 #include "include/views/cef_browser_view.h"
@@ -99,6 +102,15 @@ class BrowserApp : public CefApp, public CefBrowserProcessHandler {
     }
   }
 
+  bool OnAlreadyRunningAppRelaunch(CefRefPtr<CefCommandLine> command_line, const CefString& current_directory) override {
+    CEF_REQUIRE_UI_THREAD();
+
+    LOG(INFO) << "OnAlreadyRunningAppRelaunch";
+
+    ClientManager::GetInstance()->ShowMainWindow();
+    return true;
+  }
+
   // CefBrowserProcessHandler methods:
   void OnContextInitialized() override {
     CEF_REQUIRE_UI_THREAD();
@@ -118,6 +130,11 @@ class BrowserApp : public CefApp, public CefBrowserProcessHandler {
     }
 
     CefRefPtr<CefCommandLine> command_line = CefCommandLine::GetGlobalCommandLine();
+
+    if (command_line->HasSwitch(shared::kRootCachePathSwitch) || command_line->HasSwitch(shared::kCachePathSwitch)) {
+      shared::RequestWidevineCdmUpdate();
+    }
+
     if (command_line->HasSwitch("simple-url")) {
       std::string url = command_line->GetSwitchValue("simple-url");
       LOG(INFO) << "Launching initial window with (url = " << url << ")";

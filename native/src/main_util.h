@@ -1,6 +1,8 @@
 #ifndef CEF_DOTCEF_APP_UTIL_H_
 #define CEF_DOTCEF_APP_UTIL_H_
 
+#include <string>
+
 #include "include/cef_command_line.h"
 
 namespace shared {
@@ -8,8 +10,20 @@ namespace shared {
   // This file provides functionality common to all program entry point
   // implementations.
 
+  extern const char kCachePathSwitch[];
+  extern const char kRootCachePathSwitch[];
+
   // Create a new CommandLine object for use before CEF initialization.
   CefRefPtr<CefCommandLine> CreateCommandLine(const CefMainArgs& main_args);
+
+  struct CachePaths {
+    std::string rootCachePath;
+    std::string cachePath;
+    std::string temporaryPath;
+  };
+
+  CachePaths ResolveCachePaths(const CefRefPtr<CefCommandLine>& command_line);
+  void RemoveTemporaryCachePath(const CachePaths& cache_paths);
 
   // Process types that may have different CefApp instances.
   enum ProcessType {
