@@ -1,6 +1,8 @@
 #include "devtoolsclient.h"
 
-DevToolsClient::DevToolsClient() {}
+DevToolsClient::DevToolsClient()
+{
+}
 
 bool DevToolsClient::OnKeyEvent(CefRefPtr<CefBrowser> browser, const CefKeyEvent& event, CefEventHandle os_event)
 {
@@ -8,12 +10,10 @@ bool DevToolsClient::OnKeyEvent(CefRefPtr<CefBrowser> browser, const CefKeyEvent
     {
         switch (event.windows_key_code)
         {
-            case 0x7B: //F12
-                browser->GetHost()->CloseBrowser(false);
-                return false;
-                
+        case 0x7B: // F12
+            browser->GetHost()->CloseBrowser(false);
+            return false;
         }
     }
     return false;
 }
-

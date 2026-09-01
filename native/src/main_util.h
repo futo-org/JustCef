@@ -5,35 +5,38 @@
 
 #include "include/cef_command_line.h"
 
-namespace shared {
+namespace shared
+{
 
-  // This file provides functionality common to all program entry point
-  // implementations.
+// This file provides functionality common to all program entry point
+// implementations.
 
-  extern const char kCachePathSwitch[];
-  extern const char kRootCachePathSwitch[];
+extern const char kCachePathSwitch[];
+extern const char kRootCachePathSwitch[];
 
-  // Create a new CommandLine object for use before CEF initialization.
-  CefRefPtr<CefCommandLine> CreateCommandLine(const CefMainArgs& main_args);
+// Create a new CommandLine object for use before CEF initialization.
+CefRefPtr<CefCommandLine> CreateCommandLine(const CefMainArgs& main_args);
 
-  struct CachePaths {
+struct CachePaths
+{
     std::string rootCachePath;
     std::string cachePath;
     std::string temporaryPath;
-  };
+};
 
-  CachePaths ResolveCachePaths(const CefRefPtr<CefCommandLine>& command_line);
-  void RemoveTemporaryCachePath(const CachePaths& cache_paths);
+CachePaths ResolveCachePaths(const CefRefPtr<CefCommandLine>& command_line);
+void RemoveTemporaryCachePath(const CachePaths& cache_paths);
 
-  // Process types that may have different CefApp instances.
-  enum ProcessType {
+// Process types that may have different CefApp instances.
+enum ProcessType
+{
     PROCESS_TYPE_BROWSER,
     PROCESS_TYPE_RENDERER,
     PROCESS_TYPE_OTHER,
-  };
+};
 
-  // Determine the process type based on command-line arguments.
-  ProcessType GetProcessType(const CefRefPtr<CefCommandLine>& command_line);
+// Determine the process type based on command-line arguments.
+ProcessType GetProcessType(const CefRefPtr<CefCommandLine>& command_line);
 
-}
-#endif  // CEF_DOTCEF_APP_UTIL_H_
+} // namespace shared
+#endif // CEF_DOTCEF_APP_UTIL_H_

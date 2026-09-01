@@ -13,17 +13,18 @@
 #define DEFAULT_DEDEUPE_INPUT_MS 120
 
 class Client : public CefClient,
-    public CefDisplayHandler,
-    public CefLifeSpanHandler,
-    public CefLoadHandler,
-    public CefFocusHandler,
-    public CefContextMenuHandler,
-    public CefKeyboardHandler,
-    public CefRequestHandler,
-    public CefResourceRequestHandler,
-    public CefRenderHandler,
-    public CefDevToolsMessageObserver {
- public:
+               public CefDisplayHandler,
+               public CefLifeSpanHandler,
+               public CefLoadHandler,
+               public CefFocusHandler,
+               public CefContextMenuHandler,
+               public CefKeyboardHandler,
+               public CefRequestHandler,
+               public CefResourceRequestHandler,
+               public CefRenderHandler,
+               public CefDevToolsMessageObserver
+{
+public:
     Client(const IPCWindowCreate& settings);
     // CefClient methods:
     CefRefPtr<CefDisplayHandler> GetDisplayHandler() override { return this; }
@@ -33,17 +34,24 @@ class Client : public CefClient,
     CefRefPtr<CefContextMenuHandler> GetContextMenuHandler() override { return this; }
     CefRefPtr<CefKeyboardHandler> GetKeyboardHandler() override { return this; }
     CefRefPtr<CefRequestHandler> GetRequestHandler() override { return this; }
-    CefRefPtr<CefResourceRequestHandler> GetResourceRequestHandler(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefRefPtr<CefRequest> request, bool is_navigation, bool is_download, const CefString& request_initiator, bool& disable_default_handling) override { return this; }
+    CefRefPtr<CefResourceRequestHandler> GetResourceRequestHandler(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefRefPtr<CefRequest> request, bool is_navigation,
+                                                                   bool is_download, const CefString& request_initiator, bool& disable_default_handling) override
+    {
+        return this;
+    }
     CefRefPtr<CefRenderHandler> GetRenderHandler() override;
-    
+
     bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefProcessId source_process, CefRefPtr<CefProcessMessage> message) override;
     // CefDisplayHandler methods:
     void OnTitleChange(CefRefPtr<CefBrowser> browser, const CefString& title) override;
     void OnFullscreenModeChange(CefRefPtr<CefBrowser> browser, bool fullscreen) override;
     bool OnConsoleMessage(CefRefPtr<CefBrowser> browser, cef_log_severity_t level, const CefString& message, const CefString& source, int line) override;
     // CefLifeSpanHandler methods:
-    bool OnBeforePopup(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int popup_id, const CefString& target_url, const CefString& target_frame_name, CefLifeSpanHandler::WindowOpenDisposition target_disposition, bool user_gesture, const CefPopupFeatures& popupFeatures, CefWindowInfo& windowInfo, CefRefPtr<CefClient>& client, CefBrowserSettings& browserSettings, CefRefPtr<CefDictionaryValue>& extra_info, bool* no_javascript_access) override;
-    void OnBeforeDevToolsPopup(CefRefPtr<CefBrowser> browser, CefWindowInfo& windowInfo, CefRefPtr<CefClient>& client, CefBrowserSettings& browserSettings, CefRefPtr<CefDictionaryValue>& extra_info, bool* use_default_window) override;
+    bool OnBeforePopup(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int popup_id, const CefString& target_url, const CefString& target_frame_name,
+                       CefLifeSpanHandler::WindowOpenDisposition target_disposition, bool user_gesture, const CefPopupFeatures& popupFeatures, CefWindowInfo& windowInfo,
+                       CefRefPtr<CefClient>& client, CefBrowserSettings& browserSettings, CefRefPtr<CefDictionaryValue>& extra_info, bool* no_javascript_access) override;
+    void OnBeforeDevToolsPopup(CefRefPtr<CefBrowser> browser, CefWindowInfo& windowInfo, CefRefPtr<CefClient>& client, CefBrowserSettings& browserSettings,
+                               CefRefPtr<CefDictionaryValue>& extra_info, bool* use_default_window) override;
     void OnAfterCreated(CefRefPtr<CefBrowser> browser) override;
     bool DoClose(CefRefPtr<CefBrowser> browser) override;
     void OnBeforeClose(CefRefPtr<CefBrowser> browser) override;
@@ -62,18 +70,18 @@ class Client : public CefClient,
     // CefResourceRequestHandler methods:
     CefRefPtr<CefResourceHandler> GetResourceHandler(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefRefPtr<CefRequest> request) override;
     cef_return_value_t OnBeforeResourceLoad(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefRefPtr<CefRequest> request, CefRefPtr<CefCallback> callback) override;
-    void OnResourceLoadComplete(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefRefPtr<CefRequest> request, CefRefPtr<CefResponse> response, URLRequestStatus status, int64_t received_content_length) override;
+    void OnResourceLoadComplete(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefRefPtr<CefRequest> request, CefRefPtr<CefResponse> response, URLRequestStatus status,
+                                int64_t received_content_length) override;
     // CefDevToolsMessageObserver methods:
     void OnDevToolsMethodResult(CefRefPtr<CefBrowser> browser, int message_id, bool success, const void* result, size_t result_size) override;
     void OnDevToolsEvent(CefRefPtr<CefBrowser> browser, const CefString& method, const void* params, size_t params_size) override;
     // CefRenderHandler methods:
-    void GetViewRect(CefRefPtr<CefBrowser> browser, CefRect& rect) override {
-        rect = CefRect(0, 0, settings.preferredWidth, settings.preferredHeight);
-    }
+    void GetViewRect(CefRefPtr<CefBrowser> browser, CefRect& rect) override { rect = CefRect(0, 0, settings.preferredWidth, settings.preferredHeight); }
     void OnPaint(CefRefPtr<CefBrowser> browser, PaintElementType type, const RectList& dirtyRects, const void* buffer, int width, int height) override {}
 
     int GetIdentifier() { return _identifier; }
-    std::optional<std::future<std::optional<IPCDevToolsMethodResult>>> ExecuteDevToolsMethod(CefRefPtr<CefBrowser> browser, std::string& method, CefRefPtr<CefDictionaryValue> params = nullptr);
+    std::optional<std::future<std::optional<IPCDevToolsMethodResult>>> ExecuteDevToolsMethod(CefRefPtr<CefBrowser> browser, std::string& method,
+                                                                                             CefRefPtr<CefDictionaryValue> params = nullptr);
     std::optional<std::future<std::optional<IPCDevToolsMethodResult>>> ExecuteDevToolsMethod(CefRefPtr<CefBrowser> browser, std::string& method, std::string& json);
     void OverrideTitle(CefRefPtr<CefBrowser> browser, const std::string& title);
     void OverrideIcon(CefRefPtr<CefBrowser> browser, const std::string& iconPath);
@@ -88,13 +96,14 @@ class Client : public CefClient,
     void StartBridgeRpcCall(CefRefPtr<CefBrowser> browser, const std::string& method, const std::string& payload_json, uint32_t controllerRequestId);
 
     IPCWindowCreate settings;
- private:
+
+private:
     void SetTitle(CefRefPtr<CefBrowser> browser, const std::string& title);
     bool EnsureDevToolsRegistration(CefRefPtr<CefBrowser> browser);
     void CompleteBridgeRpcCall(int32_t request_id, bool success, const std::optional<std::string>& result_json, const std::optional<std::string>& error);
     void FailAllBridgeRpcCalls(const std::string& error);
 
-    std::map<int32_t, std::shared_ptr<std::promise<std::optional<IPCDevToolsMethodResult>>>> _devToolsMethodResults; 
+    std::map<int32_t, std::shared_ptr<std::promise<std::optional<IPCDevToolsMethodResult>>>> _devToolsMethodResults;
     std::unordered_map<int32_t, uint32_t> _bridgeRpcResults;
     CefRefPtr<CefRegistration> _devToolsRegistration = nullptr;
     int _identifier = 0;

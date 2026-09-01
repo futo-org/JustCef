@@ -2,23 +2,27 @@
 
 #include "bridge.h"
 #include "include/cef_command_line.h"
+#include "include/cef_parser.h"
 #include "include/views/cef_browser_view.h"
 #include "include/views/cef_window.h"
-#include "include/cef_parser.h"
 #include "include/wrapper/cef_helpers.h"
 #include "include/wrapper/cef_stream_resource_handler.h"
 
 #include "client_manager.h"
 #include "client_util.h"
-#include "ipc.h"
 #include "devtoolsclient.h"
+#include "ipc.h"
 #include "stb_image.h"
 #include "steam.h"
+
+#include <cctype>
+#include <cstring>
 
 #ifdef _WIN32
 typedef HRESULT(WINAPI* DwmSetWindowAttributeProc)(HWND, DWORD, LPCVOID, DWORD);
 
-typedef struct _MARGINS {
+typedef struct _MARGINS
+{
     int cxLeftWidth;
     int cxRightWidth;
     int cyTopHeight;
@@ -29,34 +33,43 @@ typedef HRESULT(WINAPI* DwmExtendFrameIntoClientAreaProc)(HWND, const MARGINS*);
 const DWORD DWMWA_USE_IMMERSIVE_DARK_MODE_BEFORE_20H1 = 19;
 const DWORD DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
 
-bool IsWindows10OrGreater(int build = -1) {
+bool IsWindows10OrGreater(int build = -1)
+{
     OSVERSIONINFOEXW osvi = {};
     osvi.dwOSVersionInfoSize = sizeof(osvi);
     osvi.dwMajorVersion = 10;
     osvi.dwBuildNumber = build;
 
-    DWORDLONG const dwlConditionMask = VerSetConditionMask(VerSetConditionMask(0, VER_MAJORVERSION, VER_GREATER_EQUAL), VER_BUILDNUMBER, build == -1 ? VER_EQUAL : VER_GREATER_EQUAL);
+    DWORDLONG const dwlConditionMask =
+        VerSetConditionMask(VerSetConditionMask(0, VER_MAJORVERSION, VER_GREATER_EQUAL), VER_BUILDNUMBER, build == -1 ? VER_EQUAL : VER_GREATER_EQUAL);
     return VerifyVersionInfoW(&osvi, VER_MAJORVERSION | (build == -1 ? 0 : VER_BUILDNUMBER), dwlConditionMask);
 }
 
-bool UseImmersiveDarkMode(HWND hwnd, bool enabled) {
+bool UseImmersiveDarkMode(HWND hwnd, bool enabled)
+{
     static HMODULE hDwmapi = LoadLibraryW(L"dwmapi.dll");
     static DwmSetWindowAttributeProc DwmSetWindowAttribute = nullptr;
     static DwmExtendFrameIntoClientAreaProc DwmExtendFrameIntoClientArea = nullptr;
 
-    if (IsWindows10OrGreater(17763)) {
-        if (hDwmapi) {
-            if (!DwmSetWindowAttribute) {
+    if (IsWindows10OrGreater(17763))
+    {
+        if (hDwmapi)
+        {
+            if (!DwmSetWindowAttribute)
+            {
                 DwmSetWindowAttribute = reinterpret_cast<DwmSetWindowAttributeProc>(GetProcAddress(hDwmapi, "DwmSetWindowAttribute"));
             }
 
-            if (!DwmExtendFrameIntoClientArea) {
+            if (!DwmExtendFrameIntoClientArea)
+            {
                 DwmExtendFrameIntoClientArea = reinterpret_cast<DwmExtendFrameIntoClientAreaProc>(GetProcAddress(hDwmapi, "DwmExtendFrameIntoClientArea"));
             }
 
-            if (DwmSetWindowAttribute) {
+            if (DwmSetWindowAttribute)
+            {
                 DWORD attribute = DWMWA_USE_IMMERSIVE_DARK_MODE_BEFORE_20H1;
-                if (IsWindows10OrGreater(18985)) {
+                if (IsWindows10OrGreater(18985))
+                {
                     attribute = DWMWA_USE_IMMERSIVE_DARK_MODE;
                 }
 
@@ -64,43 +77,57 @@ bool UseImmersiveDarkMode(HWND hwnd, bool enabled) {
                 HRESULT result = DwmSetWindowAttribute(hwnd, attribute, &useImmersiveDarkMode, sizeof(useImmersiveDarkMode));
                 LOG(INFO) << "DwmSetWindowAttribute result: " << (int)result;
 
-                if (SUCCEEDED(result)) {
+                if (SUCCEEDED(result))
+                {
                     SetWindowPos(hwnd, nullptr, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
                     RedrawWindow(hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
-                    if (DwmExtendFrameIntoClientArea) {
+                    if (DwmExtendFrameIntoClientArea)
+                    {
                         MARGINS margins = {-1};
                         result = DwmExtendFrameIntoClientArea(hwnd, &margins);
                         LOG(INFO) << "DwmExtendFrameIntoClientArea result: " << (int)result;
-                    } else {
+                    }
+                    else
+                    {
                         LOG(WARNING) << "Windows failed to find DwmExtendFrameIntoClientArea in 'dwmapi.dll'.";
                     }
                 }
 
                 return SUCCEEDED(result);
-            } else {
+            }
+            else
+            {
                 LOG(WARNING) << "Windows failed to find DwmSetWindowAttribute in 'dwmapi.dll'.";
             }
-        } else {
+        }
+        else
+        {
             LOG(WARNING) << "Windows failed to load 'dwmapi.dll'.";
         }
-    } else {
+    }
+    else
+    {
         LOG(WARNING) << "Windows build not high enough for immersive dark mode feature.";
     }
 
     return false;
 }
 
-struct WindowData {
+struct WindowData
+{
     int identifier;
     WNDPROC originalWndProc;
 };
 
 std::map<HWND, WindowData> hwndMap;
 
-static LRESULT CALLBACK WindowProcHook(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+static LRESULT CALLBACK WindowProcHook(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
     auto it = hwndMap.find(hwnd);
-    if (it != hwndMap.end()) {
-        if (uMsg == WM_CLOSE || uMsg == WM_DESTROY) {
+    if (it != hwndMap.end())
+    {
+        if (uMsg == WM_CLOSE || uMsg == WM_DESTROY)
+        {
             SetWindowLongPtr(hwnd, GWLP_WNDPROC, (LONG_PTR)it->second.originalWndProc);
             hwndMap.erase(it);
             LOG(INFO) << "Unhooked window procedure for identifier: " << it->second.identifier;
@@ -108,24 +135,30 @@ static LRESULT CALLBACK WindowProcHook(HWND hwnd, UINT uMsg, WPARAM wParam, LPAR
         }
 
         CefRefPtr<CefBrowser> browser = ClientManager::GetInstance()->AcquirePointer(it->second.identifier);
-        if (!browser) {
+        if (!browser)
+        {
             LOG(ERROR) << "WindowProcHook called while CefBrowser is already closed. Ignored.";
             return CallWindowProc(it->second.originalWndProc, hwnd, uMsg, wParam, lParam);
         }
 
         CefRefPtr<CefClient> client = browser->GetHost()->GetClient();
         Client* pClient = (Client*)client.get();
-        if (!pClient) {
+        if (!pClient)
+        {
             LOG(ERROR) << "WindowProcHook client is null. Ignored.";
             return CallWindowProc(it->second.originalWndProc, hwnd, uMsg, wParam, lParam);
         }
 
-        if (uMsg == WM_GETMINMAXINFO) {
+        if (uMsg == WM_GETMINMAXINFO)
+        {
             MINMAXINFO* mmi = (MINMAXINFO*)lParam;
             mmi->ptMinTrackSize.x = pClient->settings.minimumWidth;
             mmi->ptMinTrackSize.y = pClient->settings.minimumHeight;
-        } else if (uMsg == WM_SETTINGCHANGE) {
-            if (wParam == SPI_SETCLIENTAREAANIMATION) {
+        }
+        else if (uMsg == WM_SETTINGCHANGE)
+        {
+            if (wParam == SPI_SETCLIENTAREAANIMATION)
+            {
                 UseImmersiveDarkMode(hwnd, true);
             }
         }
@@ -135,29 +168,29 @@ static LRESULT CALLBACK WindowProcHook(HWND hwnd, UINT uMsg, WPARAM wParam, LPAR
     return DefWindowProc(hwnd, uMsg, wParam, lParam);
 }
 
-
 #endif
 
-inline bool StartsWith(const std::string& str, const std::string& prefix) {
+inline bool StartsWith(const std::string& str, const std::string& prefix)
+{
     return str.size() >= prefix.size() && str.compare(0, prefix.size(), prefix) == 0;
 }
 
-inline bool EndsWith(const std::string& str, const std::string& suffix) {
+inline bool EndsWith(const std::string& str, const std::string& suffix)
+{
     return str.size() >= suffix.size() && str.compare(str.size() - suffix.size(), suffix.size(), suffix) == 0;
 }
 
-void QueueClientBridgeRpcResponse(uint32_t controller_request_id, bool success, const std::string& result_json, const std::string& error) {
-    IPC::Singleton.QueueWindowBridgeRpcResponse(
-        controller_request_id,
-        success,
-        success ? result_json : error);
+void QueueClientBridgeRpcResponse(uint32_t controller_request_id, bool success, const std::string& result_json, const std::string& error)
+{
+    IPC::Singleton.QueueWindowBridgeRpcResponse(controller_request_id, success, success ? result_json : error);
 }
 
-std::string ExtractHostFromURL(const std::string& url) 
+std::string ExtractHostFromURL(const std::string& url)
 {
     // Find scheme
     size_t scheme_pos = url.find("://");
-    if (scheme_pos == std::string::npos) {
+    if (scheme_pos == std::string::npos)
+    {
         LOG(ERROR) << "URL without scheme: " << url;
         return CefString();
     }
@@ -165,7 +198,8 @@ std::string ExtractHostFromURL(const std::string& url)
 
     // Find end of authority
     size_t authority_end = url.find_first_of("/?#", after_scheme);
-    if (authority_end == std::string::npos) {
+    if (authority_end == std::string::npos)
+    {
         authority_end = url.length();
     }
 
@@ -176,16 +210,21 @@ std::string ExtractHostFromURL(const std::string& url)
 
     // Extract host
     size_t end;
-    if (url[host_start] == '[') {  // IPv6
+    if (url[host_start] == '[')
+    { // IPv6
         end = url.find(']', host_start + 1);
-        if (end == std::string::npos || end > authority_end) {
+        if (end == std::string::npos || end > authority_end)
+        {
             LOG(ERROR) << "Invalid IPv6 URL: " << url;
             return CefString();
         }
-        end++;  // Include ']'
-    } else {
+        end++; // Include ']'
+    }
+    else
+    {
         end = url.find_first_of(":/?#", host_start);
-        if (end == std::string::npos || end > authority_end) {
+        if (end == std::string::npos || end > authority_end)
+        {
             end = authority_end;
         }
     }
@@ -193,29 +232,34 @@ std::string ExtractHostFromURL(const std::string& url)
     return url.substr(host_start, end - host_start);
 }
 
-bool MatchesDomain(const std::string& request_host, const std::string& cookie_domain) {
-    if (cookie_domain.size() < 2 || cookie_domain[0] != '.') {
+bool MatchesDomain(const std::string& request_host, const std::string& cookie_domain)
+{
+    if (cookie_domain.size() < 2 || cookie_domain[0] != '.')
+    {
         return false; // Invalid cookie domain
     }
     size_t norm_size = cookie_domain.size() - 1; // Length without the leading dot
 
     // Exact match: request_host equals cookie_domain without the leading dot
-    if (request_host.size() == norm_size && request_host.compare(0, norm_size, cookie_domain, 1, norm_size) == 0) {
+    if (request_host.size() == norm_size && request_host.compare(0, norm_size, cookie_domain, 1, norm_size) == 0)
+    {
         return true;
     }
 
     // Subdomain match: request_host ends with '.' + cookie_domain without leading dot
-    if (request_host.size() > norm_size + 1 &&
-        request_host[request_host.size() - norm_size - 1] == '.' &&
-        request_host.compare(request_host.size() - norm_size, norm_size, cookie_domain, 1, norm_size) == 0) {
+    if (request_host.size() > norm_size + 1 && request_host[request_host.size() - norm_size - 1] == '.' &&
+        request_host.compare(request_host.size() - norm_size, norm_size, cookie_domain, 1, norm_size) == 0)
+    {
         return true;
     }
     return false;
 }
 
-Client::Client(const IPCWindowCreate& settings) : settings(settings) {}
+Client::Client(const IPCWindowCreate& settings) : settings(settings)
+{
+}
 
-void Client::OnTitleChange(CefRefPtr<CefBrowser> browser, const CefString& title) 
+void Client::OnTitleChange(CefRefPtr<CefBrowser> browser, const CefString& title)
 {
     CEF_REQUIRE_UI_THREAD();
 
@@ -231,26 +275,29 @@ void Client::OnFullscreenModeChange(CefRefPtr<CefBrowser> browser, bool fullscre
     if (!isViewsEnabled)
         shared::PlatformSetFullscreen(browser, fullscreen);
 
-    IPC::Singleton.QueueWork([browser, fullscreen] () {
-        IPC::Singleton.NotifyWindowFullscreenChanged(browser, fullscreen);
-    });
+    IPC::Singleton.QueueWork(
+        [browser, fullscreen]()
+        {
+            IPC::Singleton.NotifyWindowFullscreenChanged(browser, fullscreen);
+        });
 }
 
-bool Client::OnBeforePopup(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int popup_id, const CefString& target_url, const CefString& target_frame_name, CefLifeSpanHandler::WindowOpenDisposition target_disposition, bool user_gesture, const CefPopupFeatures& popupFeatures, CefWindowInfo& windowInfo, CefRefPtr<CefClient>& client, CefBrowserSettings& browserSettings, CefRefPtr<CefDictionaryValue>& extra_info, bool* no_javascript_access) {
+bool Client::OnBeforePopup(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int popup_id, const CefString& target_url, const CefString& target_frame_name,
+                           CefLifeSpanHandler::WindowOpenDisposition target_disposition, bool user_gesture, const CefPopupFeatures& popupFeatures, CefWindowInfo& windowInfo,
+                           CefRefPtr<CefClient>& client, CefBrowserSettings& browserSettings, CefRefPtr<CefDictionaryValue>& extra_info, bool* no_javascript_access)
+{
     extra_info = CreateBridgeExtraInfo(false, extra_info);
     return false;
 }
 
-void Client::OnBeforeDevToolsPopup(CefRefPtr<CefBrowser> browser,
-                                   CefWindowInfo& windowInfo,
-                                   CefRefPtr<CefClient>& client,
-                                   CefBrowserSettings& browserSettings,
-                                   CefRefPtr<CefDictionaryValue>& extra_info,
-                                   bool* use_default_window) {
+void Client::OnBeforeDevToolsPopup(CefRefPtr<CefBrowser> browser, CefWindowInfo& windowInfo, CefRefPtr<CefClient>& client, CefBrowserSettings& browserSettings,
+                                   CefRefPtr<CefDictionaryValue>& extra_info, bool* use_default_window)
+{
     extra_info = CreateBridgeExtraInfo(false, extra_info);
 }
 
-void Client::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
+void Client::OnAfterCreated(CefRefPtr<CefBrowser> browser)
+{
     CEF_REQUIRE_UI_THREAD();
 
     _identifier = browser->GetIdentifier();
@@ -265,7 +312,8 @@ void Client::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
         CefRefPtr<CefWindow> window = browser_view->GetWindow();
 
         window->SetFullscreen(settings.fullscreen);
-        if (settings.centered && settings.shown) {
+        if (settings.centered && settings.shown)
+        {
             window->CenterWindow(window->GetSize());
         }
 
@@ -287,7 +335,8 @@ void Client::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
             shared::PlatformSetFullscreen(browser, settings.fullscreen);
             shared::PlatformSetFrameless(browser, settings.frameless);
             shared::PlatformSetResizable(browser, settings.resizable);
-            if (settings.centered) {
+            if (settings.centered)
+            {
                 shared::PlatformCenterWindow(browser, shared::PlatformGetWindowSize(browser));
             }
             shared::PlatformWindowRequestFocus(browser);
@@ -306,7 +355,7 @@ void Client::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
         hwndMap[hwnd] = data;
 
         UseImmersiveDarkMode(hwnd, true);
-        //SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE);
+        // SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE);
 #endif
     }
 
@@ -316,12 +365,15 @@ void Client::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
     if (settings.iconPath)
         OverrideIcon(browser, *settings.iconPath);
 
-    IPC::Singleton.QueueWork([browser] () {
-        IPC::Singleton.NotifyWindowOpened(browser);
-    });
+    IPC::Singleton.QueueWork(
+        [browser]()
+        {
+            IPC::Singleton.NotifyWindowOpened(browser);
+        });
 }
 
-bool Client::DoClose(CefRefPtr<CefBrowser> browser) {
+bool Client::DoClose(CefRefPtr<CefBrowser> browser)
+{
     LOG(INFO) << "DoClose called " << browser->GetIdentifier();
 
     CEF_REQUIRE_UI_THREAD();
@@ -338,7 +390,8 @@ bool Client::DoClose(CefRefPtr<CefBrowser> browser) {
     return false;
 }
 
-void Client::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
+void Client::OnBeforeClose(CefRefPtr<CefBrowser> browser)
+{
     LOG(INFO) << "OnBeforeClose called " << browser->GetIdentifier();
 
     CEF_REQUIRE_UI_THREAD();
@@ -347,7 +400,8 @@ void Client::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
 #if _WIN32
     HWND hwnd = browser->GetHost()->GetWindowHandle();
     auto it = hwndMap.find(hwnd);
-    if (it != hwndMap.end()) {
+    if (it != hwndMap.end())
+    {
         SetWindowLongPtr(hwnd, GWLP_WNDPROC, (LONG_PTR)it->second.originalWndProc);
         hwndMap.erase(it);
         LOG(INFO) << "Unhooked window procedure for identifier: " << it->second.identifier;
@@ -366,58 +420,73 @@ void Client::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
 
     LOG(INFO) << "Browser closed " << browser->GetIdentifier();
 
-    IPC::Singleton.QueueWork([browser] () {
-        IPC::Singleton.NotifyWindowClosed(browser);
-    });
+    IPC::Singleton.QueueWork(
+        [browser]()
+        {
+            IPC::Singleton.NotifyWindowClosed(browser);
+        });
 
     LOG(INFO) << "OnBeforeClose finished " << browser->GetIdentifier();
 }
 
 void Client::OnLoadingStateChange(CefRefPtr<CefBrowser> browser, bool isLoading, bool canGoBack, bool canGoForward)
 {
-    IPC::Singleton.QueueWork([browser, isLoading, canGoBack, canGoForward]() {
-        IPC::Singleton.NotifyWindowLoadingStateChanged(browser, isLoading, canGoBack, canGoForward);
-    });
+    IPC::Singleton.QueueWork(
+        [browser, isLoading, canGoBack, canGoForward]()
+        {
+            IPC::Singleton.NotifyWindowLoadingStateChanged(browser, isLoading, canGoBack, canGoForward);
+        });
 }
 
-void Client::OnLoadEnd(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int httpStatusCode) {
-    IPC::Singleton.QueueWork([browser, frame, httpStatusCode]() {
-        IPC::Singleton.NotifyWindowFrameLoadEnd(browser, frame, httpStatusCode);
-    });
-}
-
-void Client::OnLoadStart(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, TransitionType transition_type) 
+void Client::OnLoadEnd(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int httpStatusCode)
 {
-    IPC::Singleton.QueueWork([browser, frame]() {
-        IPC::Singleton.NotifyWindowFrameLoadStart(browser, frame);
-    });
+    IPC::Singleton.QueueWork(
+        [browser, frame, httpStatusCode]()
+        {
+            IPC::Singleton.NotifyWindowFrameLoadEnd(browser, frame, httpStatusCode);
+        });
 }
 
-void Client::OnLoadError(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, ErrorCode errorCode, const CefString& errorText, const CefString& failedUrl) 
+void Client::OnLoadStart(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, TransitionType transition_type)
+{
+    IPC::Singleton.QueueWork(
+        [browser, frame]()
+        {
+            IPC::Singleton.NotifyWindowFrameLoadStart(browser, frame);
+        });
+}
+
+void Client::OnLoadError(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, ErrorCode errorCode, const CefString& errorText, const CefString& failedUrl)
 {
     LOG(ERROR) << "Failed to load URL (" << errorCode << ") '" << failedUrl << "': " << errorText;
 
-    IPC::Singleton.QueueWork([browser, frame, errorCode, errorText, failedUrl]() {
-        IPC::Singleton.NotifyWindowFrameLoadError(browser, frame, errorCode, errorText, failedUrl);
-    });
+    IPC::Singleton.QueueWork(
+        [browser, frame, errorCode, errorText, failedUrl]()
+        {
+            IPC::Singleton.NotifyWindowFrameLoadError(browser, frame, errorCode, errorText, failedUrl);
+        });
 }
 
 void Client::OnTakeFocus(CefRefPtr<CefBrowser> browser, bool next)
 {
     LOG(INFO) << "Browser unfocused " << browser->GetIdentifier();
 
-    IPC::Singleton.QueueWork([browser]() {
-        IPC::Singleton.NotifyWindowUnfocused(browser);
-    });
+    IPC::Singleton.QueueWork(
+        [browser]()
+        {
+            IPC::Singleton.NotifyWindowUnfocused(browser);
+        });
 }
 
 void Client::OnGotFocus(CefRefPtr<CefBrowser> browser)
 {
     LOG(INFO) << "Browser focused " << browser->GetIdentifier();
 
-    IPC::Singleton.QueueWork([browser]() {
-        IPC::Singleton.NotifyWindowFocused(browser);
-    });
+    IPC::Singleton.QueueWork(
+        [browser]()
+        {
+            IPC::Singleton.NotifyWindowFocused(browser);
+        });
 }
 
 void Client::OnBeforeContextMenu(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefRefPtr<CefContextMenuParams> params, CefRefPtr<CefMenuModel> model)
@@ -432,43 +501,43 @@ bool Client::OnKeyEvent(CefRefPtr<CefBrowser> browser, const CefKeyEvent& event,
     {
         switch (event.windows_key_code)
         {
-            case 0x74: //F5
-                if (settings.developerToolsEnabled)
+        case 0x74: // F5
+            if (settings.developerToolsEnabled)
+            {
+                browser->Reload();
+            }
+            return true;
+        case 0x7B: // F12
+            if (settings.developerToolsEnabled)
+            {
+                if (browser->GetHost()->HasDevTools())
                 {
-                    browser->Reload();
+                    browser->GetHost()->CloseDevTools();
                 }
-                return true;
-            case 0x7B: //F12
-                if (settings.developerToolsEnabled)
+                else
                 {
-                    if (browser->GetHost()->HasDevTools())
-                    {
-                        browser->GetHost()->CloseDevTools();
-                    }
-                    else
-                    {
-                        CefBrowserSettings browser_settings;
-                        CefWindowInfo window_info;
-                        CefPoint inspect_element_at;
-                        browser->GetHost()->ShowDevTools(window_info, new DevToolsClient(), browser_settings, inspect_element_at);
-                    }
+                    CefBrowserSettings browser_settings;
+                    CefWindowInfo window_info;
+                    CefPoint inspect_element_at;
+                    browser->GetHost()->ShowDevTools(window_info, new DevToolsClient(), browser_settings, inspect_element_at);
+                }
 
-                    return true;
-                }
-                return false;
-            case 0x7A: //F11
-                CefRefPtr<CefBrowserView> browser_view = CefBrowserView::GetForBrowser(browser);
-                if (browser_view)
-                {
-                    CefRefPtr<CefWindow> window = browser_view->GetWindow();
-                    window->SetFullscreen(!window->IsFullscreen());
-                    return true;
-                } 
-                else 
-                {
-                    shared::PlatformSetFullscreen(browser, !shared::PlatformGetFullscreen(browser));
-                }
-                return false;
+                return true;
+            }
+            return false;
+        case 0x7A: // F11
+            CefRefPtr<CefBrowserView> browser_view = CefBrowserView::GetForBrowser(browser);
+            if (browser_view)
+            {
+                CefRefPtr<CefWindow> window = browser_view->GetWindow();
+                window->SetFullscreen(!window->IsFullscreen());
+                return true;
+            }
+            else
+            {
+                shared::PlatformSetFullscreen(browser, !shared::PlatformGetFullscreen(browser));
+            }
+            return false;
         }
     }
     return false;
@@ -478,7 +547,7 @@ bool Client::EnsureDevToolsRegistration(CefRefPtr<CefBrowser> browser)
 {
     CEF_REQUIRE_UI_THREAD();
 
-    if (!_devToolsRegistration) 
+    if (!_devToolsRegistration)
     {
         _devToolsRegistration = browser->GetHost()->AddDevToolsMessageObserver(this);
         if (!_devToolsRegistration)
@@ -486,13 +555,15 @@ bool Client::EnsureDevToolsRegistration(CefRefPtr<CefBrowser> browser)
             LOG(ERROR) << "Failed to attach DevToolsMessageObserver";
             return false;
         }
-        LOG(INFO) << "EnsureDevToolsRegistration new registration added (identifier = " << browser->GetIdentifier() << ", _devToolsRegistration = " << (size_t)_devToolsRegistration.get() << ")";
+        LOG(INFO) << "EnsureDevToolsRegistration new registration added (identifier = " << browser->GetIdentifier()
+                  << ", _devToolsRegistration = " << (size_t)_devToolsRegistration.get() << ")";
     }
 
     return true;
 }
 
-std::optional<std::future<std::optional<IPCDevToolsMethodResult>>> Client::ExecuteDevToolsMethod(CefRefPtr<CefBrowser> browser, std::string& method, CefRefPtr<CefDictionaryValue> params)
+std::optional<std::future<std::optional<IPCDevToolsMethodResult>>> Client::ExecuteDevToolsMethod(CefRefPtr<CefBrowser> browser, std::string& method,
+                                                                                                 CefRefPtr<CefDictionaryValue> params)
 {
     CEF_REQUIRE_UI_THREAD();
 
@@ -546,110 +617,302 @@ void Client::OnDevToolsEvent(CefRefPtr<CefBrowser> browser, const CefString& met
 
     {
         std::lock_guard<std::mutex> lk(_devToolsEventMethodsSetMutex);
-        if (_devToolsEventMethodsSet.find(method) == _devToolsEventMethodsSet.end()) {
+        if (_devToolsEventMethodsSet.find(method) == _devToolsEventMethodsSet.end())
+        {
             return;
         }
     }
 
-    IPC::Singleton.QueueWork([
-        p = std::vector<uint8_t>(static_cast<const uint8_t*>(params), static_cast<const uint8_t*>(params) + params_size), 
-        m = CefString(method), 
-        browser]() 
-    {
-        IPC::Singleton.NotifyWindowDevToolsEvent(browser, m, p.data(), p.size());
-    });
+    IPC::Singleton.QueueWork(
+        [p = std::vector<uint8_t>(static_cast<const uint8_t*>(params), static_cast<const uint8_t*>(params) + params_size), m = CefString(method), browser]()
+        {
+            IPC::Singleton.NotifyWindowDevToolsEvent(browser, m, p.data(), p.size());
+        });
 }
 
-class ProxyResourceHandler : public CefResourceHandler {
-public:
-    ProxyResourceHandler(int32_t identifier, CefRefPtr<CefRequest> request)
-        : _identifier(identifier), _request(request), _offset(0) {}
 
-    bool Open(CefRefPtr<CefRequest> request, bool& handle_request, CefRefPtr<CefCallback> callback) override 
+static bool FindHeaderCI(const std::multimap<std::string, std::string>& headers, const char* name, std::string& out)
+{
+    for (const auto& [k, v] : headers)
+    {
+        if (k.size() != std::strlen(name))
+            continue;
+        bool eq = true;
+        for (std::size_t i = 0; i < k.size(); ++i)
+        {
+            if (std::tolower(static_cast<unsigned char>(k[i])) != std::tolower(static_cast<unsigned char>(name[i])))
+            {
+                eq = false;
+                break;
+            }
+        }
+        if (eq)
+        {
+            out = v;
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool ParseU64(const std::string& s, std::size_t b, std::size_t e, int64_t& out)
+{
+    if (b >= e)
+        return false;
+    int64_t v = 0;
+    for (std::size_t i = b; i < e; ++i)
+    {
+        const char c = s[i];
+        if (c < '0' || c > '9')
+            return false;
+        v = v * 10 + (c - '0');
+    }
+    out = v;
+    return true;
+}
+
+static bool ParseContentRange(const std::string& value, int64_t& start, int64_t& end, int64_t& total)
+{
+    std::size_t p = value.find("bytes");
+    if (p == std::string::npos)
+        return false;
+    p += 5;
+    while (p < value.size() && value[p] == ' ')
+        ++p;
+    const std::size_t dash = value.find('-', p);
+    if (dash == std::string::npos || dash <= p)
+        return false;
+    const std::size_t slash = value.find('/', dash);
+    if (slash == std::string::npos || slash <= dash + 1)
+        return false;
+    if (!ParseU64(value, p, dash, start) || !ParseU64(value, dash + 1, slash, end))
+        return false;
+    const std::string totalStr = value.substr(slash + 1);
+    if (totalStr == "*")
+        total = -1;
+    else if (!ParseU64(totalStr, 0, totalStr.size(), total))
+        return false;
+    if (start < 0 || end < start)
+        return false;
+    return true;
+}
+
+class ProxyResourceHandler : public CefResourceHandler
+{
+public:
+    ProxyResourceHandler(int32_t identifier, CefRefPtr<CefRequest> request) : _identifier(identifier), _request(request), _offset(0) {}
+
+    bool Open(CefRefPtr<CefRequest> request, bool& handle_request, CefRefPtr<CefCallback> callback) override
     {
         std::unique_ptr<IPCProxyResponse> response = IPC::Singleton.WindowProxyRequest(_identifier, request);
         if (!response)
         {
             // If there's no response, indicate that we're not handling the request
-            //TODO: The not handled flow doesn't seem to work yet
+            // TODO: The not handled flow doesn't seem to work yet
             handle_request = false;
             return true;
         }
-        
+
         handle_request = true;
         _response = std::move(response);
+
+        InitRangeState();
         return true;
     }
 
-    void GetResponseHeaders(CefRefPtr<CefResponse> response, int64_t& response_length, CefString& redirectUrl) override 
+    void GetResponseHeaders(CefRefPtr<CefResponse> response, int64_t& response_length, CefString& redirectUrl) override
     {
         if (!_response)
             return;
 
-        response->SetStatus(_response->status_code);
-        response->SetStatusText(_response->status_text);
         if (_response->media_type)
             response->SetMimeType(*_response->media_type);
 
-        CefResponse::HeaderMap headerMap;
-        for (auto& header : _response->headers) {
-            headerMap.insert({ header.first, header.second });
-        }
+        const bool hasRange = (_entityTotal >= 0);
 
+        response->SetStatus(_response->status_code);
+        response->SetStatusText(_response->status_text);
+
+        CefResponse::HeaderMap headerMap;
+        for (auto& header : _response->headers)
+            headerMap.insert({header.first, header.second});
         response->SetHeaderMap(headerMap);
-        response_length = _response->body ? (*_response->body).size() : -1;
+
+        if (hasRange)
+            response_length = _entityTotal;
+        else if (_response->body)
+            response_length = static_cast<int64_t>((*_response->body).size());
+        else if (_response->lengthMode == 0)
+            response_length = _response->bodyLength;
+        else
+            response_length = -1;
     }
 
-    bool Read(void* data_out, int bytes_to_read, int& bytes_read, CefRefPtr<CefResourceReadCallback> callback) override 
+    bool Skip(int64_t bytes_to_skip, int64_t& bytes_skipped, CefRefPtr<CefResourceSkipCallback>) override
+    {
+        if (!_response || bytes_to_skip < 0)
+        {
+            bytes_skipped = -2;
+            return false;
+        }
+
+        const int64_t skipped = std::min<int64_t>(bytes_to_skip, _skipRemaining);
+        _skipRemaining -= skipped;
+        bytes_skipped = skipped;
+        return true;
+    }
+
+    bool Read(void* data_out, int bytes_to_read, int& bytes_read, CefRefPtr<CefResourceReadCallback> callback) override
     {
         bytes_read = 0;
 
-        if (!_response) 
+        if (!_response)
             return false;
 
         if (_response->body)
         {
-            if (_offset < (*_response->body).size()) 
+            if (_offset < (*_response->body).size())
             {
                 size_t bytes_to_copy = std::min(static_cast<size_t>(bytes_to_read), (*_response->body).size() - _offset);
                 memcpy(data_out, (*_response->body).data() + _offset, bytes_to_copy);
                 _offset += bytes_to_copy;
-                bytes_read = (int)bytes_to_copy;
+                bytes_read = static_cast<int>(bytes_to_copy);
                 return true;
             }
+            return false;
         }
-        else if (_response->bodyStream)
-        {
-            size_t bytesRead = _response->bodyStream->Read((uint8_t*)data_out, static_cast<size_t>(bytes_to_read));
 
-            if (bytesRead > 0)
+        if (_response->bodyStream)
+        {
+            auto stream = _response->bodyStream;
+            size_t n = 0;
+            switch (PumpOnce(stream, data_out, static_cast<size_t>(bytes_to_read), n))
             {
-                bytes_read = (int)bytesRead;
+            case PumpState::Delivered:
+                bytes_read = static_cast<int>(n);
+                return true;
+            case PumpState::NeedMore:
+            {
+                _pendingData = data_out;
+                _pendingSize = static_cast<size_t>(bytes_to_read);
+                _pendingCb = callback;
+                CefRefPtr<ProxyResourceHandler> self(this);
+                stream->RegisterReadWakeup([self]() { self->PumpAsync(); });
                 return true;
             }
-
-            IPC::Singleton.ReleaseIncomingStream(_response->bodyStream->GetIdentifier());
-            _response->bodyStream = nullptr;
+            case PumpState::Eof:
+                return false;
+            }
+            return false;
         }
 
         return false;
     }
 
-    void Cancel() override 
+    void Cancel() override
     {
         if (_response && _response->bodyStream)
         {
-            LOG(INFO) << "Closing stream " << _response->bodyStream->GetIdentifier() << ".";
-            _response->bodyStream->Close();
-            IPC::Singleton.CloseStream(_response->bodyStream->GetIdentifier());
+            const uint32_t id = _response->bodyStream->GetIdentifier();
+            LOG(INFO) << "Canceling stream " << id << ".";
+            _response->bodyStream->MarkCanceled();
+            IPC::Singleton.CloseStream(id);
             _response->bodyStream = nullptr;
         }
+        _pendingCb = nullptr;
     }
+
 private:
+    void InitRangeState()
+    {
+        if (!_response)
+            return;
+        std::string crVal;
+        int64_t crStart = 0, crEnd = 0, crTotal = -1;
+        const bool hasRange =
+            FindHeaderCI(_response->headers, "Content-Range", crVal) && ParseContentRange(crVal, crStart, crEnd, crTotal) && crTotal >= 0;
+        if (hasRange)
+        {
+            _entityStart = crStart;
+            _entityTotal = crTotal;
+            _skipRemaining = crStart;
+        }
+    }
+
+    enum class PumpState
+    {
+        Delivered,
+        NeedMore,
+        Eof
+    };
+
+    PumpState PumpOnce(const std::shared_ptr<DataStream>& stream, void* out, size_t size, size_t& n)
+    {
+        n = stream->ReadSome(reinterpret_cast<uint8_t*>(out), size);
+        if (n > 0)
+            return PumpState::Delivered;
+        if (stream->State() == StreamState::Active)
+            return PumpState::NeedMore;
+        CheckStreamIntegrity(stream);
+        return PumpState::Eof;
+    }
+
+    void PumpAsync()
+    {
+        auto stream = _response ? _response->bodyStream : nullptr;
+        if (!_pendingCb || !stream)
+            return;
+
+        size_t n = 0;
+        switch (PumpOnce(stream, _pendingData, _pendingSize, n))
+        {
+        case PumpState::Delivered:
+        {
+            auto cb = _pendingCb;
+            _pendingCb = nullptr;
+            cb->Continue(static_cast<int>(n));
+            return;
+        }
+        case PumpState::NeedMore:
+        {
+            CefRefPtr<ProxyResourceHandler> self(this);
+            stream->RegisterReadWakeup([self]() { self->PumpAsync(); });
+            return;
+        }
+        case PumpState::Eof:
+        {
+            auto cb = _pendingCb;
+            _pendingCb = nullptr;
+            cb->Continue(0);
+            return;
+        }
+        }
+    }
+
+    void CheckStreamIntegrity(const std::shared_ptr<DataStream>& stream)
+    {
+        if (!_response || _response->lengthMode != 0)
+            return;
+        if (stream->State() != StreamState::Completed)
+            return;
+        const uint64_t got = stream->ConsumedTotal();
+        const uint64_t want = stream->FinalTotal();
+        if (got != want)
+            LOG(ERROR) << "Stream " << stream->GetIdentifier() << " truncated: consumed " << got << " of declared " << want << " bytes.";
+    }
+
     int32_t _identifier;
     CefRefPtr<CefRequest> _request;
     std::unique_ptr<IPCProxyResponse> _response;
     size_t _offset;
+
+    void* _pendingData = nullptr;
+    size_t _pendingSize = 0;
+    CefRefPtr<CefResourceReadCallback> _pendingCb;
+
+    int64_t _entityStart = 0;
+    int64_t _entityTotal = -1;
+    int64_t _skipRemaining = 0;
 
     IMPLEMENT_REFCOUNTING(ProxyResourceHandler);
 };
@@ -690,14 +953,14 @@ CefRefPtr<CefResourceHandler> Client::GetResourceHandler(CefRefPtr<CefBrowser> b
     {
         std::lock_guard<std::mutex> lk(_proxyDomainsMutex);
         // Check exact matches
-        if (_exactProxyDomains.find(req_host) != _exactProxyDomains.end()) 
+        if (_exactProxyDomains.find(req_host) != _exactProxyDomains.end())
             matchedDomain = true;
-        else 
+        else
         {
             // Check leading-dot domains for cookie domain matches
-            for (const auto& domain : _leadingDotProxyDomains) 
+            for (const auto& domain : _leadingDotProxyDomains)
             {
-                if (MatchesDomain(req_host, domain)) 
+                if (MatchesDomain(req_host, domain))
                 {
                     matchedDomain = true;
                     break;
@@ -709,17 +972,21 @@ CefRefPtr<CefResourceHandler> Client::GetResourceHandler(CefRefPtr<CefBrowser> b
     // Cache the result
     {
         std::lock_guard<std::mutex> lk(_proxyCacheMutex);
-        if (matchedDomain) {
+        if (matchedDomain)
+        {
             _proxyCache.insert(req_host);
-        } else {
+        }
+        else
+        {
             _negativeProxyCache.insert(req_host);
         }
     }
-    
+
     return matchedDomain ? new ProxyResourceHandler(browser->GetIdentifier(), request) : nullptr;
 }
 
-cef_return_value_t Client::OnBeforeResourceLoad(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefRefPtr<CefRequest> request, CefRefPtr<CefCallback> callback) {
+cef_return_value_t Client::OnBeforeResourceLoad(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefRefPtr<CefRequest> request, CefRefPtr<CefCallback> callback)
+{
     int requestIdentifier = (int)request->GetIdentifier();
     auto modifyRequestIfNeeded = [&](const std::string& url)
     {
@@ -735,13 +1002,15 @@ cef_return_value_t Client::OnBeforeResourceLoad(CefRefPtr<CefBrowser> browser, C
             IPC::Singleton.WindowModifyRequest(browser->GetIdentifier(), request, settings.modifyRequestBody);
     };
 
-    if (settings.modifyRequests) {
+    if (settings.modifyRequests)
+    {
         modifyRequestIfNeeded(request->GetURL());
     }
 
     {
         std::lock_guard<std::mutex> lk(_modifyRequestsSetMutex);
-        if (_modifyRequestsSet.find(request->GetURL()) != _modifyRequestsSet.end()) {
+        if (_modifyRequestsSet.find(request->GetURL()) != _modifyRequestsSet.end())
+        {
             modifyRequestIfNeeded(request->GetURL());
         }
     }
@@ -749,7 +1018,9 @@ cef_return_value_t Client::OnBeforeResourceLoad(CefRefPtr<CefBrowser> browser, C
     return RV_CONTINUE;
 }
 
-void Client::OnResourceLoadComplete(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefRefPtr<CefRequest> request, CefRefPtr<CefResponse> response, URLRequestStatus status, int64_t received_content_length) {
+void Client::OnResourceLoadComplete(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefRefPtr<CefRequest> request, CefRefPtr<CefResponse> response,
+                                    URLRequestStatus status, int64_t received_content_length)
+{
     std::lock_guard<std::mutex> lock(_modifiedRequestsMutex);
     int requestIdentifier = (int)request->GetIdentifier();
     _modifiedRequests.erase(requestIdentifier);
@@ -765,13 +1036,13 @@ void Client::OverrideTitle(CefRefPtr<CefBrowser> browser, const std::string& tit
 void Client::SetTitle(CefRefPtr<CefBrowser> browser, const std::string& title)
 {
     CefRefPtr<CefBrowserView> browser_view = CefBrowserView::GetForBrowser(browser);
-    if (browser_view) 
+    if (browser_view)
     {
         CefRefPtr<CefWindow> window = browser_view->GetWindow();
         if (window)
             window->SetTitle(title);
-    } 
-    else 
+    }
+    else
         shared::PlatformTitleChange(browser, title);
 }
 
@@ -784,16 +1055,17 @@ void Client::OverrideIcon(CefRefPtr<CefBrowser> browser, const std::string& icon
         CefRefPtr<CefWindow> window = browserView->GetWindow();
         int width, height, channels;
         unsigned char* image = stbi_load(iconPath.c_str(), &width, &height, &channels, 4);
-        if (!image) {
+        if (!image)
+        {
             return;
         }
 
         CefRefPtr<CefImage> cefImage = CefImage::CreateImage();
-        if (cefImage) 
+        if (cefImage)
         {
             cefImage->AddBitmap(1.0, width, height, CEF_COLOR_TYPE_RGBA_8888, CEF_ALPHA_TYPE_PREMULTIPLIED, image, width * height * 4);
 
-            if (window) 
+            if (window)
             {
                 window->SetWindowIcon(cefImage);
                 window->SetWindowAppIcon(cefImage);
@@ -801,7 +1073,7 @@ void Client::OverrideIcon(CefRefPtr<CefBrowser> browser, const std::string& icon
         }
 
         stbi_image_free(image);
-    } 
+    }
     else
     {
         shared::PlatformIconChange(browser, iconPath);
@@ -820,7 +1092,7 @@ void Client::RemoveUrlToProxy(const std::string& url)
     _proxyRequestsSet.erase(url);
 }
 
-void Client::AddDomainToProxy(const std::string& domain) 
+void Client::AddDomainToProxy(const std::string& domain)
 {
     // Normalize for consistency
     bool is_leading_dot = StartsWith(domain, ".");
@@ -828,12 +1100,12 @@ void Client::AddDomainToProxy(const std::string& domain)
 
     {
         std::lock_guard<std::mutex> lk(_proxyDomainsMutex);
-        if (is_leading_dot) 
+        if (is_leading_dot)
         {
             _leadingDotProxyDomains.insert(domain);
             _exactProxyDomains.erase(normalized_domain); // Avoid duplication
-        } 
-        else 
+        }
+        else
         {
             _exactProxyDomains.insert(domain);
             _leadingDotProxyDomains.erase("." + domain); // Avoid duplication
@@ -844,20 +1116,22 @@ void Client::AddDomainToProxy(const std::string& domain)
     {
         std::lock_guard<std::mutex> cache_lk(_proxyCacheMutex);
         std::vector<std::string> to_remove;
-        for (const auto& cached_host : _negativeProxyCache) 
+        for (const auto& cached_host : _negativeProxyCache)
         {
             if (cached_host == normalized_domain || // Exact match
-                (is_leading_dot && EndsWith(cached_host, "." + normalized_domain))) { // Subdomain match
+                (is_leading_dot && EndsWith(cached_host, "." + normalized_domain)))
+            { // Subdomain match
                 to_remove.push_back(cached_host);
             }
         }
-        for (const auto& host : to_remove) {
+        for (const auto& host : to_remove)
+        {
             _negativeProxyCache.erase(host);
         }
     }
 }
 
-void Client::RemoveDomainToProxy(const std::string& domain) 
+void Client::RemoveDomainToProxy(const std::string& domain)
 {
     // Normalize for consistency
     bool is_leading_dot = StartsWith(domain, ".");
@@ -865,9 +1139,12 @@ void Client::RemoveDomainToProxy(const std::string& domain)
 
     {
         std::lock_guard<std::mutex> lk(_proxyDomainsMutex);
-        if (is_leading_dot) {
+        if (is_leading_dot)
+        {
             _leadingDotProxyDomains.erase(domain);
-        } else {
+        }
+        else
+        {
             _exactProxyDomains.erase(domain);
         }
     }
@@ -876,13 +1153,16 @@ void Client::RemoveDomainToProxy(const std::string& domain)
     {
         std::lock_guard<std::mutex> cache_lk(_proxyCacheMutex);
         std::vector<std::string> to_remove;
-        for (const auto& cached_host : _proxyCache) {
+        for (const auto& cached_host : _proxyCache)
+        {
             if (cached_host == normalized_domain || // Exact match
-                (is_leading_dot && EndsWith(cached_host, "." + normalized_domain))) { // Subdomain match
+                (is_leading_dot && EndsWith(cached_host, "." + normalized_domain)))
+            { // Subdomain match
                 to_remove.push_back(cached_host);
             }
         }
-        for (const auto& host : to_remove) {
+        for (const auto& host : to_remove)
+        {
             _proxyCache.erase(host);
         }
     }
@@ -924,18 +1204,21 @@ void Client::StartBridgeRpcCall(CefRefPtr<CefBrowser> browser, const std::string
 {
     CEF_REQUIRE_UI_THREAD();
 
-    if (!settings.bridgeEnabled) {
+    if (!settings.bridgeEnabled)
+    {
         QueueClientBridgeRpcResponse(controllerRequestId, false, "null", "Bridge RPC is not enabled for this window.");
         return;
     }
 
-    if (!browser) {
+    if (!browser)
+    {
         QueueClientBridgeRpcResponse(controllerRequestId, false, "null", "Bridge RPC browser is not available.");
         return;
     }
 
     CefRefPtr<CefFrame> frame = browser->GetMainFrame();
-    if (!frame) {
+    if (!frame)
+    {
         QueueClientBridgeRpcResponse(controllerRequestId, false, "null", "Bridge RPC main frame is not available.");
         return;
     }
@@ -946,13 +1229,7 @@ void Client::StartBridgeRpcCall(CefRefPtr<CefBrowser> browser, const std::string
         _bridgeRpcResults[request_id] = controllerRequestId;
     }
 
-    SendBridgeRpcCallMessage(
-        frame,
-        PID_RENDERER,
-        kBridgeRpcCallJsMessageName,
-        request_id,
-        method,
-        payload_json);
+    SendBridgeRpcCallMessage(frame, PID_RENDERER, kBridgeRpcCallJsMessageName, request_id, method, payload_json);
 }
 
 void Client::CompleteBridgeRpcCall(int32_t request_id, bool success, const std::optional<std::string>& result_json, const std::optional<std::string>& error)
@@ -961,7 +1238,8 @@ void Client::CompleteBridgeRpcCall(int32_t request_id, bool success, const std::
     {
         std::lock_guard<std::mutex> lk(_bridgeRpcResultsMutex);
         auto it = _bridgeRpcResults.find(request_id);
-        if (it == _bridgeRpcResults.end()) {
+        if (it == _bridgeRpcResults.end())
+        {
             return;
         }
 
@@ -980,7 +1258,8 @@ void Client::FailAllBridgeRpcCalls(const std::string& error)
         pending_calls.swap(_bridgeRpcResults);
     }
 
-    for (auto& entry : pending_calls) {
+    for (auto& entry : pending_calls)
+    {
         QueueClientBridgeRpcResponse(entry.second, false, "null", error);
     }
 }
@@ -992,12 +1271,15 @@ bool Client::OnConsoleMessage(CefRefPtr<CefBrowser> browser, cef_log_severity_t 
     return true;
 }
 
-bool Client::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefProcessId source_process, CefRefPtr<CefProcessMessage> message) {
+bool Client::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefProcessId source_process, CefRefPtr<CefProcessMessage> message)
+{
     const std::string message_name = message->GetName();
-    if (message_name == kOskMsg) {
+    if (message_name == kOskMsg)
+    {
         LOG(INFO) << "OnProcessMessageReceived (name = " << message_name << ", size = " << message->GetArgumentList()->GetSize() << ").";
         const int show = message->GetArgumentList()->GetInt(0);
-        if (!show) {
+        if (!show)
+        {
             LOG(INFO) << "Steam dismiss OSK.";
             Steam::Instance().DismissOsk();
             return true;
@@ -1008,77 +1290,77 @@ bool Client::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser, CefRefPtr<C
         const int x = message->GetArgumentList()->GetInt(1), y = message->GetArgumentList()->GetInt(2);
         const int w = message->GetArgumentList()->GetInt(3), h = message->GetArgumentList()->GetInt(4);
         const auto mode = static_cast<EFloatingGamepadTextInputMode>(message->GetArgumentList()->GetInt(5));
-        if (Steam::Instance().ShouldShowOsk()) {
+        if (Steam::Instance().ShouldShowOsk())
+        {
             LOG(INFO) << "Steam show OSK (x = " << x << ", y = " << y << ", w = " << w << ", h = " << h << ", mode = " << mode << ").";
             Steam::Instance().ShowOsk(x, y, w, h, mode);
-        } else {
+        }
+        else
+        {
             LOG(INFO) << "Steam show OSK failed because should show osk is false (x = " << x << ", y = " << y << ", w = " << w << ", h = " << h << ", mode = " << mode << ").";
         }
 
         return true;
     }
 
-    if (message_name == kBridgeRpcCallHostMessageName) {
+    if (message_name == kBridgeRpcCallHostMessageName)
+    {
         int32_t request_id = 0;
         std::string method;
         std::string payload_json;
-        if (!ParseBridgeRpcCallMessage(message, request_id, method, payload_json)) {
+        if (!ParseBridgeRpcCallMessage(message, request_id, method, payload_json))
+        {
             return true;
         }
 
         const int32_t browser_identifier = browser ? browser->GetIdentifier() : 0;
 
-        IPC::Singleton.QueueBackgroundWork([request_id, method, payload_json, browser_identifier]() {
-            IPCBridgeRpcResult result =
-                IPC::Singleton.WindowBridgeRpc(browser_identifier, method, payload_json);
+        IPC::Singleton.QueueBackgroundWork(
+            [request_id, method, payload_json, browser_identifier]()
+            {
+                IPCBridgeRpcResult result = IPC::Singleton.WindowBridgeRpc(browser_identifier, method, payload_json);
 
-            CefPostTask(TID_UI, base::BindOnce(
-                [](int32_t browser_identifier, int32_t request_id, IPCBridgeRpcResult result) {
-                    CefRefPtr<CefBrowser> browser = ClientManager::GetInstance()->AcquirePointer(browser_identifier);
-                    if (!browser) {
-                        return;
-                    }
+                CefPostTask(TID_UI, base::BindOnce(
+                                        [](int32_t browser_identifier, int32_t request_id, IPCBridgeRpcResult result)
+                                        {
+                                            CefRefPtr<CefBrowser> browser = ClientManager::GetInstance()->AcquirePointer(browser_identifier);
+                                            if (!browser)
+                                            {
+                                                return;
+                                            }
 
-                    CefRefPtr<CefFrame> frame = browser->GetMainFrame();
-                    if (!frame) {
-                        return;
-                    }
+                                            CefRefPtr<CefFrame> frame = browser->GetMainFrame();
+                                            if (!frame)
+                                            {
+                                                return;
+                                            }
 
-                    SendBridgeRpcResultMessage(
-                        frame,
-                        PID_RENDERER,
-                        kBridgeRpcCallHostResultMessageName,
-                        request_id,
-                        result.success,
-                        result.success
-                            ? result.result_json.value_or("null")
-                            : result.error.value_or("Bridge RPC failed."));
-                },
-                browser_identifier,
-                request_id,
-                result));
-        });
+                                            SendBridgeRpcResultMessage(frame, PID_RENDERER, kBridgeRpcCallHostResultMessageName, request_id, result.success,
+                                                                       result.success ? result.result_json.value_or("null") : result.error.value_or("Bridge RPC failed."));
+                                        },
+                                        browser_identifier, request_id, result));
+            });
 
         return true;
     }
 
-    if (message_name == kBridgeRpcCallJsResultMessageName) {
+    if (message_name == kBridgeRpcCallJsResultMessageName)
+    {
         int32_t request_id = 0;
         bool success = false;
         std::string payload;
-        if (!ParseBridgeRpcResultMessage(message, request_id, success, payload)) {
+        if (!ParseBridgeRpcResultMessage(message, request_id, success, payload))
+        {
             return true;
         }
 
-        CompleteBridgeRpcCall(
-            request_id,
-            success,
-            success ? std::optional<std::string>(payload) : std::optional<std::string>("null"),
-            success ? std::optional<std::string>("") : std::optional<std::string>(payload));
+        CompleteBridgeRpcCall(request_id, success, success ? std::optional<std::string>(payload) : std::optional<std::string>("null"),
+                              success ? std::optional<std::string>("") : std::optional<std::string>(payload));
         return true;
     }
 
-    if (message_name == kBridgeRpcContextReleasedMessageName) {
+    if (message_name == kBridgeRpcContextReleasedMessageName)
+    {
         FailAllBridgeRpcCalls("Bridge RPC failed because the JavaScript context was released.");
         return true;
     }
@@ -1086,9 +1368,10 @@ bool Client::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser, CefRefPtr<C
     return false;
 }
 
-//TODO: Implement Minimized, Maximized, Restored, KeyboardEvent, Resized, Moved
+// TODO: Implement Minimized, Maximized, Restored, KeyboardEvent, Resized, Moved
 
-CefRefPtr<CefRenderHandler> Client::GetRenderHandler() { 
+CefRefPtr<CefRenderHandler> Client::GetRenderHandler()
+{
     auto cl = CefCommandLine::GetGlobalCommandLine();
     if (cl->HasSwitch("headless"))
         return this;

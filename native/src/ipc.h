@@ -1,68 +1,77 @@
 #ifndef IPC_H
 #define IPC_H
 
-#include "pipe.h"
+#include "bufferpool.h"
+#include "datastream.h"
 #include "include/cef_keyboard_handler.h"
 #include "include/cef_response.h"
-#include "work_queue.h"
-#include "datastream.h"
-#include "thread_pool.h"
-#include "bufferpool.h"
 #include "packet_reader.h"
 #include "packet_writer.h"
+#include "pipe.h"
+#include "thread_pool.h"
+#include "work_queue.h"
 
-#include <thread>
-#include <mutex>
 #include <atomic>
-#include <unordered_map>
-#include <unordered_set>
-#include <vector>
 #include <condition_variable>
+#include <mutex>
 #include <optional>
 #include <queue>
 #include <stdint.h>
+#include <thread>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
+#include <vector>
 
 class Client;
 
 #define MAXIMUM_IPC_SIZE 10 * 1024 * 1024
 
-enum class PacketType : uint8_t {
+enum class PacketType : uint8_t
+{
     Request = 0,
     Response = 1,
     Notification = 2
 };
 
-//Requests from controller
-enum class OpcodeController : uint8_t {
+enum class StreamDataStatus : uint8_t
+{
+    Accepted = 0,
+    Canceled = 1,
+    Closed = 2
+};
+
+// Requests from controller
+enum class OpcodeController : uint8_t
+{
     Ping = 0,
     Print = 1,
     Echo = 2,
     WindowCreate = 3,
-    //WindowCreatePositioned = 4,
+    // WindowCreatePositioned = 4,
     WindowSetDevelopmentToolsEnabled = 5,
     WindowLoadUrl = 6,
-    //WindowLoadHtml = 7,
-    //WindowExecuteJavascript = 8, //string js
-    WindowSetZoom = 9, //double zoom
-    //WindowSetResizable = 10, //bool value
-    //WindowSetWindowless = 11, //bool value
-    //WindowGetWindowSize = 12,
-    //WindowSetWindowSize = 13, //Size size
+    // WindowLoadHtml = 7,
+    // WindowExecuteJavascript = 8, //string js
+    WindowSetZoom = 9, // double zoom
+    // WindowSetResizable = 10, //bool value
+    // WindowSetWindowless = 11, //bool value
+    // WindowGetWindowSize = 12,
+    // WindowSetWindowSize = 13, //Size size
     WindowGetPosition = 14,
-    WindowSetPosition = 15, //Position value
-    //WindowCenterWindow = 16,
+    WindowSetPosition = 15, // Position value
+    // WindowCenterWindow = 16,
     WindowMaximize = 17,
     WindowMinimize = 18,
     WindowRestore = 19,
     WindowShow = 20,
     WindowHide = 21,
     WindowClose = 22,
-    //WindowSetRequestModificationEnabled = 23, //bool enabled
-    //WindowModifyRequest = 24, //Request request -> Response
+    // WindowSetRequestModificationEnabled = 23, //bool enabled
+    // WindowModifyRequest = 24, //Request request -> Response
     WindowRequestFocus = 25,
-    //WindowRegisterKeyboardListener = 26,
-    //WindowSetTitle = 27,
+    // WindowRegisterKeyboardListener = 26,
+    // WindowSetTitle = 27,
     WindowActivate = 28,
     WindowBringToTop = 29,
     WindowSetAlwaysOnTop = 30,
@@ -93,16 +102,19 @@ enum class OpcodeController : uint8_t {
     WindowRemoveDomainToProxy = 55,
     WindowGetZoom = 56,
     WindowBridgeRpc = 57,
-    GetWidevineStatus = 58
+    StreamEnd = 58,
+    GetWidevineStatus = 59
 };
 
-//Notifications from controller
-enum class OpcodeControllerNotification : uint8_t {
+// Notifications from controller
+enum class OpcodeControllerNotification : uint8_t
+{
     Exit = 0
 };
 
-//Requests from client
-enum class OpcodeClient : uint8_t {
+// Requests from client
+enum class OpcodeClient : uint8_t
+{
     Ping = 0,
     Print = 1,
     Echo = 2,
@@ -112,23 +124,25 @@ enum class OpcodeClient : uint8_t {
     StreamData = 6,
     StreamClose = 7,
     StreamCancel = 8,
-    WindowBridgeRpc = 9
+    WindowBridgeRpc = 9,
+    StreamEnd = 10
 };
 
-//Notifications from client
-enum class OpcodeClientNotification : uint8_t {
+// Notifications from client
+enum class OpcodeClientNotification : uint8_t
+{
     Ready = 0,
     Exit = 1,
     WindowOpened = 2,
     WindowClosed = 3,
-    //WindowResized = 4,
+    // WindowResized = 4,
     WindowFocused = 5,
     WindowUnfocused = 6,
-    //WindowMinimized = 7,
-    //WindowMaximized = 8,
-    //WindowRestored = 9,
-    //WindowMoved = 10,
-    //WindowKeyboardEvent = 11,
+    // WindowMinimized = 7,
+    // WindowMaximized = 8,
+    // WindowRestored = 9,
+    // WindowMoved = 10,
+    // WindowKeyboardEvent = 11,
     WindowFullscreenChanged = 12,
     WindowFrameLoadStart = 13,
     WindowFrameLoadEnd = 14,
@@ -137,7 +151,8 @@ enum class OpcodeClientNotification : uint8_t {
     WindowLoadingStateChanged = 17
 };
 
-typedef struct _IPCPendingRequest {
+typedef struct _IPCPendingRequest
+{
     OpcodeClient opcode;
     uint32_t requestId;
     bool ready;
@@ -153,7 +168,8 @@ typedef struct _IPCPendingRequest {
 #define PACKED __attribute__((packed))
 #endif
 
-typedef struct PACKED _IPCPacketHeader {
+typedef struct PACKED _IPCPacketHeader
+{
     uint32_t size = 0;
     uint32_t requestId = 0;
     PacketType packetType = PacketType::Request;
@@ -164,14 +180,14 @@ typedef struct PACKED _IPCPacketHeader {
 #pragma pack(pop)
 #endif
 
-typedef struct _IPCDevToolsMethodResult 
+typedef struct _IPCDevToolsMethodResult
 {
     int32_t messageId = 0;
     bool success = false;
     std::shared_ptr<std::vector<uint8_t>> result;
 } IPCDevToolsMethodResult;
 
-typedef struct _IPCProxyResponse 
+typedef struct _IPCProxyResponse
 {
     int32_t status_code = 0;
     std::string status_text = "";
@@ -179,6 +195,8 @@ typedef struct _IPCProxyResponse
     std::multimap<std::string, std::string> headers = {};
     std::optional<std::vector<uint8_t>> body = std::nullopt;
     std::shared_ptr<DataStream> bodyStream = nullptr;
+    int64_t bodyLength = -1;
+    uint8_t lengthMode = 0;
 } IPCProxyResponse;
 
 typedef struct _IPCBridgeRpcResult
@@ -188,7 +206,7 @@ typedef struct _IPCBridgeRpcResult
     std::optional<std::string> error = std::nullopt;
 } IPCBridgeRpcResult;
 
-typedef struct _IPCWindowCreate 
+typedef struct _IPCWindowCreate
 {
     bool resizable = true;
     bool frameless = false;
@@ -212,18 +230,19 @@ typedef struct _IPCWindowCreate
     std::optional<std::string> appId = std::nullopt;
 } IPCWindowCreate;
 
-class IPC {
+class IPC
+{
 public:
     static IPC Singleton;
 
     IPC();
     ~IPC();
 
-    #ifdef _WIN32
+#ifdef _WIN32
     void SetHandles(HANDLE readHandle, HANDLE writeHandle);
-    #else
+#else
     void SetHandles(int readFd, int writeFd);
-    #endif
+#endif
 
     bool HasValidHandles();
     bool IsAvailable();
@@ -240,7 +259,7 @@ public:
     std::unique_ptr<IPCProxyResponse> WindowProxyRequest(int32_t identifier, CefRefPtr<CefRequest> request);
     IPCBridgeRpcResult WindowBridgeRpc(int32_t identifier, const std::string& method, const std::string& payload_json);
     void QueueWindowBridgeRpcResponse(uint32_t requestId, bool success, const std::string& payload);
-    
+
     void NotifyExit() { Notify(OpcodeClientNotification::Exit); }
     void NotifyReady() { Notify(OpcodeClientNotification::Ready); }
 
@@ -248,25 +267,26 @@ public:
     void NotifyWindowClosed(CefRefPtr<CefBrowser> browser);
     void NotifyWindowFocused(CefRefPtr<CefBrowser> browser);
     void NotifyWindowUnfocused(CefRefPtr<CefBrowser> browser);
-    //void NotifyWindowMinimized(CefRefPtr<CefBrowser> browser);
-    //void NotifyWindowMaximized(CefRefPtr<CefBrowser> browser);
-    //void NotifyWindowRestored(CefRefPtr<CefBrowser> browser);
-    //void NotifyWindowKeyboardEvent(CefRefPtr<CefBrowser> browser, const cef_key_event_t& event);
-    //void NotifyWindowResized(CefRefPtr<CefBrowser> browser, int x, int y, int width, int height);
-    //void NotifyWindowMoved(CefRefPtr<CefBrowser> browser, int x, int y, int width, int height);
+    // void NotifyWindowMinimized(CefRefPtr<CefBrowser> browser);
+    // void NotifyWindowMaximized(CefRefPtr<CefBrowser> browser);
+    // void NotifyWindowRestored(CefRefPtr<CefBrowser> browser);
+    // void NotifyWindowKeyboardEvent(CefRefPtr<CefBrowser> browser, const cef_key_event_t& event);
+    // void NotifyWindowResized(CefRefPtr<CefBrowser> browser, int x, int y, int width, int height);
+    // void NotifyWindowMoved(CefRefPtr<CefBrowser> browser, int x, int y, int width, int height);
     void NotifyWindowFullscreenChanged(CefRefPtr<CefBrowser> browser, bool fullscreen);
     void NotifyWindowFrameLoadStart(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame);
     void NotifyWindowFrameLoadEnd(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int httpStatusCode);
     void NotifyWindowFrameLoadError(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, cef_errorcode_t errorCode, const CefString& errorText, const CefString& url);
     void NotifyWindowLoadingStateChanged(CefRefPtr<CefBrowser> browser, bool isLoading, bool canGoBack, bool canGoForward);
     void NotifyWindowDevToolsEvent(CefRefPtr<CefBrowser> browser, const CefString& method, const uint8_t* result, size_t result_size);
-    void QueueResponse(OpcodeController opcode, uint32_t requestId, const PacketWriter& writer, std::function<void()> afterWrite = nullptr, std::function<void()> onAbort = nullptr);
+    void QueueResponse(OpcodeController opcode, uint32_t requestId, const PacketWriter& writer, std::function<void()> afterWrite = nullptr,
+                       std::function<void()> onAbort = nullptr);
 
-    void QueueWork(std::function<void()> work) 
+    void QueueWork(std::function<void()> work)
     {
         if (!IsAvailable())
             return;
-            
+
         _worker.EnqueueWork(std::move(work));
     }
 
@@ -280,16 +300,28 @@ public:
 
     void CloseStream(uint32_t identifier);
     void ReleaseIncomingStream(uint32_t identifier);
+
 private:
-    struct IncomingStreamDispatcher {
+    struct IncomingStreamDispatcher
+    {
         std::mutex mutex;
         std::queue<std::function<void()>> queue;
         bool running = false;
     };
 
+    struct PendingStreamReply
+    {
+        uint32_t requestId = 0;
+        uint8_t opcode = 0;
+        std::vector<uint8_t> buf;
+        size_t written = 0;
+        uint32_t streamId = 0;
+    };
+
     void Run();
     std::vector<uint8_t> Call(OpcodeClient opcode, const uint8_t* body = nullptr, size_t size = 0, std::function<void()> afterWrite = nullptr);
-    void Notify(OpcodeClientNotification opcode, const uint8_t* body = nullptr, size_t size = 0, std::function<void()> afterWrite = nullptr, std::function<void()> onAbort = nullptr);
+    void Notify(OpcodeClientNotification opcode, const uint8_t* body = nullptr, size_t size = 0, std::function<void()> afterWrite = nullptr,
+                std::function<void()> onAbort = nullptr);
     void Notify(OpcodeClientNotification opcode, const PacketWriter& writer, std::function<void()> afterWrite = nullptr, std::function<void()> onAbort = nullptr);
     bool HandleRequest(uint32_t requestId, OpcodeController opcode, PacketReader& reader, PacketWriter& writer);
     void HandleNotification(OpcodeControllerNotification opcode, PacketReader& reader);
@@ -299,6 +331,7 @@ private:
     void ProcessIncomingStreamDispatcher(uint32_t identifier, std::shared_ptr<IncomingStreamDispatcher> dispatcher);
     std::shared_ptr<DataStream> FindIncomingStream(uint32_t identifier);
     std::shared_ptr<DataStream> GetOrCreateIncomingStream(uint32_t identifier);
+    void ResumePendingStreamReply(uint32_t streamId);
     void QueueDeferredStreamWriters(std::vector<std::function<void()>> streamWriters);
     bool OpenClientStream(uint32_t identifier);
     bool StreamClientData(uint32_t identifier, const uint8_t* data, size_t size);
@@ -308,7 +341,8 @@ private:
     void RemoveOutgoingStream(uint32_t identifier);
     bool SerializePostData(PacketWriter& writer, CefRefPtr<CefPostData> postData, std::vector<std::function<void()>>& streamWriters);
     bool SerializeBridgeRpcPayload(PacketWriter& writer, const std::string& payload, std::vector<std::function<void()>>& streamWriters, std::function<void()>* onAbort = nullptr);
-    bool SerializeBinaryPayload(PacketWriter& writer, const uint8_t* payload, size_t size, std::vector<std::function<void()>>& streamWriters, std::function<void()>* onAbort = nullptr);
+    bool SerializeBinaryPayload(PacketWriter& writer, const uint8_t* payload, size_t size, std::vector<std::function<void()>>& streamWriters,
+                                std::function<void()>* onAbort = nullptr);
     bool DeserializeBridgeRpcPayload(PacketReader& reader, std::string& payload);
     bool HandleWindowBridgeRpcRequest(uint32_t requestId, PacketReader& reader, PacketWriter& writer);
     bool HandleWindowExecuteDevToolsMethodRequest(uint32_t requestId, PacketReader& reader, PacketWriter& writer);
@@ -327,6 +361,8 @@ private:
     std::vector<uint8_t> _readBuffer;
     std::unordered_map<uint32_t, std::shared_ptr<IPCPendingRequest>> _pendingRequests;
     std::map<uint32_t, std::shared_ptr<DataStream>> _dataStreams;
+    std::mutex _pendingStreamRepliesMutex;
+    std::unordered_map<uint32_t, PendingStreamReply> _pendingStreamReplies;
     std::unordered_set<uint32_t> _canceledIncomingStreams;
     std::unordered_map<uint32_t, std::shared_ptr<IncomingStreamDispatcher>> _incomingStreamDispatchers;
     std::unordered_map<uint32_t, std::shared_ptr<std::atomic<bool>>> _outgoingStreams;
@@ -338,7 +374,7 @@ private:
     ThreadPool _threadPool;
     BufferPool _ipcBufferPool;
     Pipe _pipe;
-    //Exit fullscreen
+    // Exit fullscreen
 };
 
 void CloseEverything();
@@ -383,4 +419,4 @@ void HandleGetWidevineStatus(PacketReader& reader, PacketWriter& writer);
 bool HandleWindowBridgeRpc(uint32_t requestId, PacketReader& reader, PacketWriter& writer);
 CefRefPtr<Client> CreateBrowserWindow(const IPCWindowCreate& windowCreate);
 
-#endif //IPC_H
+#endif // IPC_H

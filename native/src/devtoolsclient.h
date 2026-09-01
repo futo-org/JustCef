@@ -6,15 +6,16 @@
 
 #include <future>
 
-class DevToolsClient : public CefClient,
-               public CefKeyboardHandler {
- public:
+class DevToolsClient : public CefClient, public CefKeyboardHandler
+{
+public:
     DevToolsClient();
     // CefClient methods:
     CefRefPtr<CefKeyboardHandler> GetKeyboardHandler() override { return this; }
     // CefKeyboardHandler methods:
     bool OnKeyEvent(CefRefPtr<CefBrowser> browser, const CefKeyEvent& event, CefEventHandle os_event) override;
- private:
+
+private:
     IMPLEMENT_REFCOUNTING(DevToolsClient);
     DISALLOW_COPY_AND_ASSIGN(DevToolsClient);
 };
