@@ -7,9 +7,13 @@
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <RuntimeIdentifiers>win-x86;win-x64;win-arm64;linux-x64;linux-arm;linux-arm64;osx-x64;osx-arm64</RuntimeIdentifiers>
-    <JustCefVersion>8</JustCefVersion>
+    <JustCefVersion>9</JustCefVersion>
     <JustCefBaseUrl>https://static.grayjay.app/justcef</JustCefBaseUrl>
   </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="JustCef.Tests" />
+  </ItemGroup>
 
   <PropertyGroup>
     <JustCefRid Condition="'$(RuntimeIdentifier)' != ''">$(RuntimeIdentifier)</JustCefRid>
@@ -44,7 +48,7 @@
     <JustCefExtractDir>$([System.IO.Path]::Combine('$(JustCefCacheDir)','extracted'))</JustCefExtractDir>
   </PropertyGroup>
 
-  <Target Name="PrintRuntimeInfo" BeforeTargets="Build" Condition="'$(DesignTimeBuild)' != 'true'">
+  <Target Name="PrintRuntimeInfo" BeforeTargets="Build" Condition="'$(DesignTimeBuild)' != 'true' and '$(JustCefSkipRuntimeDownload)' != 'true'">
     <Message Importance="high" Text="JustCef: Effective RID='$(JustCefRid)'" />
     <Message Importance="high" Text="JustCef: Archive='$(JustCefArchiveName)'" Condition="'$(JustCefArchiveName)' != ''" />
     <Message Importance="high" Text="JustCef: URL='$(JustCefUrl)'" Condition="'$(JustCefUrl)' != ''" />
@@ -52,7 +56,7 @@
 
   <Target Name="PrepareJustCefNative"
           BeforeTargets="AssignTargetPaths;GetCopyToOutputDirectoryItems;ComputeFilesToPublish"
-          Condition="'$(DesignTimeBuild)' != 'true'">
+          Condition="'$(DesignTimeBuild)' != 'true' and '$(JustCefSkipRuntimeDownload)' != 'true'">
 
     <Error Condition="'$(JustCefRid)' == ''"
            Text="JustCef: Could not infer an effective RID. Set -r or set RuntimeIdentifier." />

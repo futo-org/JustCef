@@ -87,3 +87,6 @@ _deps
 *.tfstate
 *.tfstate.*
 cs/obj
+cs/bin
+tests/**/bin/
+tests/**/obj/

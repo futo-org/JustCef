@@ -96,8 +96,12 @@ void Logger::SetWillLogCallback(WillLogCallback callback)
 
 bool Logger::WillLog(LogLevel level)
 {
-    std::lock_guard<std::mutex> lock(g_logger_mutex);
-    return g_will_log ? g_will_log(level) : false;
+    WillLogCallback will_log;
+    {
+        std::lock_guard<std::mutex> lock(g_logger_mutex);
+        will_log = g_will_log;
+    }
+    return will_log ? will_log(level) : false;
 }
 
 void Logger::Debug(std::string_view tag, std::string_view message, std::exception_ptr exception)

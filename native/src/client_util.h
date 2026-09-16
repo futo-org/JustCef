@@ -3,7 +3,7 @@
 
 #include "include/cef_client.h"
 
-#include <future>
+#include <functional>
 
 namespace shared
 {
@@ -32,10 +32,11 @@ void PlatformSetWindowSize(CefRefPtr<CefBrowser> browser, const CefSize& size);
 CefPoint PlatformGetWindowPosition(CefRefPtr<CefBrowser> browser);
 void PlatformSetWindowPosition(CefRefPtr<CefBrowser> browser, const CefPoint& position);
 void PlatformWindowRequestFocus(CefRefPtr<CefBrowser> browser);
-std::future<std::vector<std::string>> PlatformPickFiles(int browser_identifier, bool multiple,
-                                                        const std::vector<std::pair<std::string /* name [Text Files (*.txt)] */, std::string /* *.txt */>>& filters);
-std::future<std::string> PlatformPickDirectory(int browser_identifier);
-std::future<std::string> PlatformSaveFile(int browser_identifier, const std::string& default_name, const std::vector<std::pair<std::string, std::string>>& filters);
+void PlatformPickFiles(int browser_identifier, bool multiple, const std::vector<std::pair<std::string /* name [Text Files (*.txt)] */, std::string /* *.txt */>>& filters,
+                       std::function<void(std::vector<std::string>)> callback);
+void PlatformPickDirectory(int browser_identifier, std::function<void(std::string)> callback);
+void PlatformSaveFile(int browser_identifier, const std::string& default_name, const std::vector<std::pair<std::string, std::string>>& filters,
+                      std::function<void(std::string)> callback);
 void CancelPendingFileDialogs(int browser_identifier);
 } // namespace shared
 #endif // CEF_DOTCEF_CLIENT_BASE_H_

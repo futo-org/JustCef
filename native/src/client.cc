@@ -12,6 +12,8 @@
 #include "client_util.h"
 #include "devtoolsclient.h"
 #include "ipc.h"
+#include "justcef_view_common.h"
+#include "justcef_view_host.h"
 #include "stb_image.h"
 #include "steam.h"
 
@@ -180,9 +182,15 @@ inline bool EndsWith(const std::string& str, const std::string& suffix)
     return str.size() >= suffix.size() && str.compare(str.size() - suffix.size(), suffix.size(), suffix) == 0;
 }
 
-void QueueClientBridgeRpcResponse(uint32_t controller_request_id, bool success, const std::string& result_json, const std::string& error)
+void QueueClientBridgeRpcResponse(ipc::Reply reply, bool success, const std::string& result_json, const std::string& error)
 {
-    IPC::Singleton.QueueWindowBridgeRpcResponse(controller_request_id, success, success ? result_json : error);
+    PacketWriter writer;
+    if (!success)
+        reply.Fail(ipc::StatusCode::Error, error);
+    else if (!writer.write<uint32_t>(static_cast<uint32_t>(result_json.size())) || !writer.writeBytes(reinterpret_cast<const uint8_t*>(result_json.data()), result_json.size()))
+        reply.Fail(ipc::StatusCode::TooLarge, "The bridge RPC result is too large.");
+    else
+        reply.Ok(writer.data(), writer.size());
 }
 
 std::string ExtractHostFromURL(const std::string& url)
@@ -257,6 +265,23 @@ bool MatchesDomain(const std::string& request_host, const std::string& cookie_do
 
 Client::Client(const IPCWindowCreate& settings) : settings(settings)
 {
+    _proxyRequests = settings.proxyRequests;
+    _modifyRequests = settings.modifyRequests;
+    _modifyRequestBody = settings.modifyRequestBody;
+}
+
+void Client::SetProxyRequests(bool proxyRequests)
+{
+    settings.proxyRequests = proxyRequests;
+    _proxyRequests = proxyRequests;
+}
+
+void Client::SetModifyRequests(bool modifyRequests, bool modifyRequestBody)
+{
+    settings.modifyRequests = modifyRequests;
+    settings.modifyRequestBody = modifyRequestBody;
+    _modifyRequests = modifyRequests;
+    _modifyRequestBody = modifyRequestBody;
 }
 
 void Client::OnTitleChange(CefRefPtr<CefBrowser> browser, const CefString& title)
@@ -275,11 +300,7 @@ void Client::OnFullscreenModeChange(CefRefPtr<CefBrowser> browser, bool fullscre
     if (!isViewsEnabled)
         shared::PlatformSetFullscreen(browser, fullscreen);
 
-    IPC::Singleton.QueueWork(
-        [browser, fullscreen]()
-        {
-            IPC::Singleton.NotifyWindowFullscreenChanged(browser, fullscreen);
-        });
+    IPC::Singleton.NotifyWindowFullscreenChanged(browser, fullscreen);
 }
 
 bool Client::OnBeforePopup(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int popup_id, const CefString& target_url, const CefString& target_frame_name,
@@ -296,21 +317,27 @@ void Client::OnBeforeDevToolsPopup(CefRefPtr<CefBrowser> browser, CefWindowInfo&
     extra_info = CreateBridgeExtraInfo(false, extra_info);
 }
 
-void Client::OnAfterCreated(CefRefPtr<CefBrowser> browser)
+void Client::TrackBrowser(CefRefPtr<CefBrowser> browser)
 {
-    CEF_REQUIRE_UI_THREAD();
-
     _identifier = browser->GetIdentifier();
+    if (_primaryIdentifier == 0)
+        _primaryIdentifier = _identifier;
 
     // Add to the list of existing browsers.
     ClientManager::GetInstance()->OnAfterCreated(browser);
     LOG(INFO) << "Browser opened " << browser->GetIdentifier();
+}
+
+void Client::OnAfterCreated(CefRefPtr<CefBrowser> browser)
+{
+    CEF_REQUIRE_UI_THREAD();
+
+    TrackBrowser(browser);
 
     CefRefPtr<CefBrowserView> browser_view = CefBrowserView::GetForBrowser(browser);
-    if (browser_view)
+    CefRefPtr<CefWindow> window = browser_view ? browser_view->GetWindow() : nullptr;
+    if (window)
     {
-        CefRefPtr<CefWindow> window = browser_view->GetWindow();
-
         window->SetFullscreen(settings.fullscreen);
         if (settings.centered && settings.shown)
         {
@@ -327,7 +354,7 @@ void Client::OnAfterCreated(CefRefPtr<CefBrowser> browser)
             window->Hide();
         }
     }
-    else
+    else if (!browser_view)
     {
         if (settings.shown)
         {
@@ -365,11 +392,7 @@ void Client::OnAfterCreated(CefRefPtr<CefBrowser> browser)
     if (settings.iconPath)
         OverrideIcon(browser, *settings.iconPath);
 
-    IPC::Singleton.QueueWork(
-        [browser]()
-        {
-            IPC::Singleton.NotifyWindowOpened(browser);
-        });
+    IPC::Singleton.NotifyWindowOpened(browser);
 }
 
 bool Client::DoClose(CefRefPtr<CefBrowser> browser)
@@ -408,85 +431,67 @@ void Client::OnBeforeClose(CefRefPtr<CefBrowser> browser)
     }
 #endif
 
-    for (auto& itr : _devToolsMethodResults)
-        itr.second->set_value(std::nullopt);
-    _devToolsMethodResults.clear();
-    FailAllBridgeRpcCalls("Bridge RPC failed because the browser is closing.");
+    if (IsPrimaryBrowser(browser))
+    {
+        auto devToolsMethodCallbacks = std::move(_devToolsMethodCallbacks);
+        _devToolsMethodCallbacks.clear();
+        for (auto& itr : devToolsMethodCallbacks)
+            itr.second(false, std::string());
+        FailAllBridgeRpcCalls("Bridge RPC failed because the browser is closing.");
+        CancelHostCalls();
+        CancelPendingModifies();
+        _devToolsRegistration = nullptr;
+        _identifier = 0;
+    }
 
-    _identifier = 0;
+    justcef_view::OnHostBrowserGone(browser);
 
     // Remove from the list of existing browsers.
     ClientManager::GetInstance()->OnBeforeClose(browser);
 
     LOG(INFO) << "Browser closed " << browser->GetIdentifier();
 
-    IPC::Singleton.QueueWork(
-        [browser]()
-        {
-            IPC::Singleton.NotifyWindowClosed(browser);
-        });
+    IPC::Singleton.NotifyWindowClosed(browser);
 
     LOG(INFO) << "OnBeforeClose finished " << browser->GetIdentifier();
 }
 
 void Client::OnLoadingStateChange(CefRefPtr<CefBrowser> browser, bool isLoading, bool canGoBack, bool canGoForward)
 {
-    IPC::Singleton.QueueWork(
-        [browser, isLoading, canGoBack, canGoForward]()
-        {
-            IPC::Singleton.NotifyWindowLoadingStateChanged(browser, isLoading, canGoBack, canGoForward);
-        });
+    IPC::Singleton.NotifyWindowLoadingStateChanged(browser, isLoading, canGoBack, canGoForward);
 }
 
 void Client::OnLoadEnd(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int httpStatusCode)
 {
-    IPC::Singleton.QueueWork(
-        [browser, frame, httpStatusCode]()
-        {
-            IPC::Singleton.NotifyWindowFrameLoadEnd(browser, frame, httpStatusCode);
-        });
+    IPC::Singleton.NotifyWindowFrameLoadEnd(browser, frame, httpStatusCode);
 }
 
 void Client::OnLoadStart(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, TransitionType transition_type)
 {
-    IPC::Singleton.QueueWork(
-        [browser, frame]()
-        {
-            IPC::Singleton.NotifyWindowFrameLoadStart(browser, frame);
-        });
+    IPC::Singleton.NotifyWindowFrameLoadStart(browser, frame);
 }
 
 void Client::OnLoadError(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, ErrorCode errorCode, const CefString& errorText, const CefString& failedUrl)
 {
     LOG(ERROR) << "Failed to load URL (" << errorCode << ") '" << failedUrl << "': " << errorText;
 
-    IPC::Singleton.QueueWork(
-        [browser, frame, errorCode, errorText, failedUrl]()
-        {
-            IPC::Singleton.NotifyWindowFrameLoadError(browser, frame, errorCode, errorText, failedUrl);
-        });
+    IPC::Singleton.NotifyWindowFrameLoadError(browser, frame, errorCode, errorText, failedUrl);
 }
 
 void Client::OnTakeFocus(CefRefPtr<CefBrowser> browser, bool next)
 {
     LOG(INFO) << "Browser unfocused " << browser->GetIdentifier();
 
-    IPC::Singleton.QueueWork(
-        [browser]()
-        {
-            IPC::Singleton.NotifyWindowUnfocused(browser);
-        });
+    IPC::Singleton.NotifyWindowUnfocused(browser);
 }
 
 void Client::OnGotFocus(CefRefPtr<CefBrowser> browser)
 {
     LOG(INFO) << "Browser focused " << browser->GetIdentifier();
 
-    IPC::Singleton.QueueWork(
-        [browser]()
-        {
-            IPC::Singleton.NotifyWindowFocused(browser);
-        });
+    justcef_view::OnHostGotFocus(browser);
+
+    IPC::Singleton.NotifyWindowFocused(browser);
 }
 
 void Client::OnBeforeContextMenu(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefRefPtr<CefContextMenuParams> params, CefRefPtr<CefMenuModel> model)
@@ -530,7 +535,8 @@ bool Client::OnKeyEvent(CefRefPtr<CefBrowser> browser, const CefKeyEvent& event,
             if (browser_view)
             {
                 CefRefPtr<CefWindow> window = browser_view->GetWindow();
-                window->SetFullscreen(!window->IsFullscreen());
+                if (window)
+                    window->SetFullscreen(!window->IsFullscreen());
                 return true;
             }
             else
@@ -562,32 +568,23 @@ bool Client::EnsureDevToolsRegistration(CefRefPtr<CefBrowser> browser)
     return true;
 }
 
-std::optional<std::future<std::optional<IPCDevToolsMethodResult>>> Client::ExecuteDevToolsMethod(CefRefPtr<CefBrowser> browser, std::string& method,
-                                                                                                 CefRefPtr<CefDictionaryValue> params)
+bool Client::ExecuteDevToolsMethodAsync(CefRefPtr<CefBrowser> browser, const std::string& method, CefRefPtr<CefDictionaryValue> params,
+                                        std::function<void(bool success, std::string result)> callback)
 {
     CEF_REQUIRE_UI_THREAD();
 
     if (!EnsureDevToolsRegistration(browser))
-        return std::nullopt;
+        return false;
 
     int messageId = ++_messageIdGenerator;
-    std::shared_ptr<std::promise<std::optional<IPCDevToolsMethodResult>>> promise = std::make_shared<std::promise<std::optional<IPCDevToolsMethodResult>>>();
-    _devToolsMethodResults[messageId] = promise;
-    LOG(INFO) << "ExecuteDevToolsMethod (identifier = " << browser->GetIdentifier() << ", method = " << method << ", messageId = " << messageId << ")";
-    browser->GetHost()->ExecuteDevToolsMethod(messageId, method, params);
-    return promise->get_future();
-}
+    _devToolsMethodCallbacks[messageId] = std::move(callback);
+    if (browser->GetHost()->ExecuteDevToolsMethod(messageId, method, params) == 0)
+    {
+        _devToolsMethodCallbacks.erase(messageId);
+        return false;
+    }
 
-std::optional<std::future<std::optional<IPCDevToolsMethodResult>>> Client::ExecuteDevToolsMethod(CefRefPtr<CefBrowser> browser, std::string& method, std::string& json)
-{
-    LOG(INFO) << "ExecuteDevToolsMethod (identifier = " << browser->GetIdentifier() << ", method = " << method << ")";
-
-    CefRefPtr<CefValue> value = CefParseJSON(json, cef_json_parser_options_t::JSON_PARSER_RFC);
-    if (value && value->GetType() == VTYPE_DICTIONARY)
-        return ExecuteDevToolsMethod(browser, method, value->GetDictionary());
-
-    LOG(ERROR) << "Failed to parse JSON or JSON is not a dictionary.";
-    return std::nullopt;
+    return true;
 }
 
 void Client::OnDevToolsMethodResult(CefRefPtr<CefBrowser> browser, int message_id, bool success, const void* result, size_t result_size)
@@ -596,19 +593,13 @@ void Client::OnDevToolsMethodResult(CefRefPtr<CefBrowser> browser, int message_i
 
     CEF_REQUIRE_UI_THREAD();
 
-    auto itr = _devToolsMethodResults.find(message_id);
-    auto pPromise = itr->second;
-    if (itr == _devToolsMethodResults.end())
-        return;
-
-    _devToolsMethodResults.erase(itr);
-
-    IPCDevToolsMethodResult r;
-    r.messageId = message_id;
-    r.success = success;
-    r.result = std::make_shared<std::vector<uint8_t>>(result_size);
-    memcpy(r.result->data(), result, result_size);
-    pPromise->set_value(r);
+    auto callbackItr = _devToolsMethodCallbacks.find(message_id);
+    if (callbackItr != _devToolsMethodCallbacks.end())
+    {
+        auto callback = std::move(callbackItr->second);
+        _devToolsMethodCallbacks.erase(callbackItr);
+        callback(success, std::string(static_cast<const char*>(result), result_size));
+    }
 }
 
 void Client::OnDevToolsEvent(CefRefPtr<CefBrowser> browser, const CefString& method, const void* params, size_t params_size)
@@ -623,11 +614,7 @@ void Client::OnDevToolsEvent(CefRefPtr<CefBrowser> browser, const CefString& met
         }
     }
 
-    IPC::Singleton.QueueWork(
-        [p = std::vector<uint8_t>(static_cast<const uint8_t*>(params), static_cast<const uint8_t*>(params) + params_size), m = CefString(method), browser]()
-        {
-            IPC::Singleton.NotifyWindowDevToolsEvent(browser, m, p.data(), p.size());
-        });
+    IPC::Singleton.NotifyWindowDevToolsEvent(browser, method, static_cast<const uint8_t*>(params), params_size);
 }
 
 
@@ -700,28 +687,41 @@ static bool ParseContentRange(const std::string& value, int64_t& start, int64_t&
 class ProxyResourceHandler : public CefResourceHandler
 {
 public:
-    ProxyResourceHandler(int32_t identifier, CefRefPtr<CefRequest> request) : _identifier(identifier), _request(request), _offset(0) {}
+    ProxyResourceHandler(int32_t identifier, CefRefPtr<CefRequest> request, std::chrono::milliseconds openTimeout)
+        : _identifier(identifier), _request(request), _offset(0), _openTimeout(openTimeout)
+    {
+    }
 
     bool Open(CefRefPtr<CefRequest> request, bool& handle_request, CefRefPtr<CefCallback> callback) override
     {
-        std::unique_ptr<IPCProxyResponse> response = IPC::Singleton.WindowProxyRequest(_identifier, request);
-        if (!response)
+        handle_request = false;
         {
-            // If there's no response, indicate that we're not handling the request
-            // TODO: The not handled flow doesn't seem to work yet
-            handle_request = false;
-            return true;
+            std::lock_guard<std::mutex> lk(_mutex);
+            _openCb = callback;
         }
 
-        handle_request = true;
-        _response = std::move(response);
+        CefRefPtr<ProxyResourceHandler> self(this);
+        ipc::CallHandle call = IPC::Singleton.WindowProxyRequest(_identifier, request, _openTimeout,
+                                                                 [self](ipc::StatusCode status, std::unique_ptr<IPCProxyResponse> response)
+                                                                 {
+                                                                     auto shared = std::make_shared<std::unique_ptr<IPCProxyResponse>>(std::move(response));
+                                                                     CefPostTask(TID_IO, base::BindOnce(&ProxyResourceHandler::OnResponseOnIo, self, status, shared));
+                                                                 });
 
-        InitRangeState();
+        bool canceled = false;
+        {
+            std::lock_guard<std::mutex> lk(_mutex);
+            _call = call;
+            canceled = _canceled;
+        }
+        if (canceled)
+            call.Cancel();
         return true;
     }
 
     void GetResponseHeaders(CefRefPtr<CefResponse> response, int64_t& response_length, CefString& redirectUrl) override
     {
+        std::lock_guard<std::mutex> lk(_mutex);
         if (!_response)
             return;
 
@@ -742,22 +742,44 @@ public:
             response_length = _entityTotal;
         else if (_response->body)
             response_length = static_cast<int64_t>((*_response->body).size());
-        else if (_response->lengthMode == 0)
-            response_length = _response->bodyLength;
         else
-            response_length = -1;
+            response_length = _response->bodyLength;
     }
 
     bool Skip(int64_t bytes_to_skip, int64_t& bytes_skipped, CefRefPtr<CefResourceSkipCallback>) override
     {
-        if (!_response || bytes_to_skip < 0)
+        std::lock_guard<std::mutex> lk(_mutex);
+        if (!_response || _canceled || bytes_to_skip < 0)
         {
             bytes_skipped = -2;
             return false;
         }
 
-        const int64_t skipped = std::min<int64_t>(bytes_to_skip, _skipRemaining);
+        int64_t skipped = std::min<int64_t>(bytes_to_skip, _skipRemaining);
         _skipRemaining -= skipped;
+
+        int64_t remaining = bytes_to_skip - skipped;
+        if (remaining > 0 && _response->body)
+        {
+            const int64_t available = static_cast<int64_t>((*_response->body).size() - _offset);
+            const int64_t count = std::min<int64_t>(remaining, available);
+            _offset += static_cast<size_t>(count);
+            skipped += count;
+            remaining -= count;
+        }
+        else if (remaining > 0 && _response->bodyStream)
+        {
+            _discardRemaining += remaining;
+            skipped += remaining;
+            remaining = 0;
+        }
+
+        if (skipped == 0)
+        {
+            bytes_skipped = -2;
+            return false;
+        }
+
         bytes_skipped = skipped;
         return true;
     }
@@ -766,44 +788,63 @@ public:
     {
         bytes_read = 0;
 
-        if (!_response)
-            return false;
-
-        if (_response->body)
+        std::shared_ptr<ipc::IncomingStream> stream;
         {
-            if (_offset < (*_response->body).size())
-            {
-                size_t bytes_to_copy = std::min(static_cast<size_t>(bytes_to_read), (*_response->body).size() - _offset);
-                memcpy(data_out, (*_response->body).data() + _offset, bytes_to_copy);
-                _offset += bytes_to_copy;
-                bytes_read = static_cast<int>(bytes_to_copy);
-                return true;
-            }
-            return false;
-        }
+            std::lock_guard<std::mutex> lk(_mutex);
+            if (!_response || _canceled)
+                return false;
 
-        if (_response->bodyStream)
-        {
-            auto stream = _response->bodyStream;
-            size_t n = 0;
-            switch (PumpOnce(stream, data_out, static_cast<size_t>(bytes_to_read), n))
+            if (_response->body)
             {
-            case PumpState::Delivered:
-                bytes_read = static_cast<int>(n);
-                return true;
-            case PumpState::NeedMore:
-            {
-                _pendingData = data_out;
-                _pendingSize = static_cast<size_t>(bytes_to_read);
-                _pendingCb = callback;
-                CefRefPtr<ProxyResourceHandler> self(this);
-                stream->RegisterReadWakeup([self]() { self->PumpAsync(); });
-                return true;
-            }
-            case PumpState::Eof:
+                if (_offset < (*_response->body).size())
+                {
+                    size_t bytes_to_copy = std::min(static_cast<size_t>(bytes_to_read), (*_response->body).size() - _offset);
+                    memcpy(data_out, (*_response->body).data() + _offset, bytes_to_copy);
+                    _offset += bytes_to_copy;
+                    bytes_read = static_cast<int>(bytes_to_copy);
+                    return true;
+                }
                 return false;
             }
-            return false;
+
+            stream = _response->bodyStream;
+        }
+
+        if (stream)
+        {
+            CefRefPtr<ProxyResourceHandler> self(this);
+            while (true)
+            {
+                size_t n = 0;
+                switch (PumpOnce(stream, data_out, static_cast<size_t>(bytes_to_read), n))
+                {
+                case PumpState::Delivered:
+                    bytes_read = static_cast<int>(n);
+                    return true;
+                case PumpState::NeedMore:
+                {
+                    {
+                        std::lock_guard<std::mutex> lk(_mutex);
+                        if (_canceled)
+                            return false;
+                        _pendingData = data_out;
+                        _pendingSize = static_cast<size_t>(bytes_to_read);
+                        _pendingCb = callback;
+                    }
+                    if (stream->SetWakeup([self]() { self->PumpAsync(); }))
+                        return true;
+
+                    std::lock_guard<std::mutex> lk(_mutex);
+                    _pendingCb = nullptr;
+                    break;
+                }
+                case PumpState::Eof:
+                    return false;
+                case PumpState::Failed:
+                    bytes_read = -2;
+                    return false;
+                }
+            }
         }
 
         return false;
@@ -811,18 +852,66 @@ public:
 
     void Cancel() override
     {
-        if (_response && _response->bodyStream)
+        ipc::CallHandle call;
+        std::shared_ptr<ipc::IncomingStream> stream;
         {
-            const uint32_t id = _response->bodyStream->GetIdentifier();
-            LOG(INFO) << "Canceling stream " << id << ".";
-            _response->bodyStream->MarkCanceled();
-            IPC::Singleton.CloseStream(id);
-            _response->bodyStream = nullptr;
+            std::lock_guard<std::mutex> lk(_mutex);
+            _canceled = true;
+            call = _call;
+            _openCb = nullptr;
+            _pendingCb = nullptr;
+            if (_response)
+                stream = _response->bodyStream;
         }
-        _pendingCb = nullptr;
+
+        call.Cancel();
+        if (stream)
+        {
+            LOG(INFO) << "Canceling stream " << stream->Id() << ".";
+            stream->Cancel();
+        }
     }
 
 private:
+    void OnResponseOnIo(ipc::StatusCode status, std::shared_ptr<std::unique_ptr<IPCProxyResponse>> response)
+    {
+        OnResponse(status, std::move(*response));
+    }
+
+    void OnResponse(ipc::StatusCode status, std::unique_ptr<IPCProxyResponse> response)
+    {
+        CefRefPtr<CefCallback> callback;
+        bool handled = false;
+        {
+            std::lock_guard<std::mutex> lk(_mutex);
+            callback = _openCb;
+            _openCb = nullptr;
+            if (_canceled)
+            {
+                if (response && response->bodyStream)
+                    response->bodyStream->Cancel();
+                return;
+            }
+
+            _response = std::move(response);
+            handled = status == ipc::StatusCode::Ok && _response;
+            InitRangeState();
+        }
+
+        if (!callback)
+            return;
+
+        if (handled)
+        {
+            callback->Continue();
+            return;
+        }
+
+        if (status != ipc::StatusCode::NotHandled && status != ipc::StatusCode::Canceled)
+            LOG(ERROR) << "Proxy request failed (" << ipc::StatusName(status) << ").";
+        callback->Cancel();
+    }
+
     void InitRangeState()
     {
         if (!_response)
@@ -843,68 +932,104 @@ private:
     {
         Delivered,
         NeedMore,
-        Eof
+        Eof,
+        Failed
     };
 
-    PumpState PumpOnce(const std::shared_ptr<DataStream>& stream, void* out, size_t size, size_t& n)
+    PumpState PumpOnce(const std::shared_ptr<ipc::IncomingStream>& stream, void* out, size_t size, size_t& n)
     {
-        n = stream->ReadSome(reinterpret_cast<uint8_t*>(out), size);
-        if (n > 0)
+        while (_discardRemaining > 0)
+        {
+            uint8_t scratch[16384];
+            const size_t want = static_cast<size_t>(std::min<int64_t>(_discardRemaining, static_cast<int64_t>(sizeof(scratch))));
+            size_t dropped = 0;
+            const ipc::IncomingStream::ReadResult result = stream->Read(scratch, want, dropped);
+            if (result == ipc::IncomingStream::ReadResult::Data)
+            {
+                _streamed += dropped;
+                _discardRemaining -= static_cast<int64_t>(dropped);
+                continue;
+            }
+            if (result == ipc::IncomingStream::ReadResult::Pending)
+                return PumpState::NeedMore;
+            if (result == ipc::IncomingStream::ReadResult::End)
+            {
+                CheckStreamIntegrity(stream);
+                return PumpState::Eof;
+            }
+            return PumpState::Failed;
+        }
+
+        switch (stream->Read(reinterpret_cast<uint8_t*>(out), size, n))
+        {
+        case ipc::IncomingStream::ReadResult::Data:
+            _streamed += n;
             return PumpState::Delivered;
-        if (stream->State() == StreamState::Active)
+        case ipc::IncomingStream::ReadResult::Pending:
             return PumpState::NeedMore;
-        CheckStreamIntegrity(stream);
-        return PumpState::Eof;
+        case ipc::IncomingStream::ReadResult::End:
+            CheckStreamIntegrity(stream);
+            return PumpState::Eof;
+        case ipc::IncomingStream::ReadResult::Error:
+            break;
+        }
+        return PumpState::Failed;
     }
 
     void PumpAsync()
     {
-        auto stream = _response ? _response->bodyStream : nullptr;
-        if (!_pendingCb || !stream)
-            return;
+        CefRefPtr<ProxyResourceHandler> self(this);
+        CefRefPtr<CefResourceReadCallback> cb;
+        int result = 0;
+        {
+            std::lock_guard<std::mutex> lk(_mutex);
+            auto stream = _response ? _response->bodyStream : nullptr;
+            if (_canceled || !_pendingCb || !stream)
+                return;
 
-        size_t n = 0;
-        switch (PumpOnce(stream, _pendingData, _pendingSize, n))
-        {
-        case PumpState::Delivered:
-        {
-            auto cb = _pendingCb;
+            while (true)
+            {
+                size_t n = 0;
+                const PumpState state = PumpOnce(stream, _pendingData, _pendingSize, n);
+                if (state == PumpState::NeedMore)
+                {
+                    if (stream->SetWakeup([self]() { self->PumpAsync(); }))
+                        return;
+                    continue;
+                }
+
+                result = state == PumpState::Delivered ? static_cast<int>(n) : state == PumpState::Failed ? -2 : 0;
+                break;
+            }
+
+            cb = _pendingCb;
             _pendingCb = nullptr;
-            cb->Continue(static_cast<int>(n));
-            return;
         }
-        case PumpState::NeedMore:
-        {
-            CefRefPtr<ProxyResourceHandler> self(this);
-            stream->RegisterReadWakeup([self]() { self->PumpAsync(); });
-            return;
-        }
-        case PumpState::Eof:
-        {
-            auto cb = _pendingCb;
-            _pendingCb = nullptr;
-            cb->Continue(0);
-            return;
-        }
-        }
+
+        cb->Continue(result);
     }
 
-    void CheckStreamIntegrity(const std::shared_ptr<DataStream>& stream)
+    void CheckStreamIntegrity(const std::shared_ptr<ipc::IncomingStream>& stream)
     {
-        if (!_response || _response->lengthMode != 0)
+        if (stream->Length() < 0)
             return;
-        if (stream->State() != StreamState::Completed)
-            return;
-        const uint64_t got = stream->ConsumedTotal();
-        const uint64_t want = stream->FinalTotal();
+        const uint64_t got = _streamed;
+        const uint64_t want = static_cast<uint64_t>(stream->Length());
         if (got != want)
-            LOG(ERROR) << "Stream " << stream->GetIdentifier() << " truncated: consumed " << got << " of declared " << want << " bytes.";
+            LOG(ERROR) << "Stream " << stream->Id() << " truncated: consumed " << got << " of declared " << want << " bytes.";
     }
 
     int32_t _identifier;
     CefRefPtr<CefRequest> _request;
     std::unique_ptr<IPCProxyResponse> _response;
     size_t _offset;
+    std::chrono::milliseconds _openTimeout;
+    std::mutex _mutex;
+    ipc::CallHandle _call;
+    CefRefPtr<CefCallback> _openCb;
+    bool _canceled = false;
+    std::atomic<uint64_t> _streamed{0};
+    std::atomic<int64_t> _discardRemaining{0};
 
     void* _pendingData = nullptr;
     size_t _pendingSize = 0;
@@ -919,13 +1044,13 @@ private:
 
 CefRefPtr<CefResourceHandler> Client::GetResourceHandler(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefRefPtr<CefRequest> request)
 {
-    if (settings.proxyRequests)
-        return new ProxyResourceHandler(browser->GetIdentifier(), request);
+    if (_proxyRequests)
+        return new ProxyResourceHandler(browser->GetIdentifier(), request, std::chrono::milliseconds(settings.proxyOpenTimeoutMs));
 
     {
         std::lock_guard<std::mutex> lk(_proxyRequestsSetMutex);
         if (_proxyRequestsSet.find(request->GetURL()) != _proxyRequestsSet.end())
-            return new ProxyResourceHandler(browser->GetIdentifier(), request);
+            return new ProxyResourceHandler(browser->GetIdentifier(), request, std::chrono::milliseconds(settings.proxyOpenTimeoutMs));
     }
 
     {
@@ -943,7 +1068,7 @@ CefRefPtr<CefResourceHandler> Client::GetResourceHandler(CefRefPtr<CefBrowser> b
     {
         std::lock_guard<std::mutex> lk(_proxyCacheMutex);
         if (_proxyCache.find(req_host) != _proxyCache.end())
-            return new ProxyResourceHandler(browser->GetIdentifier(), request);
+            return new ProxyResourceHandler(browser->GetIdentifier(), request, std::chrono::milliseconds(settings.proxyOpenTimeoutMs));
         if (_negativeProxyCache.find(req_host) != _negativeProxyCache.end())
             return nullptr; // Known non-matching host
     }
@@ -982,12 +1107,13 @@ CefRefPtr<CefResourceHandler> Client::GetResourceHandler(CefRefPtr<CefBrowser> b
         }
     }
 
-    return matchedDomain ? new ProxyResourceHandler(browser->GetIdentifier(), request) : nullptr;
+    return matchedDomain ? new ProxyResourceHandler(browser->GetIdentifier(), request, std::chrono::milliseconds(settings.proxyOpenTimeoutMs)) : nullptr;
 }
 
 cef_return_value_t Client::OnBeforeResourceLoad(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefRefPtr<CefRequest> request, CefRefPtr<CefCallback> callback)
 {
     int requestIdentifier = (int)request->GetIdentifier();
+    bool isPending = false;
     auto modifyRequestIfNeeded = [&](const std::string& url)
     {
         bool isModified = false;
@@ -999,10 +1125,26 @@ cef_return_value_t Client::OnBeforeResourceLoad(CefRefPtr<CefBrowser> browser, C
         }
 
         if (!isModified)
-            IPC::Singleton.WindowModifyRequest(browser->GetIdentifier(), request, settings.modifyRequestBody);
+        {
+            const bool cancelOnTimeout = settings.modifyTimeoutPolicy == ModifyTimeoutPolicy::Cancel;
+            ipc::CallHandle call = IPC::Singleton.WindowModifyRequest(browser->GetIdentifier(), request, _modifyRequestBody,
+                                                                      std::chrono::milliseconds(settings.modifyTimeoutMs),
+                                                                      [callback, cancelOnTimeout](ipc::StatusCode status)
+                                                                      {
+                                                                          if (status == ipc::StatusCode::Canceled)
+                                                                              return;
+                                                                          if (status == ipc::StatusCode::Timeout && cancelOnTimeout)
+                                                                              callback->Cancel();
+                                                                          else
+                                                                              callback->Continue();
+                                                                      });
+            std::lock_guard<std::mutex> lock(_pendingModifiesMutex);
+            _pendingModifies[requestIdentifier] = call;
+            isPending = true;
+        }
     };
 
-    if (settings.modifyRequests)
+    if (_modifyRequests)
     {
         modifyRequestIfNeeded(request->GetURL());
     }
@@ -1015,20 +1157,32 @@ cef_return_value_t Client::OnBeforeResourceLoad(CefRefPtr<CefBrowser> browser, C
         }
     }
 
-    return RV_CONTINUE;
+    return isPending ? RV_CONTINUE_ASYNC : RV_CONTINUE;
 }
 
 void Client::OnResourceLoadComplete(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefRefPtr<CefRequest> request, CefRefPtr<CefResponse> response,
                                     URLRequestStatus status, int64_t received_content_length)
 {
-    std::lock_guard<std::mutex> lock(_modifiedRequestsMutex);
     int requestIdentifier = (int)request->GetIdentifier();
+    ipc::CallHandle pendingModify;
+    {
+        std::lock_guard<std::mutex> lock(_pendingModifiesMutex);
+        auto it = _pendingModifies.find(requestIdentifier);
+        if (it != _pendingModifies.end())
+        {
+            pendingModify = it->second;
+            _pendingModifies.erase(it);
+        }
+    }
+    pendingModify.Cancel();
+
+    std::lock_guard<std::mutex> lock(_modifiedRequestsMutex);
     _modifiedRequests.erase(requestIdentifier);
 }
 
 void Client::OverrideTitle(CefRefPtr<CefBrowser> browser, const std::string& title)
 {
-    LOG(INFO) << "Override title: " << *settings.title;
+    LOG(INFO) << "Override title: " << title;
     _titleOverride = title;
     SetTitle(browser, title);
 }
@@ -1048,7 +1202,7 @@ void Client::SetTitle(CefRefPtr<CefBrowser> browser, const std::string& title)
 
 void Client::OverrideIcon(CefRefPtr<CefBrowser> browser, const std::string& iconPath)
 {
-    LOG(INFO) << "Override icon: " << *settings.iconPath;
+    LOG(INFO) << "Override icon: " << iconPath;
     CefRefPtr<CefBrowserView> browserView = CefBrowserView::GetForBrowser(browser);
     if (browserView)
     {
@@ -1200,33 +1354,33 @@ void Client::RemoveDevToolsEventMethod(CefRefPtr<CefBrowser> browser, const std:
     }
 }
 
-void Client::StartBridgeRpcCall(CefRefPtr<CefBrowser> browser, const std::string& method, const std::string& payload_json, uint32_t controllerRequestId)
+void Client::StartBridgeRpcCall(CefRefPtr<CefBrowser> browser, const std::string& method, const std::string& payload_json, ipc::Reply reply)
 {
     CEF_REQUIRE_UI_THREAD();
 
     if (!settings.bridgeEnabled)
     {
-        QueueClientBridgeRpcResponse(controllerRequestId, false, "null", "Bridge RPC is not enabled for this window.");
+        QueueClientBridgeRpcResponse(std::move(reply), false, "null", "Bridge RPC is not enabled for this window.");
         return;
     }
 
     if (!browser)
     {
-        QueueClientBridgeRpcResponse(controllerRequestId, false, "null", "Bridge RPC browser is not available.");
+        QueueClientBridgeRpcResponse(std::move(reply), false, "null", "Bridge RPC browser is not available.");
         return;
     }
 
     CefRefPtr<CefFrame> frame = browser->GetMainFrame();
     if (!frame)
     {
-        QueueClientBridgeRpcResponse(controllerRequestId, false, "null", "Bridge RPC main frame is not available.");
+        QueueClientBridgeRpcResponse(std::move(reply), false, "null", "Bridge RPC main frame is not available.");
         return;
     }
 
     const int32_t request_id = ++_bridgeRpcRequestIdGenerator;
     {
         std::lock_guard<std::mutex> lk(_bridgeRpcResultsMutex);
-        _bridgeRpcResults[request_id] = controllerRequestId;
+        _bridgeRpcResults[request_id] = std::move(reply);
     }
 
     SendBridgeRpcCallMessage(frame, PID_RENDERER, kBridgeRpcCallJsMessageName, request_id, method, payload_json);
@@ -1234,7 +1388,7 @@ void Client::StartBridgeRpcCall(CefRefPtr<CefBrowser> browser, const std::string
 
 void Client::CompleteBridgeRpcCall(int32_t request_id, bool success, const std::optional<std::string>& result_json, const std::optional<std::string>& error)
 {
-    uint32_t controller_request_id = 0;
+    ipc::Reply controller_request_id;
     {
         std::lock_guard<std::mutex> lk(_bridgeRpcResultsMutex);
         auto it = _bridgeRpcResults.find(request_id);
@@ -1243,16 +1397,16 @@ void Client::CompleteBridgeRpcCall(int32_t request_id, bool success, const std::
             return;
         }
 
-        controller_request_id = it->second;
+        controller_request_id = std::move(it->second);
         _bridgeRpcResults.erase(it);
     }
 
-    QueueClientBridgeRpcResponse(controller_request_id, success, result_json.value_or("null"), error.value_or(""));
+    QueueClientBridgeRpcResponse(std::move(controller_request_id), success, result_json.value_or("null"), error.value_or(""));
 }
 
 void Client::FailAllBridgeRpcCalls(const std::string& error)
 {
-    std::unordered_map<int32_t, uint32_t> pending_calls;
+    std::unordered_map<int32_t, ipc::Reply> pending_calls;
     {
         std::lock_guard<std::mutex> lk(_bridgeRpcResultsMutex);
         pending_calls.swap(_bridgeRpcResults);
@@ -1260,8 +1414,28 @@ void Client::FailAllBridgeRpcCalls(const std::string& error)
 
     for (auto& entry : pending_calls)
     {
-        QueueClientBridgeRpcResponse(entry.second, false, "null", error);
+        QueueClientBridgeRpcResponse(std::move(entry.second), false, "null", error);
     }
+}
+
+void Client::CancelPendingModifies()
+{
+    std::unordered_map<int, ipc::CallHandle> pending;
+    {
+        std::lock_guard<std::mutex> lock(_pendingModifiesMutex);
+        pending.swap(_pendingModifies);
+    }
+
+    for (auto& entry : pending)
+        entry.second.Cancel();
+}
+
+void Client::CancelHostCalls()
+{
+    auto calls = std::move(_hostCalls);
+    _hostCalls.clear();
+    for (auto& entry : calls)
+        entry.second.Cancel();
 }
 
 bool Client::OnConsoleMessage(CefRefPtr<CefBrowser> browser, cef_log_severity_t level, const CefString& message, const CefString& source, int line)
@@ -1274,12 +1448,21 @@ bool Client::OnConsoleMessage(CefRefPtr<CefBrowser> browser, cef_log_severity_t 
 bool Client::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefProcessId source_process, CefRefPtr<CefProcessMessage> message)
 {
     const std::string message_name = message->GetName();
+    if (message_name.rfind(kViewMessagePrefix, 0) == 0)
+        return justcef_view::HandleHostProcessMessage(browser, frame, message);
+
     if (message_name == kOskMsg)
     {
         LOG(INFO) << "OnProcessMessageReceived (name = " << message_name << ", size = " << message->GetArgumentList()->GetSize() << ").";
         const int show = message->GetArgumentList()->GetInt(0);
         if (!show)
         {
+            if (justcef_view::IsFocusInView(browser))
+            {
+                LOG(INFO) << "Steam dismiss OSK ignored because focus is in a view.";
+                return true;
+            }
+
             LOG(INFO) << "Steam dismiss OSK.";
             Steam::Instance().DismissOsk();
             return true;
@@ -1287,7 +1470,8 @@ bool Client::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser, CefRefPtr<C
 
         LOG(INFO) << "Steam show OSK.";
 
-        const int x = message->GetArgumentList()->GetInt(1), y = message->GetArgumentList()->GetInt(2);
+        int x = message->GetArgumentList()->GetInt(1), y = message->GetArgumentList()->GetInt(2);
+        justcef_view::TranslateViewOskRect(browser, x, y);
         const int w = message->GetArgumentList()->GetInt(3), h = message->GetArgumentList()->GetInt(4);
         const auto mode = static_cast<EFloatingGamepadTextInputMode>(message->GetArgumentList()->GetInt(5));
         if (Steam::Instance().ShouldShowOsk())
@@ -1315,14 +1499,19 @@ bool Client::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser, CefRefPtr<C
 
         const int32_t browser_identifier = browser ? browser->GetIdentifier() : 0;
 
-        IPC::Singleton.QueueBackgroundWork(
-            [request_id, method, payload_json, browser_identifier]()
+        CefRefPtr<Client> self(this);
+        _hostCalls[request_id] = IPC::Singleton.WindowBridgeRpc(
+            browser_identifier, method, payload_json,
+            [self, request_id, browser_identifier](IPCBridgeRpcResult result)
             {
-                IPCBridgeRpcResult result = IPC::Singleton.WindowBridgeRpc(browser_identifier, method, payload_json);
-
                 CefPostTask(TID_UI, base::BindOnce(
-                                        [](int32_t browser_identifier, int32_t request_id, IPCBridgeRpcResult result)
+                                        [](CefRefPtr<Client> self, int32_t browser_identifier, int32_t request_id, IPCBridgeRpcResult result)
                                         {
+                                            if (self->_hostCalls.erase(request_id) == 0)
+                                            {
+                                                return;
+                                            }
+
                                             CefRefPtr<CefBrowser> browser = ClientManager::GetInstance()->AcquirePointer(browser_identifier);
                                             if (!browser)
                                             {
@@ -1338,7 +1527,7 @@ bool Client::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser, CefRefPtr<C
                                             SendBridgeRpcResultMessage(frame, PID_RENDERER, kBridgeRpcCallHostResultMessageName, request_id, result.success,
                                                                        result.success ? result.result_json.value_or("null") : result.error.value_or("Bridge RPC failed."));
                                         },
-                                        browser_identifier, request_id, result));
+                                        self, browser_identifier, request_id, result));
             });
 
         return true;
@@ -1362,10 +1551,59 @@ bool Client::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser, CefRefPtr<C
     if (message_name == kBridgeRpcContextReleasedMessageName)
     {
         FailAllBridgeRpcCalls("Bridge RPC failed because the JavaScript context was released.");
+        CancelHostCalls();
         return true;
     }
 
     return false;
+}
+
+void Client::OnRenderProcessTerminated(CefRefPtr<CefBrowser> browser, TerminationStatus status, int error_code, const CefString& error_string)
+{
+    LOG(ERROR) << "Render process terminated (identifier = " << browser->GetIdentifier() << ", status = " << status << ", error_code = " << error_code << ").";
+
+    if (IsPrimaryBrowser(browser))
+    {
+        FailAllBridgeRpcCalls("Bridge RPC failed because the render process terminated.");
+        CancelHostCalls();
+    }
+
+    justcef_view::OnHostBrowserGone(browser);
+}
+
+bool Client::OnJSDialog(CefRefPtr<CefBrowser> browser, const CefString& origin_url, JSDialogType dialog_type, const CefString& message_text,
+                        const CefString& default_prompt_text, CefRefPtr<CefJSDialogCallback> callback, bool& suppress_message)
+{
+    justcef_view::OnHostDialogStateChanged(browser, true);
+    return false;
+}
+
+bool Client::OnBeforeUnloadDialog(CefRefPtr<CefBrowser> browser, const CefString& message_text, bool is_reload, CefRefPtr<CefJSDialogCallback> callback)
+{
+    justcef_view::OnHostDialogStateChanged(browser, true);
+    return false;
+}
+
+void Client::OnResetDialogState(CefRefPtr<CefBrowser> browser)
+{
+    justcef_view::OnHostDialogStateChanged(browser, false);
+}
+
+void Client::OnDialogClosed(CefRefPtr<CefBrowser> browser)
+{
+    justcef_view::OnHostDialogStateChanged(browser, false);
+}
+
+void Client::OnFrameDetached(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame)
+{
+    if (frame && frame->IsMain())
+        justcef_view::OnHostFrameGone(browser, frame);
+}
+
+void Client::OnMainFrameChanged(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> old_frame, CefRefPtr<CefFrame> new_frame)
+{
+    if (old_frame)
+        justcef_view::OnHostFrameGone(browser, old_frame);
 }
 
 // TODO: Implement Minimized, Maximized, Restored, KeyboardEvent, Resized, Moved

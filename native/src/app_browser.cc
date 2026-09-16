@@ -10,9 +10,39 @@
 #include "include/views/cef_browser_view.h"
 #include "include/views/cef_window.h"
 
+#include <cstdlib>
+#include <string>
+
 /*#if defined(OS_LINUX)
 #include <gtk/gtk.h>
 #endif*/
+
+#if defined(OS_LINUX)
+static bool EnvironmentContains(const char* name, const char* needle)
+{
+    const char* value = std::getenv(name);
+    return value && std::string(value).find(needle) != std::string::npos;
+}
+
+static bool ShouldEnableWaylandIme(CefRefPtr<CefCommandLine> command_line)
+{
+    if (command_line->HasSwitch("enable-wayland-ime") || command_line->HasSwitch("wayland-text-input-version") || command_line->HasSwitch("disable-wayland-ime"))
+        return false;
+
+    const char* waylandDisplay = std::getenv("WAYLAND_DISPLAY");
+    if (!waylandDisplay || !*waylandDisplay)
+        return false;
+
+    if (command_line->HasSwitch("ozone-platform") && command_line->GetSwitchValue("ozone-platform").ToString() != "wayland")
+        return false;
+
+    if (command_line->HasSwitch("ozone-platform-hint") && command_line->GetSwitchValue("ozone-platform-hint").ToString() == "x11")
+        return false;
+
+    return EnvironmentContains("XMODIFIERS", "@im=") || EnvironmentContains("GTK_IM_MODULE", "fcitx") || EnvironmentContains("GTK_IM_MODULE", "ibus") ||
+           EnvironmentContains("QT_IM_MODULE", "fcitx") || EnvironmentContains("QT_IM_MODULE", "ibus") || EnvironmentContains("XDG_CURRENT_DESKTOP", "GNOME");
+}
+#endif
 
 class SimpleWindowDelegate : public CefWindowDelegate
 {
@@ -96,6 +126,14 @@ public:
             // Disable the macOS keychain prompt. Cookies will not be encrypted.
             command_line->AppendSwitch("use-mock-keychain");
 #endif
+#if defined(OS_LINUX)
+            if (ShouldEnableWaylandIme(command_line))
+            {
+                LOG(INFO) << "Input method detected on Wayland, enabling Wayland IME (text-input-v3).";
+                command_line->AppendSwitch("enable-wayland-ime");
+                command_line->AppendSwitchWithValue("wayland-text-input-version", "3");
+            }
+#endif
         }
     }
 
@@ -120,13 +158,9 @@ public:
         {
             IPC::Singleton.Start();
 
-            IPC::Singleton.QueueWork(
-                []()
-                {
-                    LOG(INFO) << "NotifyReady before";
-                    IPC::Singleton.NotifyReady();
-                    LOG(INFO) << "NotifyReady after";
-                });
+            LOG(INFO) << "NotifyReady before";
+            IPC::Singleton.NotifyReady();
+            LOG(INFO) << "NotifyReady after";
         }
         else
         {
@@ -201,6 +235,7 @@ public:
             windowCreate.shown = true;
             windowCreate.title = title;
             windowCreate.url = url;
+            windowCreate.viewsEnabled = command_line->HasSwitch("views-enabled");
             CreateBrowserWindow(windowCreate);
         }
         else

@@ -1,0 +1,35 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>View page</title>
+<style>
+html,body{margin:0;height:100%;background:#123;color:#fff;font:14px sans-serif}
+body{box-sizing:border-box;border:2px solid #0f0;padding:8px}
+body.long{height:auto;min-height:100%}
+#name{font-weight:bold;color:#8f8}
+#log{white-space:pre;font-size:11px}
+.line{padding:4px 0;border-bottom:1px solid #234}
+</style></head>
+<body>
+<div><span id="name"></span> Size: <span id="size"></span></div>
+<input id="text" placeholder="type here">
+<a href="https://example.com" target="_blank">popup link</a>
+<div id="log"></div>
+<div id="lines"></div>
+<script>
+const params = new URLSearchParams(location.search);
+const name = location.search.slice(1).split('&')[0] || 'view';
+document.getElementById('name').textContent = name;
+if (params.has('long')) {
+  document.body.classList.add('long');
+  const lines = document.getElementById('lines');
+  for (let i = 1; i <= 80; i++) {
+    const div = document.createElement('div');
+    div.className = 'line';
+    div.textContent = 'message ' + i + ': this view page scrolls on its own';
+    lines.appendChild(div);
+  }
+}
+function upd(){document.getElementById('size').textContent=innerWidth+'x'+innerHeight+' dpr '+devicePixelRatio;}
+let resizes=0;addEventListener('resize',()=>{resizes++;upd();});upd();
+setInterval(()=>{document.getElementById('log').textContent='resizes '+resizes+'  scrollY '+Math.round(scrollY)+'\n'+new Date().toISOString();},250);
+</script>
+</body></html>

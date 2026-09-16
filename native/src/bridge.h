@@ -10,14 +10,16 @@
 #include <string>
 
 constexpr char kBridgeEnabledExtraInfoKey[] = "bridgeEnabled";
+constexpr char kViewsEnabledExtraInfoKey[] = "viewsEnabled";
 constexpr char kBridgeRpcCallHostMessageName[] = "JustCef.BridgeRpc.CallHost";
 constexpr char kBridgeRpcCallHostResultMessageName[] = "JustCef.BridgeRpc.CallHostResult";
 constexpr char kBridgeRpcCallJsMessageName[] = "JustCef.BridgeRpc.CallJs";
 constexpr char kBridgeRpcCallJsResultMessageName[] = "JustCef.BridgeRpc.CallJsResult";
 constexpr char kBridgeRpcContextReleasedMessageName[] = "JustCef.BridgeRpc.ContextReleased";
 
-CefRefPtr<CefDictionaryValue> CreateBridgeExtraInfo(bool bridge_enabled, CefRefPtr<CefDictionaryValue> base_info = nullptr);
+CefRefPtr<CefDictionaryValue> CreateBridgeExtraInfo(bool bridge_enabled, CefRefPtr<CefDictionaryValue> base_info = nullptr, bool views_enabled = false);
 bool IsBridgeEnabled(CefRefPtr<CefDictionaryValue> extra_info);
+bool IsViewsEnabled(CefRefPtr<CefDictionaryValue> extra_info);
 void InstallBridge(CefRefPtr<CefV8Context> context);
 bool SendBridgeRpcCallMessage(CefRefPtr<CefFrame> frame, CefProcessId target_process, const char* message_name, int32_t request_id, const std::string& method,
                               const std::string& payload_json);

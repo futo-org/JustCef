@@ -66,13 +66,6 @@ void ClientManager::DoClose(CefRefPtr<CefBrowser> browser)
 
     LOG(INFO) << "ClientManager::DoClose is_closing_ = " << is_closing_ << " browser_list_.size() " << browser_list_.size() << ".";
 
-    if (is_closing_)
-    {
-        // LOG(INFO) << "Notify exit.";
-        // IPC::Singleton.NotifyExit();
-        IPC::Singleton.Stop();
-    }
-
     LOG(INFO) << "ClientManager::DoClose finished identifier = " << browser->GetIdentifier() << ".";
 }
 
@@ -116,8 +109,9 @@ void ClientManager::CloseAllBrowsers(bool force_close)
     if (browser_list_.empty())
         return;
 
-    BrowserList::const_iterator it = browser_list_.begin();
-    for (; it != browser_list_.end(); ++it)
+    BrowserList browsers = browser_list_;
+    BrowserList::const_iterator it = browsers.begin();
+    for (; it != browsers.end(); ++it)
     {
         LOG(INFO) << "Call (*it)->GetHost()->CloseBrowser(), identifier = " << (*it)->GetIdentifier() << ", force_close = " << force_close << " started.";
         (*it)->GetHost()->CloseBrowser(force_close);

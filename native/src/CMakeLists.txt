@@ -85,7 +85,7 @@ macro(SET_DOTCEF_EXECUTABLE_TARGET_PROPERTIES target)
   SET_EXECUTABLE_TARGET_PROPERTIES(${target})
   SET_DOTCEF_PROPERTIES(${target})
 
-  target_compile_definitions(${target} PRIVATE JUSTCEF_NATIVE_VERSION=8)
+  target_compile_definitions(${target} PRIVATE JUSTCEF_NATIVE_VERSION=9)
 
   if(OS_LINUX)
     # Set rpath so that libraries can be placed next to the executable.
@@ -125,14 +125,8 @@ set(DOTCEF_SRCS
   app_browser.cc
   bridge.cc
   bridge.h
-  bufferpool.cc
-  bufferpool.h
-  datastream.cc
-  datastream.h
   client.cc
   client.h
-  thread_pool.cc
-  thread_pool.h
   devtoolsclient.cc
   devtoolsclient.h
   main.cc
@@ -148,9 +142,22 @@ set(DOTCEF_SRCS
   resource_util.h
   ipc.cc
   ipc.h
+  endpoint.cc
+  endpoint.h
+  event_loop.cc
+  event_loop.h
+  ipc_types.h
+  stream_receiver.cc
+  stream_receiver.h
+  transport.cc
+  transport.h
+  justcef_view_client.cc
+  justcef_view_client.h
+  justcef_view_common.h
+  justcef_view_host.cc
+  justcef_view_host.h
   pipe.cc
   pipe.h
-  work_queue.h
   simple_handler.cc
   simple_handler.h
   widevine_util.cc
@@ -162,6 +169,8 @@ if(OS_LINUX)
     ${DOTCEF_SRCS}
     app_other.cc
     app_renderer.cc
+    justcef_view_renderer.cc
+    justcef_view_renderer.h
     client_util_linux.cc
     main_linux.cc
     resource_util_linux.cc
@@ -172,6 +181,8 @@ elseif(OS_WINDOWS)
     ${DOTCEF_SRCS}
     app_other.cc
     app_renderer.cc
+    justcef_view_renderer.cc
+    justcef_view_renderer.h
     client_util_win.cc
     main_win.cc
     resource_util_win.cc
@@ -197,6 +208,9 @@ elseif(OS_MAC)
     app_renderer.cc
     bridge.cc
     bridge.h
+    justcef_view_common.h
+    justcef_view_renderer.cc
+    justcef_view_renderer.h
     )
 endif()
 

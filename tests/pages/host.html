@@ -1,0 +1,61 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Host page</title>
+<style>
+body{margin:0;font:14px sans-serif;background:#fafafa}
+header{height:60px;background:#ddd;display:flex;align-items:center;padding:0 12px;gap:8px;flex-wrap:wrap}
+#chat{position:fixed;right:0;top:60px;bottom:0;width:360px;outline:1px solid red;background:#123}
+main{margin-right:370px;padding:12px}
+h3{margin:18px 0 6px}
+.hint{color:#666;font-size:12px;margin:0 0 6px}
+#scroller{height:200px;overflow:auto;border:1px solid #999}
+#inner{height:800px;padding-top:150px}
+#v2{width:300px;height:200px;outline:1px solid red;background:#123}
+#outer{height:320px;overflow:auto;border:2px solid #36c;padding:8px;background:#eef3ff}
+#nested{height:280px;overflow:auto;border:2px solid #c63;padding:8px;background:#fff3ee}
+#v3{height:200px;outline:1px solid red;background:#123}
+.filler{color:#999}
+dialog{width:300px}
+</style></head>
+<body>
+<header>
+<button id="b1">Tab 1</button><button id="toggle">Toggle chat</button><button id="chatlong">Chat: short/long</button><button id="dlg">Dialog</button><button id="move">Move v2</button>
+<span id="status"></span>
+</header>
+<main>
+<p>Host page content. The chat on the right is a fixed justcef-view.</p>
+<p><input placeholder="host input"></p>
+
+<h3>v2: view in a scroll box</h3>
+<p class="hint">The v2 page cannot scroll, so the wheel over it scrolls this box, then the page.</p>
+<div id="scroller"><div id="inner"><justcef-view id="v2" src="view.html?v2" tabindex="0">fallback 2</justcef-view><p style="height:400px">below</p></div></div>
+
+<h3>v3: scrolling view in nested scroll boxes</h3>
+<p class="hint">Blue box contains orange box contains v3. The v3 page scrolls itself first. At its end, the next wheel gesture scrolls the orange box, then the blue box, then the page.</p>
+<div id="outer">
+  <p class="filler">Blue (outer) box, content above the orange box.</p>
+  <p class="filler">More blue content.</p>
+  <div id="nested">
+    <p class="filler">Orange (inner) box, content above v3.</p>
+    <justcef-view id="v3" src="view.html?v3&long" tabindex="0">fallback 3</justcef-view>
+    <p class="filler" style="height:300px">Orange box, content below v3.</p>
+  </div>
+  <p class="filler" style="height:400px">Blue box, content below the orange box.</p>
+</div>
+<div style="height:1500px"></div>
+</main>
+<justcef-view id="chat" src="view.html?chat" tabindex="0">fallback content</justcef-view>
+<dialog id="d"><p>Modal dialog</p><button onclick="this.closest('dialog').close()">Close</button></dialog>
+<script>
+const status=document.getElementById('status');
+const log=(m)=>{status.textContent=m;console.log('[host] '+m);};
+log('defined='+!!customElements.get('justcef-view'));
+for (const el of document.querySelectorAll('justcef-view')) {
+  for (const t of ['viewcreated','load','loaderror','titlechange','close','crash','error','viewfocus','viewblur','viewkeydown','permissionrequest'])
+    el.addEventListener(t,(e)=>log(el.id+' '+t+' '+JSON.stringify(e.detail)));
+}
+document.getElementById('toggle').onclick=()=>{const c=document.getElementById('chat');c.style.display=c.style.display==='none'?'':'none';};
+document.getElementById('chatlong').onclick=()=>{const c=document.getElementById('chat');c.setAttribute('src', c.getAttribute('src').includes('long')?'view.html?chat':'view.html?chat&long');};
+document.getElementById('dlg').onclick=()=>document.getElementById('d').showModal();
+document.getElementById('move').onclick=()=>{const v=document.getElementById('v2');v.style.marginLeft=(parseInt(v.style.marginLeft||'0')+40)%200+'px';};
+</script>
+</body></html>

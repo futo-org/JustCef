@@ -164,6 +164,7 @@ int RunMain(HINSTANCE hInstance, LPTSTR /*lpCmdLine*/, int /*nCmdShow*/, void* s
     }
 
     CefRunMessageLoop();
+    IPC::Singleton.Stop();
     CefShutdown();
 
     RemoveTemporaryCachePath(cachePaths);

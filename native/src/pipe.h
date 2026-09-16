@@ -9,6 +9,9 @@
 
 #include "include/base/cef_logging.h"
 
+#include <atomic>
+#include <mutex>
+
 class Pipe
 {
 public:
@@ -38,19 +41,31 @@ public:
 
     bool Create();
     bool HasValidHandles();
+    bool Open();
     size_t Read(void* buffer, size_t size, bool readFully = false);
     size_t Write(const void* buffer, size_t size, bool writeFully = false);
+    void BindReaderThread();
+    void BindWriterThread();
+    void Interrupt();
     void Close();
 
 private:
 #ifdef _WIN32
     HANDLE _readHandle;
     HANDLE _writeHandle;
+    std::mutex _threadMutex;
+    HANDLE _readerThread = nullptr;
+    HANDLE _writerThread = nullptr;
 #else
+    bool WaitReady(int fd, short events);
+
     int _readFd;
     int _writeFd;
+    int _wakeReadFd = -1;
+    int _wakeWriteFd = -1;
 #endif
     bool _closeOnDestruct;
+    std::atomic<bool> _interrupted{false};
 };
 
 #endif // PIPE_H

@@ -15,6 +15,9 @@
 namespace justcef
 {
 
+using BoundRequestModifier = std::function<asio::awaitable<std::optional<IPCRequest>>(const IPCRequest&)>;
+using BoundRequestProxy = std::function<asio::awaitable<std::optional<IPCResponse>>(const IPCRequest&)>;
+
 class WindowCommandTarget
 {
 public:
@@ -58,26 +61,47 @@ public:
     virtual asio::awaitable<void> WindowCenterSelfAsync(int identifier) = 0;
     virtual asio::awaitable<void> WindowSetProxyRequestsAsync(int identifier, bool enable_proxy_requests) = 0;
     virtual asio::awaitable<void> WindowSetModifyRequestsAsync(int identifier, bool enable_modify_requests, bool enable_modify_body) = 0;
+    virtual std::vector<std::shared_ptr<JustCefView>> WindowViews(int identifier) const = 0;
+};
+
+class LoadingState
+{
+public:
+    void Apply(bool is_loading, bool can_go_back, bool can_go_forward);
+    void OnMainFrameLoadError(int error_code, const std::string& error_text);
+    void Close();
+
+    std::shared_ptr<detail::AsyncSignal> ArmNavigation();
+    void FailNavigation(const std::shared_ptr<detail::AsyncSignal>& navigation, std::exception_ptr exception);
+    std::shared_ptr<detail::AsyncSignal> IdleSignal();
+
+    bool IsLoading() const;
+    bool CanGoBack() const;
+    bool CanGoForward() const;
+
+private:
+    mutable std::mutex mutex_;
+    bool is_loading_ = false;
+    bool can_go_back_ = false;
+    bool can_go_forward_ = false;
+    bool closed_ = false;
+    std::shared_ptr<detail::AsyncSignal> navigation_;
+    bool navigation_saw_loading_ = false;
+    std::shared_ptr<detail::AsyncSignal> idle_;
 };
 
 struct WindowShared
 {
     asio::any_io_executor executor;
     std::mutex request_mutex;
-    RequestModifier request_modifier;
-    RequestProxy request_proxy;
+    BoundRequestModifier request_modifier;
+    BoundRequestProxy request_proxy;
     BridgeRpcHandler bridge_rpc_handler;
+    ViewCreatedHandler view_created_handler;
     detail::AsyncSignal close_signal;
     std::atomic<bool> close_signaled = false;
 
-    mutable std::mutex loading_mutex;
-    std::condition_variable loading_cv;
-    bool is_loading = false;
-    bool can_go_back = false;
-    bool can_go_forward = false;
-    bool loading_failed = false;
-    std::string loading_error;
-    detail::AsyncSignal loading_signal;
+    LoadingState loading;
 };
 
 } // namespace justcef

@@ -239,6 +239,7 @@ int main(int argc, char* argv[]) {
         // Run the CEF message loop. This will block until CefQuitMessageLoop() is
         // called.
         CefRunMessageLoop();
+        IPC::Singleton.Stop();
 
         // Shut down CEF.
         CefShutdown();
