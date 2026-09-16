@@ -1,33 +1,52 @@
 #ifndef DATASTREAM_H
 #define DATASTREAM_H
 
-#include <condition_variable>
+#include "AsyncSignal.h"
+#include "IpcTypes.h"
+#include "Packet.h"
+
+#include <asio.hpp>
+#include <atomic>
 #include <cstdint>
 #include <cstring>
+#include <functional>
+#include <memory>
 #include <mutex>
+#include <optional>
 #include <vector>
 
-class DataStream
+class DataStream : public std::enable_shared_from_this<DataStream>
 {
 public:
-    DataStream(uint32_t identifier, size_t bufferSize = 10 * 1024 * 1024);
+    using Sender = std::function<bool(justcef::detail::OutgoingPacket)>;
+    using FinishedCallback = std::function<void(uint32_t)>;
 
-    void Write(const uint8_t* data, size_t length);
-    size_t Read(uint8_t* buffer, size_t bufferSize);
-    void Close();
+    DataStream(uint32_t identifier, std::shared_ptr<justcef::ByteStream> source, std::optional<uint64_t> length, Sender sender);
+    ~DataStream() { CloseSource(); }
+
+    void Start(asio::any_io_executor executor, FinishedCallback onFinished);
+    void AddCredit(uint32_t bytes);
+    void Cancel();
+    void CloseSource();
 
     uint32_t GetIdentifier() const { return _identifier; }
 
 private:
-    uint32_t _identifier;
-    std::vector<uint8_t> _buffer;
-    std::mutex _mutex;
-    std::condition_variable _cvRead, _cvWrite;
-    size_t _head = 0, _tail = 0, _size = 0, _capacity;
-    bool _isClosed = false;
+    static asio::awaitable<void> Pump(std::shared_ptr<DataStream> self, FinishedCallback onFinished);
+    asio::awaitable<void> WaitForCredit();
+    uint64_t AvailableCredit();
+    bool IsCanceled();
+    void Send(justcef::detail::OpcodeControllerNotification opcode, std::vector<uint8_t> body);
 
-    bool isFull() const { return _size == _capacity; }
-    bool isEmpty() const { return _size == 0; }
+    uint32_t _identifier;
+    std::shared_ptr<justcef::ByteStream> _source;
+    std::optional<uint64_t> _length;
+    Sender _sender;
+    std::mutex _mutex;
+    uint64_t _credit = justcef::detail::kStreamInitialCredit;
+    bool _isCanceled = false;
+    justcef::detail::Completion<void()> _waiter;
+    std::atomic<bool> _isSourceClosed = false;
 };
 
 #endif // DATASTREAM_H

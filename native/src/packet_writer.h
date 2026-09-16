@@ -9,7 +9,7 @@
 class PacketWriter
 {
 public:
-    explicit PacketWriter(size_t maxSize = 10 * 1024 * 1024) : _maxSize(maxSize) { _buffer.reserve(std::min(_maxSize, static_cast<size_t>(512))); }
+    explicit PacketWriter(size_t maxSize = 256 * 1024 * 1024) : _maxSize(maxSize) { _buffer.reserve(std::min(_maxSize, static_cast<size_t>(512))); }
 
     template <typename T> bool write(const T& value)
     {

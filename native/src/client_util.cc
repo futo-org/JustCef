@@ -53,8 +53,8 @@ private:
 class PendingPathsDialogRequest : public PendingFileDialogRequest
 {
 public:
-    PendingPathsDialogRequest(int browser_identifier, std::shared_ptr<std::promise<std::vector<std::string>>> promise)
-        : PendingFileDialogRequest(browser_identifier), promise_(std::move(promise))
+    PendingPathsDialogRequest(int browser_identifier, std::function<void(std::vector<std::string>)> callback)
+        : PendingFileDialogRequest(browser_identifier), callback_(std::move(callback))
     {
     }
 
@@ -68,20 +68,20 @@ public:
         for (const CefString& path : file_paths)
             paths.push_back(path.ToString());
 
-        promise_->set_value(std::move(paths));
+        callback_(std::move(paths));
     }
 
 private:
-    void OnCancel() override { promise_->set_value({}); }
+    void OnCancel() override { callback_({}); }
 
-    std::shared_ptr<std::promise<std::vector<std::string>>> promise_;
+    std::function<void(std::vector<std::string>)> callback_;
 };
 
 class PendingPathDialogRequest : public PendingFileDialogRequest
 {
 public:
-    PendingPathDialogRequest(int browser_identifier, std::shared_ptr<std::promise<std::string>> promise)
-        : PendingFileDialogRequest(browser_identifier), promise_(std::move(promise))
+    PendingPathDialogRequest(int browser_identifier, std::function<void(std::string)> callback)
+        : PendingFileDialogRequest(browser_identifier), callback_(std::move(callback))
     {
     }
 
@@ -90,16 +90,13 @@ public:
         if (!TryBeginCompletion())
             return;
 
-        if (!file_paths.empty())
-            promise_->set_value(file_paths.front().ToString());
-        else
-            promise_->set_value(std::string());
+        callback_(!file_paths.empty() ? file_paths.front().ToString() : std::string());
     }
 
 private:
-    void OnCancel() override { promise_->set_value(std::string()); }
+    void OnCancel() override { callback_(std::string()); }
 
-    std::shared_ptr<std::promise<std::string>> promise_;
+    std::function<void(std::string)> callback_;
 };
 
 std::mutex g_pending_file_dialogs_mutex;
@@ -386,11 +383,10 @@ std::string DumpRequestContents(CefRefPtr<CefRequest> request)
     return ss.str();
 }
 
-std::future<std::vector<std::string>> PlatformPickFiles(int browser_identifier, bool multiple, const std::vector<std::pair<std::string, std::string>>& filters)
+void PlatformPickFiles(int browser_identifier, bool multiple, const std::vector<std::pair<std::string, std::string>>& filters,
+                       std::function<void(std::vector<std::string>)> callback)
 {
-    auto promise = std::make_shared<std::promise<std::vector<std::string>>>();
-    auto request = std::make_shared<PendingPathsDialogRequest>(browser_identifier, promise);
-    std::future<std::vector<std::string>> future = promise->get_future();
+    auto request = std::make_shared<PendingPathsDialogRequest>(browser_identifier, std::move(callback));
     std::vector<CefString> accept_filters = BuildAcceptFilters(filters);
     CefBrowserHost::FileDialogMode mode = multiple ? FILE_DIALOG_OPEN_MULTIPLE : FILE_DIALOG_OPEN;
     std::string title = multiple ? "Select Files" : "Open File";
@@ -405,15 +401,11 @@ std::future<std::vector<std::string>> PlatformPickFiles(int browser_identifier, 
         RemovePendingFileDialogRequest(request);
         request->Cancel();
     }
-
-    return future;
 }
 
-std::future<std::string> PlatformPickDirectory(int browser_identifier)
+void PlatformPickDirectory(int browser_identifier, std::function<void(std::string)> callback)
 {
-    auto promise = std::make_shared<std::promise<std::string>>();
-    auto request = std::make_shared<PendingPathDialogRequest>(browser_identifier, promise);
-    std::future<std::string> future = promise->get_future();
+    auto request = std::make_shared<PendingPathDialogRequest>(browser_identifier, std::move(callback));
     std::vector<CefString> filters;
     RegisterPendingFileDialogRequest(request);
 
@@ -427,15 +419,12 @@ std::future<std::string> PlatformPickDirectory(int browser_identifier)
         RemovePendingFileDialogRequest(request);
         request->Cancel();
     }
-
-    return future;
 }
 
-std::future<std::string> PlatformSaveFile(int browser_identifier, const std::string& default_name, const std::vector<std::pair<std::string, std::string>>& filters)
+void PlatformSaveFile(int browser_identifier, const std::string& default_name, const std::vector<std::pair<std::string, std::string>>& filters,
+                      std::function<void(std::string)> callback)
 {
-    auto promise = std::make_shared<std::promise<std::string>>();
-    auto request = std::make_shared<PendingPathDialogRequest>(browser_identifier, promise);
-    std::future<std::string> future = promise->get_future();
+    auto request = std::make_shared<PendingPathDialogRequest>(browser_identifier, std::move(callback));
     std::vector<CefString> accept_filters = BuildAcceptFilters(filters);
     RegisterPendingFileDialogRequest(request);
 
@@ -449,8 +438,6 @@ std::future<std::string> PlatformSaveFile(int browser_identifier, const std::str
         RemovePendingFileDialogRequest(request);
         request->Cancel();
     }
-
-    return future;
 }
 
 void CancelPendingFileDialogs(int browser_identifier)

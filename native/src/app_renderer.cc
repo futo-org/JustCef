@@ -1,7 +1,9 @@
 #include "app_factory.h"
 #include "bridge.h"
+#include "justcef_view_renderer.h"
 #include "steam.h"
 
+#include <unordered_map>
 #include <unordered_set>
 
 class RenderApp : public CefApp, public CefRenderProcessHandler
@@ -16,6 +18,8 @@ public:
             return;
         }
 
+        ++browser_references_[browser->GetIdentifier()];
+
         if (IsBridgeEnabled(extra_info))
         {
             bridge_enabled_browsers_.insert(browser->GetIdentifier());
@@ -23,6 +27,24 @@ public:
         else
         {
             bridge_enabled_browsers_.erase(browser->GetIdentifier());
+        }
+
+        if (IsViewsEnabled(extra_info))
+        {
+            views_enabled_browsers_.insert(browser->GetIdentifier());
+        }
+        else
+        {
+            views_enabled_browsers_.erase(browser->GetIdentifier());
+        }
+
+        if (IsViewContent(extra_info))
+        {
+            view_content_browsers_.insert(browser->GetIdentifier());
+        }
+        else
+        {
+            view_content_browsers_.erase(browser->GetIdentifier());
         }
     }
 
@@ -33,8 +55,18 @@ public:
             return;
         }
 
+        auto references = browser_references_.find(browser->GetIdentifier());
+        if (references != browser_references_.end() && --references->second > 0)
+        {
+            return;
+        }
+        browser_references_.erase(browser->GetIdentifier());
+
         bridge_enabled_browsers_.erase(browser->GetIdentifier());
+        views_enabled_browsers_.erase(browser->GetIdentifier());
+        view_content_browsers_.erase(browser->GetIdentifier());
         ClearBridgeState(browser);
+        ClearViewState(browser);
     }
 
     void OnContextCreated(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefRefPtr<CefV8Context> context) override
@@ -42,6 +74,16 @@ public:
         if (!browser || !frame || !frame->IsMain())
         {
             return;
+        }
+
+        if (views_enabled_browsers_.find(browser->GetIdentifier()) != views_enabled_browsers_.end())
+        {
+            InstallViewElement(browser, frame, context);
+        }
+
+        if (view_content_browsers_.find(browser->GetIdentifier()) != view_content_browsers_.end())
+        {
+            InstallViewContentScript(browser, frame, context);
         }
 
         if (bridge_enabled_browsers_.find(browser->GetIdentifier()) == bridge_enabled_browsers_.end())
@@ -59,6 +101,16 @@ public:
             return;
         }
 
+        if (views_enabled_browsers_.find(browser->GetIdentifier()) != views_enabled_browsers_.end())
+        {
+            ReleaseViewContext(browser, frame, context);
+        }
+
+        if (view_content_browsers_.find(browser->GetIdentifier()) != view_content_browsers_.end())
+        {
+            ReleaseViewContentContext(browser, context);
+        }
+
         if (bridge_enabled_browsers_.find(browser->GetIdentifier()) == bridge_enabled_browsers_.end())
         {
             return;
@@ -70,6 +122,11 @@ public:
     bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefProcessId source_process, CefRefPtr<CefProcessMessage> message) override
     {
         if (HandleBridgeProcessMessage(browser, frame, message))
+        {
+            return true;
+        }
+
+        if (HandleViewProcessMessage(browser, frame, message))
         {
             return true;
         }
@@ -122,6 +179,9 @@ public:
 
 private:
     std::unordered_set<int> bridge_enabled_browsers_;
+    std::unordered_set<int> views_enabled_browsers_;
+    std::unordered_set<int> view_content_browsers_;
+    std::unordered_map<int, int> browser_references_;
 
     IMPLEMENT_REFCOUNTING(RenderApp);
 };

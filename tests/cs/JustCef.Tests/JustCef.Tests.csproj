@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <AssemblyName>JustCef.Tests</AssemblyName>
+    <RootNamespace>JustCef.Tests</RootNamespace>
+    <JustCefSkipRuntimeDownload>true</JustCefSkipRuntimeDownload>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../../cs/JustCef.csproj" AdditionalProperties="JustCefSkipRuntimeDownload=true" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="../../protocol/vectors.json" Link="vectors.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <Target Name="ExcludeJustCefNativeFromOutput" AfterTargets="GetCopyToOutputDirectoryItems">
+    <ItemGroup>
+      <_JustCefNativeOutputItems Include="@(_SourceItemsToCopyToOutputDirectory)" Condition="$([System.String]::Copy('%(_SourceItemsToCopyToOutputDirectory.TargetPath)').StartsWith('cef'))" />
+      <_SourceItemsToCopyToOutputDirectory Remove="@(_JustCefNativeOutputItems)" />
+    </ItemGroup>
+  </Target>
+
+</Project>

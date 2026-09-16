@@ -1,4 +1,5 @@
 #include "bridge.h"
+#include "justcef_view_common.h"
 
 #include "include/base/cef_logging.h"
 #include "include/cef_shared_process_message_builder.h"
@@ -684,9 +685,9 @@ void InstallBridge(CefRefPtr<CefV8Context> context)
     }
 }
 
-CefRefPtr<CefDictionaryValue> CreateBridgeExtraInfo(bool bridge_enabled, CefRefPtr<CefDictionaryValue> base_info)
+CefRefPtr<CefDictionaryValue> CreateBridgeExtraInfo(bool bridge_enabled, CefRefPtr<CefDictionaryValue> base_info, bool views_enabled)
 {
-    if (!bridge_enabled && !base_info)
+    if (!bridge_enabled && !views_enabled && !base_info)
     {
         return nullptr;
     }
@@ -698,12 +699,17 @@ CefRefPtr<CefDictionaryValue> CreateBridgeExtraInfo(bool bridge_enabled, CefRefP
     }
 
     if (bridge_enabled)
-    {
         extra_info->SetBool(kBridgeEnabledExtraInfoKey, true);
-        return extra_info;
-    }
+    else
+        extra_info->Remove(kBridgeEnabledExtraInfoKey);
 
-    extra_info->Remove(kBridgeEnabledExtraInfoKey);
+    if (views_enabled)
+        extra_info->SetBool(kViewsEnabledExtraInfoKey, true);
+    else
+        extra_info->Remove(kViewsEnabledExtraInfoKey);
+
+    extra_info->Remove(kViewContentExtraInfoKey);
+
     if (extra_info->GetSize() == 0)
     {
         return nullptr;
@@ -715,6 +721,11 @@ CefRefPtr<CefDictionaryValue> CreateBridgeExtraInfo(bool bridge_enabled, CefRefP
 bool IsBridgeEnabled(CefRefPtr<CefDictionaryValue> extra_info)
 {
     return extra_info && extra_info->HasKey(kBridgeEnabledExtraInfoKey) && extra_info->GetBool(kBridgeEnabledExtraInfoKey);
+}
+
+bool IsViewsEnabled(CefRefPtr<CefDictionaryValue> extra_info)
+{
+    return extra_info && extra_info->HasKey(kViewsEnabledExtraInfoKey) && extra_info->GetBool(kViewsEnabledExtraInfoKey);
 }
 
 bool HandleBridgeProcessMessage(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefRefPtr<CefProcessMessage> message)

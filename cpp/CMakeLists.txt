@@ -36,6 +36,7 @@ set(LIBJUSTCEF_SOURCES
     AsyncSignal.h
     Event.h
     IpcTypes.h
+    JustCefErrors.h
     JustCefLogger.cpp
     JustCefLogger.h
     JustCefProcess.cpp
@@ -43,6 +44,10 @@ set(LIBJUSTCEF_SOURCES
     JustCefWindow.cpp
     JustCefWindow.h
     Packet.h
+    Rpc.cpp
+    Rpc.h
+    Transport.cpp
+    Transport.h
     WindowInternals.h
     DataStream.cpp
     DataStream.h

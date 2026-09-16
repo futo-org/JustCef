@@ -14,7 +14,7 @@ public sealed class PacketWriter : IDisposable
     public byte[] Data => _data ?? throw new ObjectDisposedException(nameof(PacketWriter));
     public int Size => _position;
 
-    public PacketWriter(int maxSize = 10 * 1024 * 1024) 
+    public PacketWriter(int maxSize = 256 * 1024 * 1024) 
     {
         _maxSize = maxSize;
         _data = ArrayPool<byte>.Shared.Rent(Math.Min(maxSize, 512));
@@ -79,9 +79,9 @@ public sealed class PacketWriter : IDisposable
         byte[] data = _data ?? throw new ObjectDisposedException(nameof(PacketWriter));
         if (requiredCapacity > data.Length) 
         {
-            int newSize = Math.Max(2 * data.Length, requiredCapacity);
-            if (newSize > _maxSize) 
+            if (requiredCapacity > _maxSize) 
                 throw new InvalidOperationException("Exceeding max buffer size.");
+            int newSize = Math.Min(Math.Max(2 * data.Length, requiredCapacity), _maxSize);
 
             byte[] newBuffer = ArrayPool<byte>.Shared.Rent(newSize);
             Buffer.BlockCopy(data, 0, newBuffer, 0, _position);

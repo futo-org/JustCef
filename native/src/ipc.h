@@ -1,17 +1,18 @@
 #ifndef IPC_H
 #define IPC_H
 
-#include "bufferpool.h"
-#include "datastream.h"
+#include "endpoint.h"
+#include "event_loop.h"
 #include "include/cef_keyboard_handler.h"
 #include "include/cef_response.h"
+#include "include/views/cef_browser_view.h"
 #include "packet_reader.h"
 #include "packet_writer.h"
-#include "pipe.h"
-#include "thread_pool.h"
-#include "work_queue.h"
+#include "stream_receiver.h"
+#include "transport.h"
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <mutex>
 #include <optional>
@@ -24,22 +25,6 @@
 #include <vector>
 
 class Client;
-
-#define MAXIMUM_IPC_SIZE 10 * 1024 * 1024
-
-enum class PacketType : uint8_t
-{
-    Request = 0,
-    Response = 1,
-    Notification = 2
-};
-
-enum class StreamDataStatus : uint8_t
-{
-    Accepted = 0,
-    Canceled = 1,
-    Closed = 2
-};
 
 // Requests from controller
 enum class OpcodeController : uint8_t
@@ -79,10 +64,6 @@ enum class OpcodeController : uint8_t
     WindowCenterSelf = 32,
     WindowSetProxyRequests = 33,
     WindowSetModifyRequests = 34,
-    StreamOpen = 35,
-    StreamClose = 36,
-    StreamData = 37,
-    StreamCancel = 38,
     PickFile = 39,
     PickDirectory = 40,
     SaveFile = 41,
@@ -102,14 +83,17 @@ enum class OpcodeController : uint8_t
     WindowRemoveDomainToProxy = 55,
     WindowGetZoom = 56,
     WindowBridgeRpc = 57,
-    StreamEnd = 58,
-    GetWidevineStatus = 59
+    GetWidevineStatus = 59,
+    Debug = 250
 };
 
 // Notifications from controller
 enum class OpcodeControllerNotification : uint8_t
 {
-    Exit = 0
+    Exit = 0,
+    StreamData = 1,
+    StreamEnd = 2,
+    StreamError = 3
 };
 
 // Requests from client
@@ -120,12 +104,8 @@ enum class OpcodeClient : uint8_t
     Echo = 2,
     WindowProxyRequest = 3,
     WindowModifyRequest = 4,
-    StreamOpen = 5,
-    StreamData = 6,
-    StreamClose = 7,
-    StreamCancel = 8,
     WindowBridgeRpc = 9,
-    StreamEnd = 10
+    WindowViewCreated = 11
 };
 
 // Notifications from client
@@ -148,44 +128,11 @@ enum class OpcodeClientNotification : uint8_t
     WindowFrameLoadEnd = 14,
     WindowFrameLoadError = 15,
     WindowDevToolsEvent = 16,
-    WindowLoadingStateChanged = 17
+    WindowLoadingStateChanged = 17,
+    StreamCredit = 18,
+    StreamCancel = 19,
+    Debug = 250
 };
-
-typedef struct _IPCPendingRequest
-{
-    OpcodeClient opcode;
-    uint32_t requestId;
-    bool ready;
-    std::mutex mutex;
-    std::condition_variable conditionVariable;
-    std::vector<uint8_t> responseBody;
-} IPCPendingRequest;
-
-#ifdef _WIN32
-#pragma pack(push, 1)
-#define PACKED
-#else
-#define PACKED __attribute__((packed))
-#endif
-
-typedef struct PACKED _IPCPacketHeader
-{
-    uint32_t size = 0;
-    uint32_t requestId = 0;
-    PacketType packetType = PacketType::Request;
-    uint8_t opcode = 0;
-} IPCPacketHeader;
-
-#ifdef _WIN32
-#pragma pack(pop)
-#endif
-
-typedef struct _IPCDevToolsMethodResult
-{
-    int32_t messageId = 0;
-    bool success = false;
-    std::shared_ptr<std::vector<uint8_t>> result;
-} IPCDevToolsMethodResult;
 
 typedef struct _IPCProxyResponse
 {
@@ -194,9 +141,8 @@ typedef struct _IPCProxyResponse
     std::optional<std::string> media_type = std::nullopt;
     std::multimap<std::string, std::string> headers = {};
     std::optional<std::vector<uint8_t>> body = std::nullopt;
-    std::shared_ptr<DataStream> bodyStream = nullptr;
+    std::shared_ptr<ipc::IncomingStream> bodyStream = nullptr;
     int64_t bodyLength = -1;
-    uint8_t lengthMode = 0;
 } IPCProxyResponse;
 
 typedef struct _IPCBridgeRpcResult
@@ -205,6 +151,12 @@ typedef struct _IPCBridgeRpcResult
     std::optional<std::string> result_json = std::nullopt;
     std::optional<std::string> error = std::nullopt;
 } IPCBridgeRpcResult;
+
+enum class ModifyTimeoutPolicy : uint8_t
+{
+    Continue = 0,
+    Cancel = 1
+};
 
 typedef struct _IPCWindowCreate
 {
@@ -228,6 +180,10 @@ typedef struct _IPCWindowCreate
     std::optional<std::string> title = std::nullopt;
     std::optional<std::string> iconPath = std::nullopt;
     std::optional<std::string> appId = std::nullopt;
+    bool viewsEnabled = false;
+    uint32_t modifyTimeoutMs = 0;
+    ModifyTimeoutPolicy modifyTimeoutPolicy = ModifyTimeoutPolicy::Continue;
+    uint32_t proxyOpenTimeoutMs = 0;
 } IPCWindowCreate;
 
 class IPC
@@ -246,22 +202,25 @@ public:
 
     bool HasValidHandles();
     bool IsAvailable();
+    bool IsDebugEnabled() const { return _debugEnabled; }
 
     void Start();
     void Stop();
 
-    std::vector<uint8_t> Echo(const uint8_t* data, size_t size);
-    void Ping();
-    void Print(const char* message, size_t size);
-    void Print(const std::string& message);
-    void StreamCancel(uint32_t identifier) { Call(OpcodeClient::StreamCancel, (uint8_t*)&identifier, sizeof(uint32_t)); }
-    void WindowModifyRequest(int32_t identifier, CefRefPtr<CefRequest> request, bool modifyRequestBody);
-    std::unique_ptr<IPCProxyResponse> WindowProxyRequest(int32_t identifier, CefRefPtr<CefRequest> request);
-    IPCBridgeRpcResult WindowBridgeRpc(int32_t identifier, const std::string& method, const std::string& payload_json);
-    void QueueWindowBridgeRpcResponse(uint32_t requestId, bool success, const std::string& payload);
+    ipc::CallHandle Echo(std::vector<uint8_t> data, std::chrono::milliseconds timeout, std::function<void(ipc::Response)> callback);
+    ipc::CallHandle WindowModifyRequest(int32_t identifier, CefRefPtr<CefRequest> request, bool modifyRequestBody, std::chrono::milliseconds timeout,
+                                        std::function<void(ipc::StatusCode)> callback);
+    ipc::CallHandle WindowProxyRequest(int32_t identifier, CefRefPtr<CefRequest> request, std::chrono::milliseconds timeout,
+                                       std::function<void(ipc::StatusCode, std::unique_ptr<IPCProxyResponse>)> callback);
+    ipc::CallHandle WindowBridgeRpc(int32_t identifier, const std::string& method, const std::string& payload_json, std::function<void(IPCBridgeRpcResult)> callback);
+    void WindowViewCreated(int32_t parentIdentifier, int32_t viewIdentifier, const std::string& src, std::function<void(bool allow)> callback);
 
     void NotifyExit() { Notify(OpcodeClientNotification::Exit); }
-    void NotifyReady() { Notify(OpcodeClientNotification::Ready); }
+    void NotifyReady()
+    {
+        const uint32_t version = ipc::kProtocolVersion;
+        Notify(OpcodeClientNotification::Ready, reinterpret_cast<const uint8_t*>(&version), sizeof(version));
+    }
 
     void NotifyWindowOpened(CefRefPtr<CefBrowser> browser);
     void NotifyWindowClosed(CefRefPtr<CefBrowser> browser);
@@ -279,144 +238,81 @@ public:
     void NotifyWindowFrameLoadError(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, cef_errorcode_t errorCode, const CefString& errorText, const CefString& url);
     void NotifyWindowLoadingStateChanged(CefRefPtr<CefBrowser> browser, bool isLoading, bool canGoBack, bool canGoForward);
     void NotifyWindowDevToolsEvent(CefRefPtr<CefBrowser> browser, const CefString& method, const uint8_t* result, size_t result_size);
-    void QueueResponse(OpcodeController opcode, uint32_t requestId, const PacketWriter& writer, std::function<void()> afterWrite = nullptr,
-                       std::function<void()> onAbort = nullptr);
+    void NotifyDebug(uint32_t sequence);
 
-    void QueueWork(std::function<void()> work)
-    {
-        if (!IsAvailable())
-            return;
-
-        _worker.EnqueueWork(std::move(work));
-    }
-
-    bool QueueBackgroundWork(std::function<void()> work)
-    {
-        if (!IsAvailable())
-            return false;
-
-        return _threadPool.Enqueue(std::move(work));
-    }
-
-    void CloseStream(uint32_t identifier);
-    void ReleaseIncomingStream(uint32_t identifier);
+    void BeginAnnounceHold();
+    void EndAnnounceHold();
 
 private:
-    struct IncomingStreamDispatcher
-    {
-        std::mutex mutex;
-        std::queue<std::function<void()>> queue;
-        bool running = false;
-    };
-
-    struct PendingStreamReply
-    {
-        uint32_t requestId = 0;
-        uint8_t opcode = 0;
-        std::vector<uint8_t> buf;
-        size_t written = 0;
-        uint32_t streamId = 0;
-    };
-
-    void Run();
-    std::vector<uint8_t> Call(OpcodeClient opcode, const uint8_t* body = nullptr, size_t size = 0, std::function<void()> afterWrite = nullptr);
-    void Notify(OpcodeClientNotification opcode, const uint8_t* body = nullptr, size_t size = 0, std::function<void()> afterWrite = nullptr,
-                std::function<void()> onAbort = nullptr);
-    void Notify(OpcodeClientNotification opcode, const PacketWriter& writer, std::function<void()> afterWrite = nullptr, std::function<void()> onAbort = nullptr);
-    bool HandleRequest(uint32_t requestId, OpcodeController opcode, PacketReader& reader, PacketWriter& writer);
+    void OnTransportClosed();
+    void OnRequest(ipc::IncomingRequest request, ipc::Reply reply);
+    void RunRequest(ipc::IncomingRequest request, ipc::Reply reply);
+    ipc::CallHandle CallAsync(OpcodeClient opcode, std::vector<uint8_t> body, std::chrono::milliseconds timeout, std::function<void(ipc::Response)> callback);
+    void Notify(OpcodeClientNotification opcode, const uint8_t* body = nullptr, size_t size = 0);
+    void Notify(OpcodeClientNotification opcode, const PacketWriter& writer);
+    bool HandleRequest(ipc::Reply& reply, OpcodeController opcode, PacketReader& reader, PacketWriter& writer, ipc::StatusCode& status);
     void HandleNotification(OpcodeControllerNotification opcode, PacketReader& reader);
-    void WriteResponse(uint32_t requestId, uint8_t opcode, const uint8_t* body, size_t size);
-    void WriteQueuedResponsePacket(const uint8_t* packet, size_t packetLength);
-    bool QueueIncomingStreamWork(uint32_t identifier, std::function<void()> work);
-    void ProcessIncomingStreamDispatcher(uint32_t identifier, std::shared_ptr<IncomingStreamDispatcher> dispatcher);
-    std::shared_ptr<DataStream> FindIncomingStream(uint32_t identifier);
-    std::shared_ptr<DataStream> GetOrCreateIncomingStream(uint32_t identifier);
-    void ResumePendingStreamReply(uint32_t streamId);
-    void QueueDeferredStreamWriters(std::vector<std::function<void()>> streamWriters);
-    bool OpenClientStream(uint32_t identifier);
-    bool StreamClientData(uint32_t identifier, const uint8_t* data, size_t size);
-    void CloseClientStream(uint32_t identifier);
-    std::shared_ptr<std::atomic<bool>> RegisterOutgoingStream(uint32_t identifier);
-    std::shared_ptr<std::atomic<bool>> GetOutgoingStreamCancelFlag(uint32_t identifier);
-    void RemoveOutgoingStream(uint32_t identifier);
-    bool SerializePostData(PacketWriter& writer, CefRefPtr<CefPostData> postData, std::vector<std::function<void()>>& streamWriters);
-    bool SerializeBridgeRpcPayload(PacketWriter& writer, const std::string& payload, std::vector<std::function<void()>>& streamWriters, std::function<void()>* onAbort = nullptr);
-    bool SerializeBinaryPayload(PacketWriter& writer, const uint8_t* payload, size_t size, std::vector<std::function<void()>>& streamWriters,
-                                std::function<void()>* onAbort = nullptr);
-    bool DeserializeBridgeRpcPayload(PacketReader& reader, std::string& payload);
-    bool HandleWindowBridgeRpcRequest(uint32_t requestId, PacketReader& reader, PacketWriter& writer);
-    bool HandleWindowExecuteDevToolsMethodRequest(uint32_t requestId, PacketReader& reader, PacketWriter& writer);
-
-    std::atomic<uint32_t> _requestIdCounter;
-    std::atomic<uint32_t> _streamIdentifierCounter;
+    bool SerializePostData(PacketWriter& writer, CefRefPtr<CefPostData> postData);
+    std::unique_ptr<IPCProxyResponse> ParseProxyResponse(const std::vector<uint8_t>& response);
+    void HandleWindowBridgeRpcRequest(ipc::Reply reply, PacketReader& reader);
+    void HandleWindowExecuteDevToolsMethodRequest(ipc::Reply reply, PacketReader& reader);
+    void HandleDebug(ipc::Reply reply, PacketReader& reader);
 
     std::atomic<bool> _stopped = true;
     std::atomic<bool> _startCalled = false;
-    std::mutex _writeMutex;
-    std::mutex _requestMapMutex;
-    std::mutex _dataStreamsMutex;
-    std::mutex _incomingStreamDispatchersMutex;
-    std::mutex _outgoingStreamsMutex;
-    std::vector<uint8_t> _sendBuffer;
-    std::vector<uint8_t> _readBuffer;
-    std::unordered_map<uint32_t, std::shared_ptr<IPCPendingRequest>> _pendingRequests;
-    std::map<uint32_t, std::shared_ptr<DataStream>> _dataStreams;
-    std::mutex _pendingStreamRepliesMutex;
-    std::unordered_map<uint32_t, PendingStreamReply> _pendingStreamReplies;
-    std::unordered_set<uint32_t> _canceledIncomingStreams;
-    std::unordered_map<uint32_t, std::shared_ptr<IncomingStreamDispatcher>> _incomingStreamDispatchers;
-    std::unordered_map<uint32_t, std::shared_ptr<std::atomic<bool>>> _outgoingStreams;
-    std::thread _thread;
-#if _WIN32
-    DWORD _readThreadId = 0;
-#endif
-    WorkQueue _worker;
-    ThreadPool _threadPool;
-    BufferPool _ipcBufferPool;
-    Pipe _pipe;
+    std::atomic<bool> _stopCalled = false;
+    bool _debugEnabled = false;
+    std::mutex _holdMutex;
+    int _holdDepth = 0;
+    std::vector<std::pair<OpcodeClientNotification, std::vector<uint8_t>>> _held;
+    ipc::Transport _transport;
+    ipc::EventLoop _loop;
+    std::shared_ptr<ipc::Endpoint> _endpoint;
+    std::shared_ptr<ipc::StreamReceiver> _streams;
     // Exit fullscreen
 };
 
 void CloseEverything();
-void HandleWindowCreate(PacketReader& reader, PacketWriter& writer);
-void HandleWindowMaximize(PacketReader& reader, PacketWriter& writer);
-void HandleWindowMinimize(PacketReader& reader, PacketWriter& writer);
-void HandleWindowRestore(PacketReader& reader, PacketWriter& writer);
-void HandleWindowShow(PacketReader& reader, PacketWriter& writer);
-void HandleWindowHide(PacketReader& reader, PacketWriter& writer);
-void HandleWindowActivate(PacketReader& reader, PacketWriter& writer);
-void HandleWindowBringToTop(PacketReader& reader, PacketWriter& writer);
-void HandleWindowSetAlwaysOnTop(PacketReader& reader, PacketWriter& writer);
-void HandleWindowSetFullscreen(PacketReader& reader, PacketWriter& writer);
-void HandleWindowCenterSelf(PacketReader& reader, PacketWriter& writer);
-void HandleWindowSetProxyRequests(PacketReader& reader, PacketWriter& writer);
-void HandleWindowGetPosition(PacketReader& reader, PacketWriter& writer);
-void HandleWindowSetPosition(PacketReader& reader, PacketWriter& writer);
-void HandleWindowSetDevelopmentToolsEnabled(PacketReader& reader, PacketWriter& writer);
-void HandleWindowSetDevelopmentToolsVisible(PacketReader& reader, PacketWriter& writer);
-void HandleWindowClose(PacketReader& reader, PacketWriter& writer);
-void HandleWindowLoadUrl(PacketReader& reader, PacketWriter& writer);
-void HandleWindowRequestFocus(PacketReader& reader, PacketWriter& writer);
-void HandleWindowSetModifyRequests(PacketReader& reader, PacketWriter& writer);
-void HandleWindowOpenFilePicker(PacketReader& reader, PacketWriter& writer);
-void HandleWindowOpenDirectoryPicker(PacketReader& reader, PacketWriter& writer);
-void HandleWindowSaveFilePicker(PacketReader& reader, PacketWriter& writer);
-void HandleWindowSetTitle(PacketReader& reader, PacketWriter& writer);
-void HandleWindowSetIcon(PacketReader& reader, PacketWriter& writer);
-void HandleAddUrlToProxy(PacketReader& reader, PacketWriter& writer);
-void HandleRemoveUrlToProxy(PacketReader& reader, PacketWriter& writer);
-void HandleAddDomainToProxy(PacketReader& reader, PacketWriter& writer);
-void HandleRemoveDomainToProxy(PacketReader& reader, PacketWriter& writer);
-void HandleAddUrlToModify(PacketReader& reader, PacketWriter& writer);
-void HandleRemoveUrlToModify(PacketReader& reader, PacketWriter& writer);
-void HandleWindowGetSize(PacketReader& reader, PacketWriter& writer);
-void HandleWindowSetSize(PacketReader& reader, PacketWriter& writer);
-void HandleAddDevToolsEventMethod(PacketReader& reader, PacketWriter& writer);
-void HandleRemoveDevToolsEventMethod(PacketReader& reader, PacketWriter& writer);
-void HandleWindowSetZoom(PacketReader& reader, PacketWriter& writer);
-void HandleWindowGetZoom(PacketReader& reader, PacketWriter& writer);
-void HandleGetWidevineStatus(PacketReader& reader, PacketWriter& writer);
+void HandleWindowCreate(PacketReader& reader, ipc::Reply reply);
+ipc::StatusCode HandleWindowMaximize(PacketReader& reader, PacketWriter& writer);
+ipc::StatusCode HandleWindowMinimize(PacketReader& reader, PacketWriter& writer);
+ipc::StatusCode HandleWindowRestore(PacketReader& reader, PacketWriter& writer);
+ipc::StatusCode HandleWindowShow(PacketReader& reader, PacketWriter& writer);
+ipc::StatusCode HandleWindowHide(PacketReader& reader, PacketWriter& writer);
+ipc::StatusCode HandleWindowActivate(PacketReader& reader, PacketWriter& writer);
+ipc::StatusCode HandleWindowBringToTop(PacketReader& reader, PacketWriter& writer);
+ipc::StatusCode HandleWindowSetAlwaysOnTop(PacketReader& reader, PacketWriter& writer);
+ipc::StatusCode HandleWindowSetFullscreen(PacketReader& reader, PacketWriter& writer);
+ipc::StatusCode HandleWindowCenterSelf(PacketReader& reader, PacketWriter& writer);
+ipc::StatusCode HandleWindowSetProxyRequests(PacketReader& reader, PacketWriter& writer);
+ipc::StatusCode HandleWindowGetPosition(PacketReader& reader, PacketWriter& writer);
+ipc::StatusCode HandleWindowSetPosition(PacketReader& reader, PacketWriter& writer);
+ipc::StatusCode HandleWindowSetDevelopmentToolsEnabled(PacketReader& reader, PacketWriter& writer);
+ipc::StatusCode HandleWindowSetDevelopmentToolsVisible(PacketReader& reader, PacketWriter& writer);
+ipc::StatusCode HandleWindowClose(PacketReader& reader, PacketWriter& writer);
+ipc::StatusCode HandleWindowLoadUrl(PacketReader& reader, PacketWriter& writer);
+ipc::StatusCode HandleWindowRequestFocus(PacketReader& reader, PacketWriter& writer);
+ipc::StatusCode HandleWindowSetModifyRequests(PacketReader& reader, PacketWriter& writer);
+void HandleWindowOpenFilePicker(PacketReader& reader, ipc::Reply reply);
+void HandleWindowOpenDirectoryPicker(PacketReader& reader, ipc::Reply reply);
+void HandleWindowSaveFilePicker(PacketReader& reader, ipc::Reply reply);
+ipc::StatusCode HandleWindowSetTitle(PacketReader& reader, PacketWriter& writer);
+ipc::StatusCode HandleWindowSetIcon(PacketReader& reader, PacketWriter& writer);
+ipc::StatusCode HandleAddUrlToProxy(PacketReader& reader, PacketWriter& writer);
+ipc::StatusCode HandleRemoveUrlToProxy(PacketReader& reader, PacketWriter& writer);
+ipc::StatusCode HandleAddDomainToProxy(PacketReader& reader, PacketWriter& writer);
+ipc::StatusCode HandleRemoveDomainToProxy(PacketReader& reader, PacketWriter& writer);
+ipc::StatusCode HandleAddUrlToModify(PacketReader& reader, PacketWriter& writer);
+ipc::StatusCode HandleRemoveUrlToModify(PacketReader& reader, PacketWriter& writer);
+ipc::StatusCode HandleWindowGetSize(PacketReader& reader, PacketWriter& writer);
+ipc::StatusCode HandleWindowSetSize(PacketReader& reader, PacketWriter& writer);
+ipc::StatusCode HandleAddDevToolsEventMethod(PacketReader& reader, PacketWriter& writer);
+ipc::StatusCode HandleRemoveDevToolsEventMethod(PacketReader& reader, PacketWriter& writer);
+ipc::StatusCode HandleWindowSetZoom(PacketReader& reader, PacketWriter& writer);
+ipc::StatusCode HandleWindowGetZoom(PacketReader& reader, PacketWriter& writer);
+ipc::StatusCode HandleGetWidevineStatus(PacketReader& reader, PacketWriter& writer);
 bool HandleWindowBridgeRpc(uint32_t requestId, PacketReader& reader, PacketWriter& writer);
 CefRefPtr<Client> CreateBrowserWindow(const IPCWindowCreate& windowCreate);
+void CreateTopLevelPopupWindow(CefRefPtr<CefBrowserView> popup_browser_view, bool is_devtools, const IPCWindowCreate& settings);
 
 #endif // IPC_H

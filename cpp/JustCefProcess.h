@@ -1,9 +1,11 @@
 #pragma once
 
+#include "JustCefErrors.h"
 #include "JustCefLogger.h"
 #include "JustCefWindow.h"
 #include <asio.hpp>
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -22,6 +24,14 @@ struct StartOptions
     std::string arguments;
     std::optional<std::filesystem::path> native_executable_path;
     std::optional<std::filesystem::path> working_directory;
+    std::chrono::milliseconds default_call_timeout = std::chrono::seconds(30);
+    std::chrono::milliseconds shutdown_grace_period = std::chrono::seconds(5);
+};
+
+enum class ModifyTimeoutPolicy : std::uint8_t
+{
+    Continue = 0,
+    Cancel = 1,
 };
 
 struct WindowCreateOptions
@@ -49,6 +59,11 @@ struct WindowCreateOptions
     std::optional<std::string> app_id;
     bool bridge_enabled = false;
     BridgeRpcHandler bridge_rpc_handler;
+    bool views_enabled = false;
+    ViewCreatedHandler view_created_handler;
+    std::chrono::milliseconds modify_timeout = std::chrono::milliseconds(0);
+    ModifyTimeoutPolicy modify_timeout_policy = ModifyTimeoutPolicy::Continue;
+    std::chrono::milliseconds proxy_open_timeout = std::chrono::milliseconds(0);
 };
 
 class JustCefProcess
@@ -87,13 +102,10 @@ public:
                                                                       bool modify_requests = false, RequestModifier request_modifier = {}, bool modify_request_body = false,
                                                                       std::optional<std::string> title = std::nullopt, std::optional<std::string> icon_path = std::nullopt,
                                                                       std::optional<std::string> app_id = std::nullopt, bool bridge_enabled = false,
-                                                                      BridgeRpcHandler bridge_rpc_handler = {});
+                                                                      BridgeRpcHandler bridge_rpc_handler = {}, bool views_enabled = false,
+                                                                      ViewCreatedHandler view_created_handler = {});
 
     asio::awaitable<void> NotifyExitAsync();
-
-    asio::awaitable<void> StreamOpenAsync(std::uint32_t identifier);
-    asio::awaitable<bool> StreamDataAsync(std::uint32_t identifier, std::vector<std::uint8_t> data);
-    asio::awaitable<void> StreamCloseAsync(std::uint32_t identifier);
 
     // Legacy helpers. Prefer the window-scoped picker methods.
     asio::awaitable<std::vector<std::string>> PickFileAsync(bool multiple, std::vector<FileFilter> filters);
