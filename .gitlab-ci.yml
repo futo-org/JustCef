@@ -40,6 +40,7 @@ build_windows_arm64:
 .build_linux:
   stage: build
   timeout: 3h
+  resource_group: justcef-linux-$LINUX_ARCH-release
   tags:
     - LinuxBuilder
   rules:
@@ -48,6 +49,7 @@ build_windows_arm64:
     - when: never
   script:
     - bash native/build-linux.sh "$LINUX_ARCH"
+    - bash native/ci/publish-linux.sh "$LINUX_ARCH"
   artifacts:
     when: always
     expire_in: 30 days
@@ -63,25 +65,3 @@ build_linux_arm64:
   extends: .build_linux
   variables:
     LINUX_ARCH: arm64
-
-publish_linux:
-  stage: build
-  tags:
-    - LinuxBuilder
-  needs:
-    - job: build_linux_x64
-      artifacts: true
-    - job: build_linux_arm64
-      artifacts: true
-  resource_group: justcef-linux-release
-  rules:
-    - if: '$CI_COMMIT_TAG'
-      when: manual
-    - when: never
-  script:
-    - bash native/ci/publish-linux.sh
-  artifacts:
-    when: always
-    expire_in: 30 days
-    paths:
-      - build/publish-linux.log

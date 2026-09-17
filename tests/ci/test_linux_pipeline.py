@@ -37,8 +37,8 @@ class LinuxPipelineTests(unittest.TestCase):
         return subprocess.run(["bash", str(self.root / script), *args], env=self.env,
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 
-    def prepare_artifacts(self):
-        for architecture in ("x64", "arm64"):
+    def prepare_artifacts(self, architectures=("x64", "arm64")):
+        for architecture in architectures:
             output = self.root / "build" / ("linux-" + architecture)
             output.mkdir(parents=True)
             (output / "build-info.txt").write_text("revision=" + "a" * 40 + "\nversion=9\narchitecture=" + architecture + "\n")
@@ -70,29 +70,46 @@ class LinuxPipelineTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertFalse(self.calls.exists())
 
-    def test_publish_validates_both_architectures_before_upload(self):
+    def test_publish_validates_selected_architecture_before_upload(self):
         self.prepare_artifacts()
         (self.root / "build/linux-arm64/JustCefNative-linux-arm64.zip").write_bytes(b"corrupt")
-        result = self.run_script("native/ci/publish-linux.sh")
+        result = self.run_script("native/ci/publish-linux.sh", "arm64")
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(self.calls.exists())
 
     def test_publish_rejects_wrong_commit(self):
         self.prepare_artifacts()
         self.env["CI_COMMIT_SHA"] = "b" * 40
-        result = self.run_script("native/ci/publish-linux.sh")
+        result = self.run_script("native/ci/publish-linux.sh", "x64")
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(self.calls.exists())
 
     def test_publish_uses_versioned_paths_without_secret_arguments(self):
-        self.prepare_artifacts()
-        result = self.run_script("native/ci/publish-linux.sh")
+        self.prepare_artifacts(("arm64",))
+        result = self.run_script("native/ci/publish-linux.sh", "arm64")
         self.assertEqual(result.returncode, 0, result.stdout)
         calls = self.calls.read_text()
-        self.assertEqual(len(calls.splitlines()), 4)
+        self.assertEqual(len(calls.splitlines()), 2)
         self.assertIn("s3://bucket/justcef/9/JustCefNative-linux-arm64.zip", calls)
         self.assertNotIn("test-secret", calls)
         self.assertNotIn("test-key", calls)
+        self.assertNotIn("linux-x64", calls)
+        self.assertTrue((self.root / "build/linux-arm64/publish.log").exists())
+
+    def test_publish_x64_does_not_require_arm64_artifacts(self):
+        self.prepare_artifacts(("x64",))
+        result = self.run_script("native/ci/publish-linux.sh", "x64")
+        self.assertEqual(result.returncode, 0, result.stdout)
+        calls = self.calls.read_text()
+        self.assertEqual(len(calls.splitlines()), 2)
+        self.assertIn("s3://bucket/justcef/9/JustCefNative-linux-x64.zip", calls)
+        self.assertNotIn("linux-arm64", calls)
+
+    def test_publish_requires_valid_architecture(self):
+        for args in ((), ("invalid",)):
+            result = self.run_script("native/ci/publish-linux.sh", *args)
+            self.assertEqual(result.returncode, 2)
+        self.assertFalse(self.calls.exists())
 
 
 if __name__ == "__main__":
