@@ -279,6 +279,20 @@ def test_views_lifecycle():
           }, 20);
         })""")
         check(len(ids) == 3, "three views created")
+        blank = devtools_eval(ctl, wid, """new Promise(resolve => {
+          const v = document.createElement('justcef-view');
+          v.addEventListener('viewcreated', () => resolve(v.viewId), {once: true});
+          v.setAttribute('src', 'about:blank');
+          document.body.append(v);
+        })""")
+        check(isinstance(blank, int), "about:blank view created")
+        check(devtools_eval(ctl, wid, """new Promise(resolve => {
+          const v = [...document.querySelectorAll('justcef-view')].find(x => x.viewId === %d);
+          v.addEventListener('load', () => resolve(v.viewId === %d), {once: true});
+          v.setAttribute('src', 'view.html?after-blank');
+        })""" % (blank, blank)), "about:blank view navigates to HTTP")
+        devtools_eval(ctl, wid, "[...document.querySelectorAll('justcef-view')].find(x => x.viewId === %d).remove()" % blank)
+        ctl.wait_note("WindowClosed", lambda r: r.i32() == blank)
         kept = devtools_eval(ctl, wid, """new Promise(resolve => {
           const v = document.getElementById('chat');
           const id = v.viewId;

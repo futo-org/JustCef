@@ -851,8 +851,16 @@ constexpr char kViewBootstrapScript[] = R"JS((function (native) {
     markHot();
   });
 
-  if (!customElements.get('justcef-view')) {
-    customElements.define('justcef-view', JustCefViewElement);
+  const registry = globalThis.customElements;
+  if (!registry || typeof registry.get !== 'function' || typeof registry.define !== 'function') {
+    console.error('justcef-view is unavailable because Custom Elements are not supported in this document');
+    return function () {};
+  }
+  try {
+    if (!registry.get('justcef-view')) registry.define('justcef-view', JustCefViewElement);
+  } catch (error) {
+    console.error('Failed to register justcef-view', error);
+    return function () {};
   }
 
   return function dispatch(kind, id, a, b) {
@@ -1335,6 +1343,12 @@ void Dispatch(CefRefPtr<CefBrowser> browser, const std::string& token, const std
     arguments.push_back(a ? a : CefV8Value::CreateUndefined());
     arguments.push_back(b ? b : CefV8Value::CreateUndefined());
     dispatch->ExecuteFunction(nullptr, arguments);
+    if (dispatch->HasException())
+    {
+        CefRefPtr<CefV8Exception> error = dispatch->GetException();
+        LOG(ERROR) << "Failed to dispatch justcef-view event: " << (error ? error->GetMessage().ToString() : "unknown error");
+        dispatch->ClearException();
+    }
 
     context->Exit();
 }
@@ -1375,6 +1389,8 @@ void InstallViewElement(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame
     {
         CefRefPtr<CefV8Exception> error = factory->HasException() ? factory->GetException() : nullptr;
         LOG(ERROR) << "Failed to initialize justcef-view: " << (error ? error->GetMessage().ToString() : "unknown error");
+        if (factory->HasException())
+            factory->ClearException();
     }
     else if (ViewContextState* stored = FindStateForContext(browser, context))
     {

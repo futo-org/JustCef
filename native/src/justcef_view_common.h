@@ -157,7 +157,7 @@ inline bool IsAllowedViewSource(const std::string& src)
         return true;
     };
 
-    return startsWith("https://") || startsWith("http://");
+    return startsWith("https://") || startsWith("http://") || (src.size() == 11 && startsWith("about:blank"));
 }
 
 #endif // JUSTCEF_VIEW_COMMON_H_

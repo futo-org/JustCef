@@ -541,24 +541,6 @@ namespace JustCef
 
             var process = new Process();
             process.StartInfo = psi;
-            process.EnableRaisingEvents = true;
-            process.Exited += (_, _) =>
-            {
-                int exitCode;
-                try
-                {
-                    exitCode = process.ExitCode;
-                }
-                catch
-                {
-                    exitCode = -1;
-                }
-
-                Logger.Info<JustCefProcess>($"Child process exited with code {exitCode}.");
-                SignalStartupFailed(exitCode);
-                SignalExited();
-                _ = Task.Delay(ExitWithoutEofGracePeriod).ContinueWith(_ => Shutdown(), TaskScheduler.Default);
-            };
             process.ErrorDataReceived += (_, args) =>
             {
                 var d = args?.Data;
@@ -578,6 +560,28 @@ namespace JustCef
             process.BeginOutputReadLine();
             process.BeginErrorReadLine();
             _childProcess = process;
+
+            _ = Task.Factory.StartNew(() =>
+            {
+                while (!process.WaitForExit(250))
+                {
+                }
+
+                int exitCode;
+                try
+                {
+                    exitCode = process.ExitCode;
+                }
+                catch
+                {
+                    exitCode = -1;
+                }
+
+                Logger.Info<JustCefProcess>($"Child process exited with code {exitCode}.");
+                SignalStartupFailed(exitCode);
+                SignalExited();
+                _ = Task.Delay(ExitWithoutEofGracePeriod).ContinueWith(_ => Shutdown(), TaskScheduler.Default);
+            }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
 
             _writer.DisposeLocalCopyOfClientHandle();
             _reader.DisposeLocalCopyOfClientHandle();
