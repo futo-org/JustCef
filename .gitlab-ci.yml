@@ -1,9 +1,17 @@
 stages:
   - build
+  - publish
+
+variables:
+  LINUX_ARM64_RUNNER_TAG: LinuxBuilder
 
 workflow:
   rules:
     - if: '$CI_COMMIT_TAG'
+      when: always
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      when: always
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
       when: always
     - when: never
 
@@ -37,21 +45,51 @@ build_windows_arm64:
     paths:
       - native/build/Release/*
 
-build_terraform:
+.build_linux:
   stage: build
+  timeout: 3h
   tags:
     - LinuxBuilder
+  rules:
+    - when: on_success
+  script:
+    - bash native/build-linux.sh "$LINUX_ARCH"
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - build/linux-$LINUX_ARCH/
+
+build_linux_x64:
+  extends: .build_linux
   variables:
-    TF_VAR_release_version: $CI_COMMIT_TAG
-    TF_VAR_cf_r2_account_id: $CF_R2_ACCOUNT_ID
-    TF_VAR_cf_r2_access_key_id: $CF_R2_ACCESS_KEY_ID
-    TF_VAR_cf_r2_secret_access_key: $CF_R2_SECRET_ACCESS_KEY
-    TF_VAR_cf_r2_bucket: $CF_R2_BUCKET
+    LINUX_ARCH: x64
+
+build_linux_arm64:
+  extends: .build_linux
+  tags:
+    - $LINUX_ARM64_RUNNER_TAG
+  variables:
+    LINUX_ARCH: arm64
+
+publish_linux:
+  stage: publish
+  tags:
+    - LinuxBuilder
+  needs:
+    - job: build_linux_x64
+      artifacts: true
+    - job: build_linux_arm64
+      artifacts: true
+  resource_group: justcef-linux-release
   rules:
     - if: '$CI_COMMIT_TAG'
       when: manual
     - when: never
   script:
-    - cd native
-    - terraform init -input=false
-    - terraform apply -auto-approve -input=false
+    - bash native/ci/publish-linux.sh
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - build/publish-linux.log
