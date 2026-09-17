@@ -1,6 +1,8 @@
 FROM --platform=$BUILDPLATFORM debian:11@sha256:6f519a81440354a85eb592c5f32109ab80605f6b892455983a6f618bf87fabe9 AS cef
 COPY native/ci/sources.list /etc/apt/sources.list
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl bzip2 && rm -rf /var/lib/apt/lists/*
+RUN apt-get -o Acquire::Retries=10 -o Acquire::http::Timeout=120 update && \
+    apt-get -o Acquire::Retries=10 -o Acquire::http::Timeout=120 -o Acquire::http::Pipeline-Depth=0 install -y --no-install-recommends ca-certificates curl bzip2 && \
+    rm -rf /var/lib/apt/lists/*
 COPY native/CMakeLists.txt /CEF-CMakeLists.txt
 ARG TARGETARCH
 RUN set -eu; \
@@ -15,7 +17,8 @@ RUN set -eu; \
 FROM debian:11@sha256:6f519a81440354a85eb592c5f32109ab80605f6b892455983a6f618bf87fabe9 AS toolchain
 ENV DEBIAN_FRONTEND=noninteractive
 COPY native/ci/sources.list /etc/apt/sources.list
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get -o Acquire::Retries=10 -o Acquire::http::Timeout=120 update && \
+    apt-get -o Acquire::Retries=10 -o Acquire::http::Timeout=120 -o Acquire::http::Pipeline-Depth=0 install -y --no-install-recommends \
     build-essential binutils file ca-certificates curl python3 python-is-python3 \
     libnss3-dev libgtk-3-dev libx11-xcb-dev libxcomposite-dev libxcursor-dev \
     libxi-dev libxtst-dev libxrandr-dev libasound2-dev libxdamage-dev libxss-dev \
