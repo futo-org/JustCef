@@ -40,6 +40,7 @@ namespace
 constexpr int64_t kSnapshotAfterLoadMs = 500;
 constexpr int64_t kSnapshotIntervalMs = 2000;
 constexpr int64_t kZoomRecheckMs = 200;
+constexpr int64_t kHostZoomSyncMs = 100;
 
 double NowSeconds()
 {
@@ -135,21 +136,14 @@ private:
     DISALLOW_COPY_AND_ASSIGN(TransparentPanelDelegate);
 };
 
-void ApplyClipLayout(CefRefPtr<CefPanel> clip, CefRefPtr<CefBrowserView> browserView, const ViewFrame& frame)
+void ApplyClipLayout(CefRefPtr<CefPanel> clip, const ViewFrame& frame)
 {
     const CefRect& c = frame.clip;
     const CefRect& f = frame.full;
 
-    CefBoxLayoutSettings settings;
-    settings.horizontal = true;
-    settings.main_axis_alignment = CEF_AXIS_ALIGNMENT_START;
-    settings.cross_axis_alignment = CEF_AXIS_ALIGNMENT_STRETCH;
-    settings.inside_border_insets = CefInsets(f.y - c.y, f.x - c.x, (c.y + c.height) - (f.y + f.height), (c.x + c.width) - (f.x + f.width));
-
-    CefRefPtr<CefBoxLayout> layout = clip->SetToBoxLayout(settings);
-    if (layout)
-        layout->SetFlexForView(browserView, 1);
-    clip->InvalidateLayout();
+    const CefInsets insets(f.y - c.y, f.x - c.x, (c.y + c.height) - (f.y + f.height), (c.x + c.width) - (f.x + f.width));
+    if (clip->GetInsets() != insets)
+        clip->SetInsets(insets);
 }
 
 class ViewSurface
@@ -188,6 +182,7 @@ public:
         if (!holder_ || !clip_ || (hasFrame_ && SameFrame(frame, frame_)))
             return;
 
+        const bool configureLayout = !hasFrame_ || frame.anchorH != frame_.anchorH || frame.anchorV != frame_.anchorV;
         frame_ = frame;
         hasFrame_ = true;
 
@@ -250,14 +245,18 @@ public:
             break;
         }
 
-        settings.inside_border_insets = CefInsets(std::max(0, top), std::max(0, left), std::max(0, bottom), std::max(0, right));
-
+        const CefInsets insets(std::max(0, top), std::max(0, left), std::max(0, bottom), std::max(0, right));
+        if (holder_->GetInsets() != insets)
+            holder_->SetInsets(insets);
         clipDelegate_->SetPreferredSize(CefSize(c.width, c.height));
-        CefRefPtr<CefBoxLayout> layout = holder_->SetToBoxLayout(settings);
-        if (layout)
-            layout->SetFlexForView(clip_, flex);
+        if (configureLayout)
+        {
+            CefRefPtr<CefBoxLayout> layout = holder_->SetToBoxLayout(settings);
+            if (layout)
+                layout->SetFlexForView(clip_, flex);
+        }
 
-        ApplyClipLayout(clip_, browserView_, frame);
+        ApplyClipLayout(clip_, frame);
         holder_->InvalidateLayout();
         holder_->Layout();
         clip_->Layout();
@@ -397,7 +396,7 @@ private:
         if (!controller_ || !controller_->IsValid() || frame.clip.width <= 0 || frame.clip.height <= 0)
             return;
 
-        ApplyClipLayout(clip_, browserView_, frame);
+        ApplyClipLayout(clip_, frame);
         controller_->SetBounds(frame.clip);
         clip_->Layout();
     }
@@ -452,6 +451,7 @@ struct ViewEntry
     bool destroyRequested = false;
     bool detached = false;
     bool hasUpdate = false;
+    bool refreshPending = false;
     ViewUpdate update;
     int32_t derivedZoomSeq = -1;
     bool zoomRecheckPending = false;
@@ -479,6 +479,7 @@ struct ViewEntry
 
 std::vector<std::shared_ptr<ViewEntry>> g_views;
 std::unordered_set<int> g_hostDialogsOpen;
+std::unordered_set<int> g_hostZoomSyncPending;
 int32_t g_nextKey = 0;
 
 Client* ClientFor(CefRefPtr<CefBrowser> browser)
@@ -580,6 +581,23 @@ CefRefPtr<CefDictionaryValue> ErrorDetail(const std::string& reason)
 void Refresh(const std::shared_ptr<ViewEntry>& entry);
 void Capture(const std::shared_ptr<ViewEntry>& entry);
 void OnHostActivity(CefRefPtr<CefBrowser> host, const std::string& kind);
+
+void SyncHostZoom(int parentId)
+{
+    g_hostZoomSyncPending.erase(parentId);
+    CefRefPtr<CefBrowser> host = ClientManager::GetInstance()->AcquirePointer(parentId);
+    if (host)
+        PropagateHostZoom(host, host->GetHost()->GetZoomLevel());
+}
+
+void RefreshLatest(int32_t key)
+{
+    auto entry = FindByKey(key);
+    if (!entry)
+        return;
+    entry->refreshPending = false;
+    Refresh(entry);
+}
 
 void DetachEntry(int32_t key)
 {
@@ -1174,7 +1192,11 @@ bool HandleHostProcessMessage(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame>
 
         entry->update = update;
         entry->hasUpdate = true;
-        Refresh(entry);
+        if (!entry->refreshPending)
+        {
+            entry->refreshPending = true;
+            CefPostTask(TID_UI, base::BindOnce(&RefreshLatest, entry->key));
+        }
         return true;
     }
 
@@ -1383,6 +1405,10 @@ void OnViewAfterCreated(Client* client, CefRefPtr<CefBrowser> browser)
 
     entry->browser = browser;
     entry->viewId = browser->GetIdentifier();
+
+    CefRefPtr<CefBrowser> host = ClientManager::GetInstance()->AcquirePointer(entry->parentId);
+    if (host)
+        browser->GetHost()->SetZoomLevel(host->GetHost()->GetZoomLevel());
 
     if (entry->destroyRequested)
     {
@@ -1744,6 +1770,8 @@ void OnWheelIdle(int32_t key, int32_t token)
 void OnHostActivity(CefRefPtr<CefBrowser> host, const std::string& kind)
 {
     const int parentId = host->GetIdentifier();
+    if (g_hostZoomSyncPending.insert(parentId).second)
+        CefPostDelayedTask(TID_UI, base::BindOnce(&SyncHostZoom, parentId), kHostZoomSyncMs);
     const double now = NowSeconds();
     for (auto& entry : g_views)
     {
@@ -1764,6 +1792,21 @@ void OnHostActivity(CefRefPtr<CefBrowser> host, const std::string& kind)
 }
 
 } // namespace
+
+void PropagateHostZoom(CefRefPtr<CefBrowser> browser, double zoomLevel)
+{
+    CEF_REQUIRE_UI_THREAD();
+    if (!browser)
+        return;
+
+    const int parentId = browser->GetIdentifier();
+    for (auto& entry : g_views)
+    {
+        if (entry->parentId == parentId && entry->browser && !entry->detached && !entry->destroyRequested &&
+            std::fabs(entry->browser->GetHost()->GetZoomLevel() - zoomLevel) > 0.0001)
+            entry->browser->GetHost()->SetZoomLevel(zoomLevel);
+    }
+}
 
 void OnViewWheel(CefRefPtr<CefBrowser> browser, double deltaX, double deltaY, double clientX, double clientY, int phase)
 {

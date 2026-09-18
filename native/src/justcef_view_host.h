@@ -22,6 +22,7 @@ void OnHostBrowserGone(CefRefPtr<CefBrowser> browser);
 void OnHostDialogStateChanged(CefRefPtr<CefBrowser> browser, bool open);
 void OnHostGotFocus(CefRefPtr<CefBrowser> browser);
 bool IsFocusInView(CefRefPtr<CefBrowser> hostBrowser);
+void PropagateHostZoom(CefRefPtr<CefBrowser> browser, double zoomLevel);
 
 void OnViewAfterCreated(Client* client, CefRefPtr<CefBrowser> browser);
 bool OnViewDoClose(CefRefPtr<CefBrowser> browser);

@@ -24,6 +24,7 @@ function harness() {
       this.classList = { toggle() {} };
     }
     attachShadow() { return { append() {} }; }
+    getContext() { return { drawImage() {} }; }
     addEventListener() {}
     getAttribute(name) { return this.attributes.get(name) ?? null; }
     setAttribute(name, value) {
@@ -43,7 +44,7 @@ function harness() {
   const document = {
     baseURI: 'https://app.test/', visibilityState: 'visible',
     documentElement: { clientWidth: 800, clientHeight: 600 },
-    createElement: () => new Element(), addEventListener() {},
+    createElement: () => new Element(), addEventListener: (name, fn) => listeners.set(name, fn),
     querySelectorAll: () => [], elementsFromPoint: () => [],
   };
   const context = {
@@ -52,7 +53,8 @@ function harness() {
     ResizeObserver: class { observe() {} unobserve() {} },
     MutationObserver: class { observe() {} disconnect() {} },
     Node: { DOCUMENT_POSITION_FOLLOWING: 4 },
-    CustomEvent: class {}, document, URL,
+    CustomEvent: class {}, document, URL, Blob, atob,
+    createImageBitmap: async () => ({ width: 100, height: 100, close() {} }),
     customElements: { get: name => classes.get(name), define: (name, cls) => classes.set(name, cls) },
     innerWidth: 800, innerHeight: 600, devicePixelRatio: 1,
     performance: { now: () => now },
@@ -85,12 +87,16 @@ function harness() {
     }
   }
   function event(name, detail) { dispatch('event', id, name, JSON.stringify(detail)); }
-  return { view, messages, advance, event, pageEvent: name => listeners.get(name)({ persisted: true }) };
+  return { view, messages, advance, event,
+    snapshot: async () => { dispatch('snapshot', id, '', null); await Promise.resolve(); },
+    scroll: () => listeners.get('scroll')({ target: document }),
+    pageEvent: name => listeners.get(name)({ persisted: true }) };
 }
 
-test('motion freeze resumes after geometry settles', () => {
+test('motion freeze resumes after geometry settles', async () => {
   const h = harness();
   h.event('viewcreated', { viewId: 10 });
+  await h.snapshot();
   h.view.setAttribute('transition', 'freeze');
   h.view.rect = { left: 40, top: 20, width: 100, height: 100, right: 140, bottom: 120 };
   h.advance(32);
@@ -99,6 +105,24 @@ test('motion freeze resumes after geometry settles', () => {
   const last = h.messages.filter(m => m.name === 'update').at(-1);
   assert.equal(last.args[17], false, 'must leave frozen mode');
   assert.equal(last.args[13], true, 'must restore the native view');
+});
+
+test('default parent scrolling updates immediately without hiding or requesting snapshots', () => {
+  const h = harness();
+  h.event('viewcreated', { viewId: 10 });
+  for (let i = 1; i <= 20; ++i) {
+    h.view.rect = { left: 20, top: 20 - i, width: 100, height: 100, right: 120, bottom: 120 - i };
+    h.scroll();
+    const update = h.messages.filter(m => m.name === 'update').at(-1);
+    assert.equal(update.args[3], 20 - i, 'position is sent during the scroll callback');
+    assert.equal(update.args[13], true, 'native view stays visible');
+    assert.equal(update.args[17], false, 'scroll does not freeze');
+    h.advance(16);
+  }
+  assert.equal(h.messages.filter(m => m.name === 'command' && m.args[1] === 'snapshot').length, 0);
+  const count = h.messages.filter(m => m.name === 'update').length;
+  h.advance(600);
+  assert.equal(h.messages.filter(m => m.name === 'update').length, count, 'settled geometry sends no extra updates');
 });
 
 test('rejected navigation preserves a live view and its commands', () => {

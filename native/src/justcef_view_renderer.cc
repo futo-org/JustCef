@@ -418,6 +418,8 @@ constexpr char kViewBootstrapScript[] = R"JS((function (native) {
         occluded: false,
         hasSnapshot: false,
         snapshotToken: 0,
+        snapshotPending: false,
+        pendingFreezes: new Set(),
 
         transition() {
           const value = (el.getAttribute('transition') || 'auto').toLowerCase();
@@ -431,12 +433,22 @@ constexpr char kViewBootstrapScript[] = R"JS((function (native) {
 
         freeze(reason) {
           if (this.transition() === 'live' && reason !== 'suspend') return;
+          if (reason !== 'suspend' && !this.hasSnapshot) {
+            this.pendingFreezes.add(reason);
+            if (!this.snapshotPending && this.created) {
+              this.snapshotPending = true;
+              native.command(this.id, 'snapshot');
+            }
+            return;
+          }
+          this.showUnderlay(true);
           this.freezes.add(reason);
           this.releasing.delete(reason);
           markHot();
         },
 
         release(reason) {
+          this.pendingFreezes.delete(reason);
           if (!this.freezes.has(reason) || this.releasing.has(reason)) return;
           this.releasing.set(reason, performance.now());
           markHot();
@@ -475,6 +487,8 @@ constexpr char kViewBootstrapScript[] = R"JS((function (native) {
           this.lastKey = '';
           this.snapshotToken++;
           this.hasSnapshot = false;
+          this.snapshotPending = false;
+          this.pendingFreezes.clear();
           this.showUnderlay(false);
           this.freezes.clear();
           this.releasing.clear();
@@ -517,7 +531,7 @@ constexpr char kViewBootstrapScript[] = R"JS((function (native) {
 
           if (moved && last && !this.freezes.has('scroll') && !this.freezes.has('resize')) {
             this.movingFrames++;
-            if (this.transition() === 'freeze' || this.movingFrames >= 3) this.freeze('motion');
+            if (this.transition() === 'freeze') this.freeze('motion');
           } else if (!moved) {
             this.movingFrames = 0;
             if (this.freezes.has('motion')) this.release('motion');
@@ -583,6 +597,7 @@ constexpr char kViewBootstrapScript[] = R"JS((function (native) {
         onNative(kind, a, b) {
           if (kind === 'snapshot') {
             const token = ++this.snapshotToken;
+            this.snapshotPending = false;
             let bytes;
             try {
               bytes = decodeBase64(a);
@@ -601,6 +616,11 @@ constexpr char kViewBootstrapScript[] = R"JS((function (native) {
               bitmap.close();
               this.hasSnapshot = true;
               this.showUnderlay(!(this.occluded && this.occlusion() === 'hide'));
+              if (this.pendingFreezes.size) {
+                const reasons = Array.from(this.pendingFreezes);
+                this.pendingFreezes.clear();
+                for (const reason of reasons) this.freeze(reason);
+              }
               if (this.suspendPending) {
                 clearTimeout(this.suspendPending);
                 this.suspendPending = 0;
@@ -783,7 +803,7 @@ constexpr char kViewBootstrapScript[] = R"JS((function (native) {
     if (!tracked.size) return;
     const target = event.target;
     forEachState((state, el) => {
-      if (state.transition() === 'live' || !scrollAffects(target, el)) return;
+      if (state.transition() !== 'freeze' || !scrollAffects(target, el)) return;
       state.freeze('scroll');
       clearTimeout(scrollTimers.get(el));
       scrollTimers.set(el, setTimeout(() => {
@@ -791,7 +811,10 @@ constexpr char kViewBootstrapScript[] = R"JS((function (native) {
         state.release('scroll');
       }, SCROLL_SETTLE_MS));
     });
-    markHot();
+    if (rafId) cancelAnimationFrame(rafId);
+    rafId = 0;
+    hotUntil = Math.max(hotUntil, performance.now() + HOT_MS);
+    tick();
   }
 
 

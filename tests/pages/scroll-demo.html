@@ -1,0 +1,33 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>JustCef scroll laboratory</title>
+<style>
+body { margin: 0; color: #eee; background: #18202b; font: 16px sans-serif; }
+header { padding: 12px; }
+#scroller { height: 520px; overflow: auto; margin: 12px; border: 3px solid white; }
+.spacer { height: 160px; }
+.row { display: flex; align-items: stretch; margin: 0 30px; }
+.ruler { width: 80px; background: repeating-linear-gradient(#fa5 0 2px, transparent 2px 20px); }
+justcef-view { display: block; width: 400px; height: 360px; background: #333; }
+button { margin-right: 10px; }
+</style>
+<header><button onclick="sweep()">Scroll sweep</button><button onclick="chat.setAttribute('transition', 'live')">Live</button><button onclick="chat.setAttribute('transition', 'auto')">Auto</button>Native chat / DOM ruler — edges should stay aligned.</header>
+<div id="scroller"><div class="spacer"></div><div class="row"><div class="ruler"></div><justcef-view id="chat" src="scroll-demo-chat.html"></justcef-view></div><div style="height:900px"></div></div>
+<script>
+const scroller = document.getElementById('scroller');
+const chat = document.getElementById('chat');
+async function sweep() {
+  const samples = [];
+  const start = performance.now();
+  await new Promise(resolve => {
+    function frame(now) {
+      const t = (now - start) / 3000;
+      scroller.scrollTop = 140 * (1 - Math.cos(Math.min(t, 1) * Math.PI * 4));
+      samples.push({time: performance.timeOrigin + performance.now(), y: chat.getBoundingClientRect().top});
+      if (t < 1) requestAnimationFrame(frame); else resolve();
+    }
+    requestAnimationFrame(frame);
+  });
+  return samples;
+}
+</script>

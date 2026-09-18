@@ -2058,6 +2058,7 @@ ipc::StatusCode HandleWindowSetZoom(PacketReader& reader, PacketWriter& writer)
     }
 
     browser->GetHost()->SetZoomLevel(*zoom);
+    justcef_view::PropagateHostZoom(browser, *zoom);
     return ipc::StatusCode::Ok;
 }
 

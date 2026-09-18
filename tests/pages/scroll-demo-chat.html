@@ -1,0 +1,15 @@
+<!doctype html>
+<meta charset="utf-8">
+<style>
+body { margin: 0; background: #123c38; color: white; font: 16px sans-serif; }
+header { background: #d43; padding: 12px; }
+p { height: 20px; margin: 0; border-top: 1px solid #8ab; }
+</style>
+<header>Native browser — <input placeholder="Type here to test input"></header>
+<main></main>
+<script>
+document.querySelector('main').innerHTML = Array.from({length: 80}, (_, i) => `<p>Chat message ${i}</p>`).join('');
+window.measurements = {resizes: [], visibility: []};
+addEventListener('resize', () => measurements.resizes.push([innerWidth, innerHeight]));
+document.addEventListener('visibilitychange', () => measurements.visibility.push(document.visibilityState));
+</script>
