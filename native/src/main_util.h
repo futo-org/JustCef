@@ -22,9 +22,11 @@ struct CachePaths
     std::string rootCachePath;
     std::string cachePath;
     std::string temporaryPath;
+    std::string logFilePath;
 };
 
 CachePaths ResolveCachePaths(const CefRefPtr<CefCommandLine>& command_line);
+const std::string& GetLogFilePath();
 void RemoveTemporaryCachePath(const CachePaths& cache_paths);
 
 // Process types that may have different CefApp instances.

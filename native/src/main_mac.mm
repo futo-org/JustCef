@@ -212,6 +212,7 @@ int main(int argc, char* argv[]) {
         if (!cachePaths.cachePath.empty()) {
             CefString(&settings.cache_path) = cachePaths.cachePath;
         }
+        CefString(&settings.log_file) = cachePaths.logFilePath;
 
         InitializeWidevineState(command_line, cachePaths.rootCachePath);
 

@@ -5,7 +5,8 @@
 #include "include/base/cef_logging.h"
 
 #include <algorithm>
-#include <random>
+#include <chrono>
+#include <cstdint>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -1173,12 +1174,21 @@ std::unordered_map<int, std::vector<ViewContentState>> g_view_content_contexts;
 
 std::unordered_map<int, std::vector<ViewContextState>> g_view_contexts;
 
+uint64_t SplitMix64(uint64_t value)
+{
+    value += 0x9E3779B97F4A7C15ull;
+    value = (value ^ (value >> 30)) * 0xBF58476D1CE4E5B9ull;
+    value = (value ^ (value >> 27)) * 0x94D049BB133111EBull;
+    return value ^ (value >> 31);
+}
+
 std::string CreateDocumentToken()
 {
-    static std::random_device device;
-    static std::mt19937_64 generator(device());
+    static const uint64_t seed = SplitMix64(static_cast<uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count()) ^
+                                            static_cast<uint64_t>(std::chrono::system_clock::now().time_since_epoch().count()));
+    static uint64_t counter = 0;
     static const char* digits = "0123456789abcdef";
-    uint64_t value = generator();
+    uint64_t value = SplitMix64(seed + ++counter);
     std::string token(16, '0');
     for (int i = 15; i >= 0; --i)
     {

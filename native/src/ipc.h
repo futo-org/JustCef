@@ -208,6 +208,7 @@ public:
     void Stop();
 
     ipc::CallHandle Echo(std::vector<uint8_t> data, std::chrono::milliseconds timeout, std::function<void(ipc::Response)> callback);
+    void Print(const std::string& text);
     ipc::CallHandle WindowModifyRequest(int32_t identifier, CefRefPtr<CefRequest> request, bool modifyRequestBody, std::chrono::milliseconds timeout,
                                         std::function<void(ipc::StatusCode)> callback);
     ipc::CallHandle WindowProxyRequest(int32_t identifier, CefRefPtr<CefRequest> request, std::chrono::milliseconds timeout,

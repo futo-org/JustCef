@@ -613,6 +613,19 @@ std::vector<std::filesystem::path> BuildSearchPaths()
     return search_paths;
 }
 
+std::string GetNativeLogSeverity()
+{
+    if (Logger::WillLog(LogLevel::Debug))
+        return "verbose";
+    if (Logger::WillLog(LogLevel::Info))
+        return "info";
+    if (Logger::WillLog(LogLevel::Warning))
+        return "warning";
+    if (Logger::WillLog(LogLevel::Error))
+        return "error";
+    return "disable";
+}
+
 } // namespace
 
 class JustCefProcessImpl : public WindowCommandTarget, public std::enable_shared_from_this<JustCefProcessImpl>
@@ -648,7 +661,11 @@ public:
         {
             const auto native_path = JustCefProcess::ResolveNativeExecutablePath(options.native_executable_path);
             const auto working_directory = options.working_directory ? std::filesystem::absolute(*options.working_directory) : native_path.parent_path();
-            const auto additional_arguments = SplitArguments(options.arguments);
+            auto additional_arguments = SplitArguments(options.arguments);
+            const bool has_log_severity = std::any_of(additional_arguments.begin(), additional_arguments.end(),
+                                                      [](const std::string& argument) { return argument.rfind("--log-severity", 0) == 0; });
+            if (!has_log_severity)
+                additional_arguments.push_back("--log-severity=" + GetNativeLogSeverity());
 
             Logger::Info("JustCefProcess", "Searching for justcefnative, search paths:");
             for (const auto& path : JustCefProcess::GenerateSearchPaths())
