@@ -18,6 +18,15 @@ namespace JustCef
 {
     public class JustCefProcess : IDisposable
     {
+        private static string GetNativeLogSeverity()
+        {
+            if (Logger.WillLog(LogLevel.Debug)) return "verbose";
+            if (Logger.WillLog(LogLevel.Info)) return "info";
+            if (Logger.WillLog(LogLevel.Warning)) return "warning";
+            if (Logger.WillLog(LogLevel.Error)) return "error";
+            return "disable";
+        }
+
         public enum PacketType : byte
         {
             Request = 0,
@@ -531,34 +540,20 @@ namespace JustCef
                 FileName = nativePath,
                 WorkingDirectory = workingDirectory,
 #endif   
-                Arguments = $"--change-stack-guard-on-fork=disable --parent-to-child {_writer.GetClientHandleAsString()} --child-to-parent {_reader.GetClientHandleAsString()}" + ((string.IsNullOrEmpty(args)) ? "" : " " + args),
-                UseShellExecute = false,
-                RedirectStandardError = true,
-                RedirectStandardOutput = true
+                Arguments = $"--change-stack-guard-on-fork=disable --parent-to-child {_writer.GetClientHandleAsString()} --child-to-parent {_reader.GetClientHandleAsString()}"
+                    + ((args?.Contains("--log-severity") ?? false) ? "" : $" --log-severity={GetNativeLogSeverity()}")
+                    + ((string.IsNullOrEmpty(args)) ? "" : " " + args),
+                UseShellExecute = false
             };
 
             Logger.Info<JustCefProcess>(psi.Arguments);
 
             var process = new Process();
             process.StartInfo = psi;
-            process.ErrorDataReceived += (_, args) =>
-            {
-                var d = args?.Data;
-                if (d != null)
-                    Logger.Info<JustCefProcess>(d);
-            };
-            process.OutputDataReceived += (_, args) =>
-            {
-                var d = args?.Data;
-                if (d != null)
-                    Logger.Info<JustCefProcess>(d);
-            };
 
             if (!process.Start())
                 throw new Exception("Failed to start process.");
 
-            process.BeginOutputReadLine();
-            process.BeginErrorReadLine();
             _childProcess = process;
 
             _ = Task.Factory.StartNew(() =>

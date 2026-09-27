@@ -161,6 +161,7 @@ public:
             LOG(INFO) << "NotifyReady before";
             IPC::Singleton.NotifyReady();
             LOG(INFO) << "NotifyReady after";
+            IPC::Singleton.Print("CEF log file: " + shared::GetLogFilePath());
         }
         else
         {

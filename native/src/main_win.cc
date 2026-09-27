@@ -155,6 +155,7 @@ int RunMain(HINSTANCE hInstance, LPTSTR /*lpCmdLine*/, int /*nCmdShow*/, void* s
     {
         CefString(&settings.cache_path) = cachePaths.cachePath;
     }
+    CefString(&settings.log_file) = cachePaths.logFilePath;
 
     InitializeWidevineState(command_line, cachePaths.rootCachePath);
 

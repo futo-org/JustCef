@@ -615,6 +615,11 @@ ipc::CallHandle IPC::Echo(std::vector<uint8_t> data, std::chrono::milliseconds t
     return CallAsync(OpcodeClient::Echo, std::move(data), timeout, std::move(callback));
 }
 
+void IPC::Print(const std::string& text)
+{
+    CallAsync(OpcodeClient::Print, std::vector<uint8_t>(text.begin(), text.end()), std::chrono::seconds(5), [](ipc::Response) {});
+}
+
 ipc::CallHandle IPC::WindowProxyRequest(int32_t identifier, CefRefPtr<CefRequest> request, std::chrono::milliseconds timeout,
                                         std::function<void(ipc::StatusCode, std::unique_ptr<IPCProxyResponse>)> callback)
 {

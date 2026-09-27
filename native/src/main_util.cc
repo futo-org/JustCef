@@ -22,9 +22,12 @@ const char kZygoteProcess[] = "zygote";
 
 const char kCachePathSwitch[] = "cache-path";
 const char kRootCachePathSwitch[] = "root-cache-path";
+const char kLogFileSwitch[] = "log-file";
 
 namespace
 {
+
+std::string g_log_file_path;
 
 std::filesystem::path PathFromSwitch(const CefRefPtr<CefCommandLine>& command_line, const char* name)
 {
@@ -101,10 +104,22 @@ CachePaths ResolveCachePaths(const CefRefPtr<CefCommandLine>& command_line)
         cache_paths.temporaryPath = cache_paths.rootCachePath;
     }
 
+    if (command_line->HasSwitch(kLogFileSwitch))
+        cache_paths.logFilePath = PathFromSwitch(command_line, kLogFileSwitch).string();
+    else
+        cache_paths.logFilePath = (std::filesystem::path(cache_paths.rootCachePath) / "chrome_debug.log").string();
+    g_log_file_path = cache_paths.logFilePath;
+
     LOG(INFO) << "Root cache path: " << cache_paths.rootCachePath;
     LOG(INFO) << "Cache path: " << (cache_paths.cachePath.empty() ? "(incognito)" : cache_paths.cachePath);
+    LOG(INFO) << "Log file path: " << cache_paths.logFilePath;
 
     return cache_paths;
+}
+
+const std::string& GetLogFilePath()
+{
+    return g_log_file_path;
 }
 
 void RemoveTemporaryCachePath(const CachePaths& cache_paths)
