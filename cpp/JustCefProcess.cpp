@@ -14,12 +14,14 @@
 #include <condition_variable>
 #include <cstdint>
 #include <cstring>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <queue>
 #include <set>
 #include <sstream>
 #include <stdexcept>
+#include <string_view>
 #include <thread>
 #include <tuple>
 #include <unordered_map>
@@ -382,6 +384,47 @@ std::vector<std::string> SplitArguments(const std::string& arguments)
     LocalFree(parsed);
     return result;
 }
+
+std::wstring BuildEnvironmentBlock(const std::map<std::string, std::string>& overrides)
+{
+    std::vector<std::wstring> entries;
+    if (LPWCH current = GetEnvironmentStringsW())
+    {
+        for (LPWCH entry = current; *entry != L'\0'; entry += wcslen(entry) + 1)
+        {
+            entries.emplace_back(entry);
+        }
+        FreeEnvironmentStringsW(current);
+    }
+
+    for (const auto& [key, value] : overrides)
+    {
+        const std::wstring wide_key = Utf8ToWide(key);
+        entries.erase(std::remove_if(entries.begin(), entries.end(),
+                                     [&](const std::wstring& entry)
+                                     {
+                                         return entry.size() > wide_key.size() && entry[wide_key.size()] == L'=' &&
+                                                _wcsnicmp(entry.c_str(), wide_key.c_str(), wide_key.size()) == 0;
+                                     }),
+                      entries.end());
+        entries.push_back(wide_key + L"=" + Utf8ToWide(value));
+    }
+
+    std::sort(entries.begin(), entries.end(),
+              [](const std::wstring& left, const std::wstring& right)
+              {
+                  return _wcsicmp(left.c_str(), right.c_str()) < 0;
+              });
+
+    std::wstring block;
+    for (const auto& entry : entries)
+    {
+        block += entry;
+        block.push_back(L'\0');
+    }
+    block.push_back(L'\0');
+    return block;
+}
 #else
 std::vector<std::string> SplitArguments(const std::string& arguments)
 {
@@ -410,6 +453,27 @@ char** CurrentEnvironment()
 #else
     return environ;
 #endif
+}
+
+std::vector<std::string> BuildEnvironment(const std::map<std::string, std::string>& overrides)
+{
+    std::vector<std::string> entries;
+    for (char** entry = CurrentEnvironment(); entry != nullptr && *entry != nullptr; ++entry)
+    {
+        const std::string_view value(*entry);
+        const std::string key(value.substr(0, value.find('=')));
+        if (overrides.find(key) == overrides.end())
+        {
+            entries.emplace_back(value);
+        }
+    }
+
+    for (const auto& [key, value] : overrides)
+    {
+        entries.push_back(key + "=" + value);
+    }
+
+    return entries;
 }
 #endif
 
@@ -593,6 +657,10 @@ public:
             }
             Logger::Info("JustCefProcess", "Working directory '" + working_directory.string() + "'.");
             Logger::Info("JustCefProcess", "CEF exe path '" + native_path.string() + "'.");
+            if (options.launcher_path)
+            {
+                Logger::Info("JustCefProcess", "Launcher path '" + options.launcher_path->string() + "'.");
+            }
 #ifndef JUSTCEF_EXPECTED_VERSION
 #define JUSTCEF_EXPECTED_VERSION 0
 #endif
@@ -621,6 +689,10 @@ public:
             SetHandleInformation(child_write_handle, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
 
             std::vector<std::wstring> command_parts;
+            if (options.launcher_path)
+            {
+                command_parts.push_back(options.launcher_path->wstring());
+            }
             command_parts.push_back(native_path.wstring());
             command_parts.push_back(L"--change-stack-guard-on-fork=disable");
             command_parts.push_back(L"--parent-to-child");
@@ -668,8 +740,11 @@ public:
             PROCESS_INFORMATION process_information{};
 
             std::wstring mutable_command_line = command_line;
-            const BOOL created = CreateProcessW(nullptr, mutable_command_line.data(), nullptr, nullptr, TRUE, EXTENDED_STARTUPINFO_PRESENT, nullptr,
-                                                working_directory.wstring().c_str(), &startup_info.StartupInfo, &process_information);
+            std::wstring environment_block = options.environment.empty() ? std::wstring() : BuildEnvironmentBlock(options.environment);
+            const DWORD creation_flags = EXTENDED_STARTUPINFO_PRESENT | (environment_block.empty() ? 0 : CREATE_UNICODE_ENVIRONMENT);
+            const BOOL created = CreateProcessW(nullptr, mutable_command_line.data(), nullptr, nullptr, TRUE, creation_flags,
+                                                environment_block.empty() ? nullptr : environment_block.data(), working_directory.wstring().c_str(),
+                                                &startup_info.StartupInfo, &process_information);
             DeleteProcThreadAttributeList(attribute_list);
             if (!created)
             {
@@ -704,6 +779,10 @@ public:
             ::close(child_to_parent[1]);
 
             std::vector<std::string> argv_storage;
+            if (options.launcher_path)
+            {
+                argv_storage.push_back(options.launcher_path->string());
+            }
             argv_storage.push_back(native_path.string());
             argv_storage.push_back("--change-stack-guard-on-fork=disable");
             argv_storage.push_back("--parent-to-child");
@@ -719,6 +798,19 @@ public:
                 argv.push_back(value.data());
             }
             argv.push_back(nullptr);
+
+            std::vector<std::string> environment_storage;
+            std::vector<char*> environment;
+            if (!options.environment.empty())
+            {
+                environment_storage = BuildEnvironment(options.environment);
+                environment.reserve(environment_storage.size() + 1);
+                for (auto& value : environment_storage)
+                {
+                    environment.push_back(value.data());
+                }
+                environment.push_back(nullptr);
+            }
 
             posix_spawn_file_actions_t actions;
             posix_spawn_file_actions_init(&actions);
@@ -763,7 +855,9 @@ public:
             pid_t child_pid = -1;
             if (result == 0)
             {
-                result = posix_spawn(&child_pid, native_path.c_str(), &actions, &attributes, argv.data(), CurrentEnvironment());
+                char** envp = environment.empty() ? CurrentEnvironment() : environment.data();
+                result = options.launcher_path ? posix_spawnp(&child_pid, options.launcher_path->c_str(), &actions, &attributes, argv.data(), envp)
+                                               : posix_spawn(&child_pid, native_path.c_str(), &actions, &attributes, argv.data(), envp);
             }
 
             posix_spawn_file_actions_destroy(&actions);

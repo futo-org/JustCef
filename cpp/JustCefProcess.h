@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -24,6 +25,8 @@ struct StartOptions
     std::string arguments;
     std::optional<std::filesystem::path> native_executable_path;
     std::optional<std::filesystem::path> working_directory;
+    std::optional<std::filesystem::path> launcher_path;
+    std::map<std::string, std::string> environment;
     std::chrono::milliseconds default_call_timeout = std::chrono::seconds(30);
     std::chrono::milliseconds shutdown_grace_period = std::chrono::seconds(5);
 };

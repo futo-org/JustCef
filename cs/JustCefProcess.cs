@@ -422,6 +422,9 @@ namespace JustCef
 
         public TimeSpan DefaultCallTimeout { get; set; } = TimeSpan.FromSeconds(30);
 
+        public string? LauncherPath { get; set; }
+        public Dictionary<string, string> EnvironmentVariables { get; } = new Dictionary<string, string>();
+
         internal string? NativeExecutablePath { get; set; }
         internal Process? ChildProcess => _childProcess;
         internal int ReaderThreadId => _readerThread?.ManagedThreadId ?? 0;
@@ -536,6 +539,17 @@ namespace JustCef
                 RedirectStandardError = true,
                 RedirectStandardOutput = true
             };
+
+#if !HARDCODED_PATHS
+            if (LauncherPath != null)
+            {
+                psi.Arguments = $"\"{nativePath}\" " + psi.Arguments;
+                psi.FileName = LauncherPath;
+                Logger.Info<JustCefProcess>($"Launcher path '{LauncherPath}'.");
+            }
+#endif
+            foreach (var variable in EnvironmentVariables)
+                psi.Environment[variable.Key] = variable.Value;
 
             Logger.Info<JustCefProcess>(psi.Arguments);
 

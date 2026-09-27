@@ -33,4 +33,28 @@ public class SmokeTests
         Assert.Empty(harness.Process.Windows);
         Assert.Equal(0, await harness.ViolationsAsync());
     }, TimeSpan.FromSeconds(60));
+
+    [Fact]
+    public Task LauncherPathAndEnvironmentReachTheNativeProcess() => TestUtil.RunScenario(async () =>
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        string launcher = Path.Combine(Path.GetTempPath(), $"justcef-launcher-{Guid.NewGuid():N}.sh");
+        File.WriteAllText(launcher, "#!/bin/sh\n[ \"$JUSTCEF_TEST_LAUNCHER\" = \"1\" ] || exit 3\nexec \"$@\"\n");
+        File.SetUnixFileMode(launcher, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        try
+        {
+            await using var harness = await FakeNativeHarness.StartAsync(process =>
+            {
+                process.LauncherPath = launcher;
+                process.EnvironmentVariables["JUSTCEF_TEST_LAUNCHER"] = "1";
+            });
+            Assert.Equal(0, await harness.ViolationsAsync());
+        }
+        finally
+        {
+            File.Delete(launcher);
+        }
+    }, TimeSpan.FromSeconds(60));
 }

@@ -14,8 +14,10 @@
 #ifndef _WIN32
 #include <cerrno>
 #include <dlfcn.h>
+#include <fstream>
 #include <signal.h>
 #include <sys/wait.h>
+#include <unistd.h>
 
 namespace
 {
@@ -1752,3 +1754,34 @@ TEST_CASE("fake WaitForReadyAsync rejects a protocol version mismatch")
     CHECK(done);
     CHECK(message.find("protocol version 1") != std::string::npos);
 }
+
+#ifndef _WIN32
+TEST_CASE("fake the launcher path and environment reach the native process")
+{
+    Watchdog watchdog(60s, "launcher");
+    const auto launcher = std::filesystem::temp_directory_path() / ("justcef-launcher-" + std::to_string(::getpid()) + ".sh");
+    {
+        std::ofstream file(launcher);
+        file << "#!/bin/sh\n[ \"$JUSTCEF_TEST_LAUNCHER\" = \"1\" ] || exit 3\nexec \"$@\"\n";
+    }
+    std::filesystem::permissions(launcher, std::filesystem::perms::owner_all);
+
+    asio::io_context io;
+    Harness harness;
+    harness.Start(io.get_executor(),
+                  [&](StartOptions& options)
+                  {
+                      options.launcher_path = launcher;
+                      options.environment["JUSTCEF_TEST_LAUNCHER"] = "1";
+                  });
+
+    const bool done = RunFor(io,
+                             [&]() -> asio::awaitable<void>
+                             {
+                                 co_await harness.process->WaitForReadyAsync();
+                             }(),
+                             20s);
+    std::filesystem::remove(launcher);
+    CHECK(done);
+}
+#endif
