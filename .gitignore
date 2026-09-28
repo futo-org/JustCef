@@ -76,6 +76,7 @@ CTestTestfile.cmake
 _deps
 # CEF build directory
 /native/build
+/native/third_party/cef
 # clang-format downloads
 /native/tools/buildtools/external_bin
 /native/tools/buildtools/linux64/clang-format

@@ -263,7 +263,7 @@ bool MatchesDomain(const std::string& request_host, const std::string& cookie_do
     return false;
 }
 
-Client::Client(const IPCWindowCreate& settings) : settings(settings)
+Client::Client(const IPCWindowCreate& settings, bool manageNativeWindow) : settings(settings), _manageNativeWindow(manageNativeWindow)
 {
     _proxyRequests = settings.proxyRequests;
     _modifyRequests = settings.modifyRequests;
@@ -297,7 +297,7 @@ void Client::OnTitleChange(CefRefPtr<CefBrowser> browser, const CefString& title
 void Client::OnFullscreenModeChange(CefRefPtr<CefBrowser> browser, bool fullscreen)
 {
     bool isViewsEnabled = CefBrowserView::GetForBrowser(browser) ? true : false;
-    if (!isViewsEnabled)
+    if (!isViewsEnabled && _manageNativeWindow)
         shared::PlatformSetFullscreen(browser, fullscreen);
 
     IPC::Singleton.NotifyWindowFullscreenChanged(browser, fullscreen);
@@ -354,7 +354,7 @@ void Client::OnAfterCreated(CefRefPtr<CefBrowser> browser)
             window->Hide();
         }
     }
-    else if (!browser_view)
+    else if (!browser_view && _manageNativeWindow)
     {
         if (settings.shown)
         {
@@ -541,6 +541,9 @@ bool Client::OnKeyEvent(CefRefPtr<CefBrowser> browser, const CefKeyEvent& event,
             }
             else
             {
+                if (!_manageNativeWindow)
+                    return false;
+
                 shared::PlatformSetFullscreen(browser, !shared::PlatformGetFullscreen(browser));
             }
             return false;
@@ -1196,7 +1199,7 @@ void Client::SetTitle(CefRefPtr<CefBrowser> browser, const std::string& title)
         if (window)
             window->SetTitle(title);
     }
-    else
+    else if (_manageNativeWindow)
         shared::PlatformTitleChange(browser, title);
 }
 
@@ -1228,7 +1231,7 @@ void Client::OverrideIcon(CefRefPtr<CefBrowser> browser, const std::string& icon
 
         stbi_image_free(image);
     }
-    else
+    else if (_manageNativeWindow)
     {
         shared::PlatformIconChange(browser, iconPath);
     }

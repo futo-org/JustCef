@@ -28,7 +28,7 @@ class Client : public CefClient,
                public CefFrameHandler
 {
 public:
-    Client(const IPCWindowCreate& settings);
+    Client(const IPCWindowCreate& settings, bool manageNativeWindow = true);
     // CefClient methods:
     CefRefPtr<CefDisplayHandler> GetDisplayHandler() override { return this; }
     CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override { return this; }
@@ -114,6 +114,7 @@ public:
     void SetModifyRequests(bool modifyRequests, bool modifyRequestBody);
 
     IPCWindowCreate settings;
+    bool _manageNativeWindow;
 
 protected:
     void TrackBrowser(CefRefPtr<CefBrowser> browser);

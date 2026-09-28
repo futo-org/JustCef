@@ -268,7 +268,7 @@ public:
         windowCreate.shown = true;
         windowCreate.title = std::nullopt;
         windowCreate.url = "about:blank";
-        return new Client(windowCreate);
+        return new Client(windowCreate, false);
     }
 
 private:
