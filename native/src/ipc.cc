@@ -1221,6 +1221,8 @@ public:
     void OnWindowCreated(CefRefPtr<CefWindow> window) override
     {
         window->AddChildView(browser_view_);
+        if (_settings.viewsEnabled)
+            justcef_view::ConfigureHostWindowLayout(window, browser_view_);
         if (initial_show_state_ != CEF_SHOW_STATE_HIDDEN)
         {
             window->Show();

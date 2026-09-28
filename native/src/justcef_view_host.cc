@@ -60,12 +60,18 @@ ViewBackend GetViewBackend()
         const char* value = std::getenv("JUSTCEF_VIEW_BACKEND");
         if (value && std::string(value) == "overlay")
             return ViewBackend::Overlay;
+        if (value && std::string(value) == "holder")
+            return ViewBackend::Holder;
+#if defined(OS_MAC)
+        return ViewBackend::Overlay;
+#else
         return ViewBackend::Holder;
+#endif
     }();
     return backend;
 }
 
-int ToNativeWheelDelta(double pixels, bool horizontal)
+[[maybe_unused]] int ToNativeWheelDelta(double pixels, bool horizontal)
 {
 #if defined(OS_WIN)
     UINT amount = horizontal ? 1 : 3;
@@ -341,8 +347,13 @@ public:
 
     void SetVisible(bool visible) override
     {
-        if (controller_ && controller_->IsValid())
-            controller_->SetVisible(visible);
+        if (!controller_ || !controller_->IsValid())
+            return;
+
+        const bool hostWasActive = visible && window_ && window_->IsActive();
+        controller_->SetVisible(visible);
+        if (hostWasActive && !window_->IsActive())
+            window_->Activate();
     }
 
     void Detach() override
@@ -1113,6 +1124,18 @@ std::string KeyCode(const CefKeyEvent& event)
 
 } // namespace
 
+void ConfigureHostWindowLayout(CefRefPtr<CefWindow> window, CefRefPtr<CefBrowserView> browserView)
+{
+    if (!window || !browserView || GetViewBackend() != ViewBackend::Overlay)
+        return;
+
+    CefBoxLayoutSettings settings;
+    settings.horizontal = false;
+    settings.cross_axis_alignment = CEF_AXIS_ALIGNMENT_STRETCH;
+    CefRefPtr<CefBoxLayout> layout = window->SetToBoxLayout(settings);
+    layout->SetFlexForView(browserView, 1);
+}
+
 bool HandleHostProcessMessage(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefRefPtr<CefProcessMessage> message)
 {
     CEF_REQUIRE_UI_THREAD();
@@ -1672,12 +1695,26 @@ void InjectWheel(const std::shared_ptr<ViewEntry>& entry, double deltaX, double 
     if (pixelsX == 0 && pixelsY == 0)
         return;
 
+    entry->lastInjectTime = NowSeconds();
+
+#if defined(OS_MAC)
+    // CEF's macOS SendMouseWheelEvent routes the wheel event through the plain mouse event path causing it to lock up, this is a workaround, hopefully it gets fixed in CEF
+    const double hostZoom = std::pow(1.2, host->GetHost()->GetZoomLevel());
+    CefRefPtr<CefDictionaryValue> params = CefDictionaryValue::Create();
+    params->SetString("type", "mouseWheel");
+    params->SetDouble("x", entry->wheelPoint.x / hostZoom);
+    params->SetDouble("y", entry->wheelPoint.y / hostZoom);
+    params->SetDouble("deltaX", pixelsX);
+    params->SetDouble("deltaY", pixelsY);
+    host->GetHost()->ExecuteDevToolsMethod(0, "Input.dispatchMouseEvent", params);
+    (void)precise;
+#else
     CefMouseEvent event;
     event.x = entry->wheelPoint.x;
     event.y = entry->wheelPoint.y;
     event.modifiers = precise ? EVENTFLAG_PRECISION_SCROLLING_DELTA : 0;
-    entry->lastInjectTime = NowSeconds();
     host->GetHost()->SendMouseWheelEvent(event, ToNativeWheelDelta(-pixelsX, true), ToNativeWheelDelta(-pixelsY, false));
+#endif
 }
 
 void StopMomentum(const std::shared_ptr<ViewEntry>& entry)

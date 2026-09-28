@@ -5,6 +5,7 @@
 #include "include/cef_frame.h"
 #include "include/cef_keyboard_handler.h"
 #include "include/cef_process_message.h"
+#include "include/views/cef_browser_view.h"
 #include "include/views/cef_window.h"
 
 #include <string>
@@ -14,6 +15,7 @@ class Client;
 namespace justcef_view
 {
 
+void ConfigureHostWindowLayout(CefRefPtr<CefWindow> window, CefRefPtr<CefBrowserView> browserView);
 bool HandleHostProcessMessage(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefRefPtr<CefProcessMessage> message);
 void OnHostWindowLayoutChanged(CefRefPtr<CefWindow> window);
 void OnHostWindowClosing(CefRefPtr<CefWindow> window);
