@@ -8,7 +8,7 @@ from pathlib import Path
 
 def run_git_apply(cef_dir: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        ["git", "apply", *args],
+        ["git", "apply", "-C1", *args],
         cwd=cef_dir,
         capture_output=True,
         text=True,
@@ -38,6 +38,13 @@ def apply_patch_file(cef_dir: Path, patch_file: Path) -> None:
         print(f"Applied patch: {patch_file.name}")
         return
 
+    refresh_result = subprocess.run(
+        ["git", "update-index", "--refresh"],
+        cwd=cef_dir,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
     merge_result = run_git_apply(
         cef_dir, "--3way", "--verbose", "--whitespace=nowarn", str(patch_file)
     )
@@ -48,6 +55,7 @@ def apply_patch_file(cef_dir: Path, patch_file: Path) -> None:
     raise RuntimeError(
         f"Failed to apply patch {patch_file}.\n"
         f"--check output:\n{command_output(forward_check)}\n\n"
+        f"index refresh output:\n{command_output(refresh_result)}\n\n"
         f"--3way output:\n{command_output(merge_result)}"
     )
 
