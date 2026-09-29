@@ -130,10 +130,11 @@ static LRESULT CALLBACK WindowProcHook(HWND hwnd, UINT uMsg, WPARAM wParam, LPAR
     {
         if (uMsg == WM_CLOSE || uMsg == WM_DESTROY)
         {
-            SetWindowLongPtr(hwnd, GWLP_WNDPROC, (LONG_PTR)it->second.originalWndProc);
+            const WindowData data = it->second;
+            SetWindowLongPtr(hwnd, GWLP_WNDPROC, (LONG_PTR)data.originalWndProc);
             hwndMap.erase(it);
-            LOG(INFO) << "Unhooked window procedure for identifier: " << it->second.identifier;
-            return CallWindowProc(it->second.originalWndProc, hwnd, uMsg, wParam, lParam);
+            LOG(INFO) << "Unhooked window procedure for identifier: " << data.identifier;
+            return CallWindowProc(data.originalWndProc, hwnd, uMsg, wParam, lParam);
         }
 
         CefRefPtr<CefBrowser> browser = ClientManager::GetInstance()->AcquirePointer(it->second.identifier);
@@ -421,13 +422,17 @@ void Client::OnBeforeClose(CefRefPtr<CefBrowser> browser)
     shared::CancelPendingFileDialogs(browser->GetIdentifier());
 
 #if _WIN32
-    HWND hwnd = browser->GetHost()->GetWindowHandle();
-    auto it = hwndMap.find(hwnd);
-    if (it != hwndMap.end())
+    for (auto it = hwndMap.begin(); it != hwndMap.end(); ++it)
     {
+        if (it->second.identifier != browser->GetIdentifier())
+            continue;
+
+        const HWND hwnd = it->first;
+        const int identifier = it->second.identifier;
         SetWindowLongPtr(hwnd, GWLP_WNDPROC, (LONG_PTR)it->second.originalWndProc);
         hwndMap.erase(it);
-        LOG(INFO) << "Unhooked window procedure for identifier: " << it->second.identifier;
+        LOG(INFO) << "Unhooked window procedure for identifier: " << identifier;
+        break;
     }
 #endif
 
