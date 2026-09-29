@@ -55,7 +55,7 @@ vs_Community.exe --passive --wait --norestart --config C:\code\wdk.vsconfig --ad
 if errorlevel 1 exit /b 1
 
 REM Install the latest serviced Windows 11 SDK release, not just the base 26100.0 component.
-curl -L -o winsdksetup.exe https://go.microsoft.com/fwlink/?linkid=2349110
+curl -L -o winsdksetup.exe https://go.microsoft.com/fwlink/?linkid=2376217
 if errorlevel 1 exit /b 1
 winsdksetup.exe /quiet /norestart /ceip off /features OptionId.DesktopCPPx64 OptionId.DesktopCPParm64 OptionId.SigningTools OptionId.WindowsDesktopDebuggers /log "%USERPROFILE%\Desktop\sdk-install.log"
 if errorlevel 1 exit /b 1
