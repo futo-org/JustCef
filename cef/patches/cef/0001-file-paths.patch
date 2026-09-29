@@ -14,16 +14,14 @@ diff --git a/include/cef_v8.h b/include/cef_v8.h
 index be77ff3..bfa95ea 100644
 --- a/include/cef_v8.h
 +++ b/include/cef_v8.h
-@@ -1027,6 +1027,16 @@ class CefV8Value : public virtual CefBaseRefCounted {
+@@ -1027,6 +1027,14 @@ class CefV8Value : public virtual CefBaseRefCounted {
    ///
    /*--cef()--*/
    virtual bool RejectPromise(const CefString& errorMsg) = 0;
 +
 +#if CEF_API_ADDED(CEF_EXPERIMENTAL)
 +  ///
-+  /// Returns the filesystem path for a DOM File object. Returns an empty
-+  /// string if this value is not a File object or if the File is not backed by
-+  /// a path on disk.
++  /// Returns the backing filesystem path for a DOM File, or an empty string.
 +  ///
 +  /*--cef(added=experimental)--*/
 +  virtual CefString GetPathForFile() = 0;
