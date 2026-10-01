@@ -87,6 +87,9 @@ set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CEF_ROOT}/cmake")
 # Load the CEF configuration (executes FindCEF.cmake).
 find_package(CEF REQUIRED)
 
+list(FILTER CEF_COMPILER_DEFINES EXCLUDE REGEX "^CEF_API_VERSION=")
+list(APPEND CEF_COMPILER_DEFINES CEF_API_VERSION=CEF_API_VERSION_EXPERIMENTAL)
+
 
 #
 # Python configuration.
