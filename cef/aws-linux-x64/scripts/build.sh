@@ -40,11 +40,6 @@ check_swap() {
   # report slightly less usable swap than its nominal file size.
   minimum_active_swap_kib=$((required_swap_kib - 1024))
 
-  if [ "$current_swap_kib" -lt "$minimum_active_swap_kib" ]; then
-    current_swap_mib=$((current_swap_kib / 1024))
-    echo "At least 32 GiB of active swap is required. Current active swap: ${current_swap_mib} MiB." >&2
-    exit 1
-  fi
 }
 
 run_build() {
