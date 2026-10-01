@@ -197,6 +197,7 @@ constexpr char kViewBootstrapScript[] = R"JS((function (native) {
     for (const x of xs) {
       for (const y of ys) {
         const hit = document.elementsFromPoint(x, y);
+        if (!hit.some(node => node === el || composedContains(el, node))) continue;
         const top = hit.length ? hit[0] : null;
         if (top && top !== el && !composedContains(el, top)) return true;
       }

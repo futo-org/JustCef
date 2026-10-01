@@ -260,6 +260,38 @@ def test_views_handshake():
         server.close()
 
 
+def test_views_rounded_clipping():
+    server = PageServer(PAGES)
+    ctl = None
+    try:
+        ctl = Ctl()
+        ctl.wait_note("Ready")
+        ctl.handlers[R["ViewCreated"]] = lambda r: (OK, W().b1(True).b)
+        wid = ctl.create(server.origin + "/rounded-view.html", views=True, bridge=False)
+        ctl.wait_note("LoadingState", lambda r: r.i32() == wid and not r.b1())
+        child = devtools_eval(ctl, wid, """new Promise((resolve, reject) => {
+          const deadline = Date.now() + 10000;
+          const timer = setInterval(() => {
+            if (chat.viewId !== null) { clearInterval(timer); resolve(chat.viewId); }
+            else if (Date.now() > deadline) { clearInterval(timer); reject('view not created'); }
+          }, 20);
+        })""")
+        deadline = time.time() + 10
+        viewport = None
+        while time.time() < deadline:
+            viewport = devtools_eval(ctl, child, "[innerWidth, innerHeight]")
+            if all(abs(actual - expected) <= 1 for actual, expected in zip(viewport, [400, 360])):
+                break
+            time.sleep(0.05)
+        check(all(abs(actual - expected) <= 1 for actual, expected in zip(viewport, [400, 360])),
+              "rounded clipping must not leave a zero-size native view: %r" % viewport)
+        shutdown(ctl)
+    finally:
+        if ctl is not None:
+            ctl.close()
+        server.close()
+
+
 def test_views_lifecycle():
     server = PageServer(PAGES)
     try:
@@ -337,7 +369,7 @@ def test_views_lifecycle():
 
 
 TESTS = [test_protocol_vectors, test_ordering_and_basics, test_bridge_calls_that_call_native, test_large_bridge_payloads, test_async_modify, test_streams_and_cancel,
-         test_backpressure_and_threads, test_shutdown_with_pending_work, test_views_handshake, test_views_lifecycle]
+         test_backpressure_and_threads, test_shutdown_with_pending_work, test_views_handshake, test_views_rounded_clipping, test_views_lifecycle]
 
 if __name__ == "__main__":
     if not NATIVE or not os.path.exists(NATIVE):

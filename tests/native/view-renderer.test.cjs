@@ -87,11 +87,34 @@ function harness() {
     }
   }
   function event(name, detail) { dispatch('event', id, name, JSON.stringify(detail)); }
-  return { view, messages, advance, event,
+  return { view, document, messages, advance, event,
     snapshot: async () => { dispatch('snapshot', id, '', null); await Promise.resolve(); },
     scroll: () => listeners.get('scroll')({ target: document }),
     pageEvent: name => listeners.get(name)({ persisted: true }) };
 }
+
+test('clipped rounded corners do not hide the entire native view', () => {
+  const h = harness();
+  const background = {};
+  h.document.elementsFromPoint = (x, y) =>
+    (x === 21 || x === 119) && (y === 21 || y === 119) ? [background] : [h.view];
+  h.view.setAttribute('occlusion', 'snapshot');
+  h.advance(32);
+  const update = h.messages.filter(m => m.name === 'update').at(-1);
+  assert.equal(update.args[13], true, 'clipped corners are outside the visible element');
+});
+
+test('an overlay covering the native view still hides it and removal restores it', () => {
+  const h = harness();
+  const overlay = {};
+  h.document.elementsFromPoint = () => [overlay, h.view];
+  h.view.setAttribute('occlusion', 'snapshot');
+  h.advance(32);
+  assert.equal(h.messages.filter(m => m.name === 'update').at(-1).args[13], false);
+  h.document.elementsFromPoint = () => [h.view];
+  h.advance(32);
+  assert.equal(h.messages.filter(m => m.name === 'update').at(-1).args[13], true);
+});
 
 test('motion freeze resumes after geometry settles', async () => {
   const h = harness();
