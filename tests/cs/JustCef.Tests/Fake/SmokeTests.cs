@@ -7,6 +7,23 @@ namespace JustCef.Tests.Fake;
 public class SmokeTests
 {
     [Fact]
+    public Task WidevineStatusResolvesOncePublished() => TestUtil.RunScenario(async () =>
+    {
+        await using var harness = await FakeNativeHarness.StartAsync();
+        var pending = harness.Process.GetWidevineStatusAsync();
+        Assert.False(pending.IsCompleted);
+        await harness.NotifyAsync((int)JustCefProcess.OpcodeClientNotification.WidevineStatus, 0, o =>
+        {
+            o["state"] = (int)WidevineState.Ready;
+            o["reason"] = (int)WidevineUnavailableReason.None;
+            o["version"] = "4.10.2830.0";
+        });
+        var status = await pending.WithTimeout(TimeSpan.FromSeconds(10));
+        Assert.Equal(new WidevineStatus(WidevineState.Ready, WidevineUnavailableReason.None, null, "4.10.2830.0"), status);
+        Assert.Equal(0, await harness.ViolationsAsync());
+    }, TimeSpan.FromSeconds(60));
+
+    [Fact]
     public Task CreateWindowAndCallOperations() => TestUtil.RunScenario(async () =>
     {
         await using var harness = await FakeNativeHarness.StartAsync();
@@ -23,8 +40,6 @@ public class SmokeTests
         var echo = await harness.Process.CallAsync(JustCefProcess.OpcodeController.Echo, new PacketWriter().WriteBytes(new byte[] { 1, 2, 3 }));
         Assert.Equal(new byte[] { 1, 2, 3 }, echo.ReadBytes(echo.RemainingSize));
         await window.NavigateAsync("https://app/next");
-        var widevine = await harness.Process.GetWidevineStatusAsync();
-        Assert.False(widevine.Installed);
 
         var closed = new TaskCompletionSource();
         window.OnClose += () => closed.TrySetResult();

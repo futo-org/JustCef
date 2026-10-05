@@ -626,6 +626,18 @@ std::string GetNativeLogSeverity()
     return "disable";
 }
 
+WidevineStatus ReadWidevineStatus(detail::PacketReader& reader)
+{
+    WidevineStatus status;
+    status.state = static_cast<WidevineState>(ReadRequired<std::int32_t>(reader, "state"));
+    status.reason = static_cast<WidevineUnavailableReason>(ReadRequired<std::int32_t>(reader, "reason"));
+    if (auto detail = ReadRequiredString(reader, "detail"); !detail.empty())
+        status.detail = std::move(detail);
+    if (auto version = ReadRequiredString(reader, "version"); !version.empty())
+        status.version = std::move(version);
+    return status;
+}
+
 } // namespace
 
 class JustCefProcessImpl : public WindowCommandTarget, public std::enable_shared_from_this<JustCefProcessImpl>
@@ -1004,6 +1016,14 @@ public:
     {
         EnsureStarted();
         co_await ready_signal_.AsyncWait(executor_);
+    }
+
+    asio::awaitable<WidevineStatus> GetWidevineStatusAsync() const
+    {
+        EnsureStarted();
+        co_await widevine_signal_.AsyncWait(executor_);
+        std::lock_guard<std::mutex> lock(widevine_mutex_);
+        co_return widevine_status_;
     }
 
     asio::awaitable<void> EchoAsync(std::vector<std::uint8_t> data)
@@ -2196,6 +2216,16 @@ private:
             ready_signal_.SignalSuccess();
             break;
         }
+        case detail::OpcodeClientNotification::WidevineStatus:
+        {
+            auto status = ReadWidevineStatus(reader);
+            {
+                std::lock_guard<std::mutex> lock(widevine_mutex_);
+                widevine_status_ = std::move(status);
+            }
+            widevine_signal_.SignalSuccess();
+            break;
+        }
         case detail::OpcodeClientNotification::WindowOpened:
             Logger::Info("JustCefProcess", "Window opened: " + std::to_string(ReadRequired<std::int32_t>(reader, "identifier")));
             break;
@@ -2526,6 +2556,8 @@ private:
             ready_signal_.SignalFailure(std::make_exception_ptr(std::runtime_error("Process disposed before ready.")));
         }
 
+        widevine_signal_.SignalFailure(std::make_exception_ptr(std::runtime_error("Process disposed before the Widevine status was published.")));
+
         const auto shutdown_exception = std::make_exception_ptr(std::runtime_error("Process disposed while awaiting IPC response."));
         rpc_->Close(shutdown_exception);
 
@@ -2564,6 +2596,9 @@ private:
 
     asio::any_io_executor executor_;
     detail::AsyncSignal ready_signal_;
+    detail::AsyncSignal widevine_signal_;
+    mutable std::mutex widevine_mutex_;
+    WidevineStatus widevine_status_;
     detail::AsyncSignal exit_signal_;
     detail::AsyncSignal child_exit_signal_;
     std::atomic<bool> started_ = false;
@@ -2657,6 +2692,11 @@ void JustCefProcess::WaitForReady() const
 asio::awaitable<void> JustCefProcess::WaitForReadyAsync() const
 {
     return impl_->WaitForReadyAsync();
+}
+
+asio::awaitable<WidevineStatus> JustCefProcess::GetWidevineStatusAsync() const
+{
+    return impl_->GetWidevineStatusAsync();
 }
 
 asio::awaitable<void> JustCefProcess::EchoAsync(std::vector<std::uint8_t> data)

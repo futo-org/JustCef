@@ -273,12 +273,6 @@ public class VectorTests
         var devTools = await Respond(peer, p.WindowExecuteDevToolsMethodAsync(1, "m"), "execute_devtools_method_ok");
         Assert.True(devTools.Success);
         Assert.Equal("{}", Encoding.UTF8.GetString(devTools.Data));
-        var widevine = await Respond(peer, p.GetWidevineStatusAsync(), "widevine_status_ok");
-        Assert.Equal(WidevineComponentState.CanUpdate, widevine.State);
-        Assert.Equal("4.10.2830.0", widevine.Version);
-        Assert.True(widevine.Registered);
-        Assert.True(widevine.Installed);
-        Assert.False(widevine.RequiresRestart);
         Assert.Equal("3", await Respond(peer, p.WindowBridgeRpcAsync(1, "add"), "bridge_rpc_ok"));
         await Respond(peer, p.EchoAsync(new byte[] { 1, 2, 3 }), "echo_ok");
         await Respond(peer, p.WindowShowAsync(1), "response_ok_empty");
@@ -336,6 +330,16 @@ public class VectorTests
             "devtools:Network.requestWillBeSent:{\"requestId\":\"1\"}"
         }, log);
         Assert.Null(peer.Process.GetBrowser(1));
+    }
+
+    [Fact]
+    public async Task DecodesWidevineStatus()
+    {
+        TestUtil.QuietLogs();
+        using var peer = new PipePeer();
+        peer.SendRaw(Bytes("widevine_status"));
+        var status = await peer.Process.GetWidevineStatusAsync().WaitAsync(Timeout);
+        Assert.Equal(new WidevineStatus(WidevineState.RestartRequired, WidevineUnavailableReason.None, null, "4.10.2830.0"), status);
     }
 
     [Fact]

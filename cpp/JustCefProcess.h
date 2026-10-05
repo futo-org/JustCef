@@ -3,6 +3,7 @@
 #include "JustCefErrors.h"
 #include "JustCefLogger.h"
 #include "JustCefWindow.h"
+#include "WidevineStatus.h"
 #include <asio.hpp>
 
 #include <chrono>
@@ -92,6 +93,7 @@ public:
     asio::awaitable<void> WaitForExitAsync() const;
     void WaitForReady() const;
     asio::awaitable<void> WaitForReadyAsync() const;
+    asio::awaitable<WidevineStatus> GetWidevineStatusAsync() const;
 
     asio::awaitable<void> EchoAsync(std::vector<std::uint8_t> data);
     asio::awaitable<void> PingAsync();

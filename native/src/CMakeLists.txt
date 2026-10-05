@@ -85,7 +85,7 @@ macro(SET_DOTCEF_EXECUTABLE_TARGET_PROPERTIES target)
   SET_EXECUTABLE_TARGET_PROPERTIES(${target})
   SET_DOTCEF_PROPERTIES(${target})
 
-  target_compile_definitions(${target} PRIVATE JUSTCEF_NATIVE_VERSION=17)
+  target_compile_definitions(${target} PRIVATE JUSTCEF_NATIVE_VERSION=18)
 
   if(OS_LINUX)
     # Set rpath so that libraries can be placed next to the executable.
@@ -162,6 +162,7 @@ set(DOTCEF_SRCS
   simple_handler.h
   widevine_util.cc
   widevine_util.h
+  widevine_status.h
   )
 
 if(OS_LINUX)

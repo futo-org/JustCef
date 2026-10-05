@@ -96,7 +96,7 @@ namespace JustCef
             WindowGetZoom = 56,
             WindowBridgeRpc = 57,
             //StreamEnd = 58,
-            GetWidevineStatus = 59
+            //GetWidevineStatus = 59
         }
 
         public enum OpcodeControllerNotification : byte
@@ -144,7 +144,8 @@ namespace JustCef
             WindowDevToolsEvent = 16,
             WindowLoadingStateChanged = 17,
             StreamCredit = 18,
-            StreamCancel = 19
+            StreamCancel = 19,
+            WidevineStatus = 20
         }
 
         public enum ModifyTimeoutPolicy : byte
@@ -295,6 +296,7 @@ namespace JustCef
 
         private static ArrayPool<byte> BufferPool = ArrayPool<byte>.Create();
         private readonly TaskCompletionSource _readyTaskCompletionSource = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<WidevineStatus> _widevineStatusTaskCompletionSource = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         private const int MaxIPCSize = 256 * 1024 * 1024;
         private const int HeaderSize = 4 + 4 + 1 + 1;
@@ -353,6 +355,7 @@ namespace JustCef
 
         private void SignalExited()
         {
+            _widevineStatusTaskCompletionSource.TrySetCanceled();
             _exitTaskCompletionSource.TrySetResult();
         }
 
@@ -1258,6 +1261,17 @@ namespace JustCef
                     _readyTaskCompletionSource.TrySetResult();
                     break;
                 }
+                case OpcodeClientNotification.WidevineStatus:
+                {
+                    var state = (WidevineState)reader.Read<int>();
+                    var reason = (WidevineUnavailableReason)reader.Read<int>();
+                    var detail = reader.ReadSizePrefixedString();
+                    var version = reader.ReadSizePrefixedString();
+                    _widevineStatusTaskCompletionSource.TrySetResult(new WidevineStatus(state, reason,
+                        string.IsNullOrEmpty(detail) ? null : detail,
+                        string.IsNullOrEmpty(version) ? null : version));
+                    break;
+                }
                 case OpcodeClientNotification.WindowOpened:
                     Logger.Info<JustCefProcess>($"Window opened: {reader.Read<int>()}");
                     break;
@@ -1816,19 +1830,9 @@ namespace JustCef
             return reader.Read<double>();
         }
 
-        public async Task<WidevineStatus> GetWidevineStatusAsync(CancellationToken cancellationToken = default)
+        public Task<WidevineStatus> GetWidevineStatusAsync(CancellationToken cancellationToken = default)
         {
-            var reader = await CallAsync(OpcodeController.GetWidevineStatus, new PacketWriter(), cancellationToken).ConfigureAwait(false);
-            var state = (WidevineComponentState)reader.Read<int>();
-            var version = reader.ReadSizePrefixedString();
-            return new WidevineStatus
-            {
-                State = state,
-                Version = version,
-                Registered = reader.Read<byte>() != 0,
-                Installed = reader.Read<byte>() != 0,
-                RequiresRestart = reader.Read<byte>() != 0
-            };
+            return _widevineStatusTaskCompletionSource.Task.WaitAsync(cancellationToken);
         }
 
         public async Task WindowSetDevelopmentToolsEnabledAsync(int identifier, bool developmentToolsEnabled, CancellationToken cancellationToken = default)
@@ -2007,6 +2011,7 @@ namespace JustCef
                 return;
 
             _readyTaskCompletionSource.TrySetCanceled();
+            _widevineStatusTaskCompletionSource.TrySetCanceled();
 
             if (_started)
                 Notify(OpcodeControllerNotification.Exit);

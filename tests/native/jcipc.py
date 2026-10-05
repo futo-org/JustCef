@@ -44,7 +44,7 @@ C = dict(Ping=0, Print=1, Echo=2, WindowCreate=3, LoadUrl=6, GetSize=50, GetZoom
          SetModify=34, AddUrlToModify=48, Debug=250)
 CN = dict(Exit=0, StreamData=1, StreamEnd=2, StreamError=3)
 N = {0: "Ready", 1: "Exit", 2: "WindowOpened", 3: "WindowClosed", 5: "WindowFocused", 6: "WindowUnfocused", 12: "Fullscreen", 13: "FrameLoadStart",
-     14: "FrameLoadEnd", 15: "FrameLoadError", 16: "DevToolsEvent", 17: "LoadingState", 18: "StreamCredit", 19: "StreamCancel", 250: "Debug"}
+     14: "FrameLoadEnd", 15: "FrameLoadError", 16: "DevToolsEvent", 17: "LoadingState", 18: "StreamCredit", 19: "StreamCancel", 20: "WidevineStatus", 250: "Debug"}
 R = dict(Ping=0, Print=1, Echo=2, Proxy=3, Modify=4, BridgeRpc=9, ViewCreated=11)
 
 

@@ -100,7 +100,6 @@ public static class Vectors
         new("execute_devtools_method", C2N, () => Req(ControllerOp.WindowExecuteDevToolsMethod, b => b.I32(1).Str("Browser.getVersion").Bool(false))),
         new("execute_devtools_method_params", C2N, () => Req(ControllerOp.WindowExecuteDevToolsMethod, b => b.I32(1).Str("Page.navigate").Bool(true).Bytes("{\"url\":\"about:blank\"}"u8))),
         new("execute_devtools_method_ok", N2C, () => Encode.ResponseOk(7, (byte)ControllerOp.WindowExecuteDevToolsMethod, b => b.Bool(true).Bytes("{}"u8))),
-        new("widevine_status_ok", N2C, () => Encode.ResponseOk(7, (byte)ControllerOp.GetWidevineStatus, b => b.I32(2).Str("4.10.2830.0").Bool(true).Bool(true).Bool(false))),
 
         new("bridge_rpc_request", C2N, () => Req(ControllerOp.WindowBridgeRpc, b => b.I32(1).Str("add").Bytes("[1,2]"u8))),
         new("bridge_rpc_ok", N2C, () => Encode.ResponseOk(7, (byte)ControllerOp.WindowBridgeRpc, b => b.Bytes("3"u8))),
@@ -143,6 +142,7 @@ public static class Vectors
         new("frame_load_start", N2C, () => Encode.FrameLoadStart(1, "main", true, "https://example.com/")),
         new("frame_load_end", N2C, () => Encode.FrameLoadEnd(1, "main", true, "https://example.com/", 200)),
         new("frame_load_error", N2C, () => Encode.FrameLoadError(1, "main", true, -105, "net::ERR_NAME_NOT_RESOLVED", "https://nonexistent.invalid/")),
+        new("widevine_status", N2C, () => Encode.WidevineStatus(1, 0, "", "4.10.2830.0")),
         new("devtools_event", N2C, () => Encode.DevToolsEvent(1, "Network.requestWillBeSent", "{\"requestId\":\"1\"}"u8.ToArray())),
         new("debug_notification", N2C, () => Encode.Debug(42))
     };

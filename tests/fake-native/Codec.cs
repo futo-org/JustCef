@@ -93,7 +93,7 @@ public static class Codec
 
     public static bool IsBrowserTargeted(ControllerOp op) => op switch
     {
-        ControllerOp.Ping or ControllerOp.Print or ControllerOp.Echo or ControllerOp.WindowCreate or ControllerOp.GetWidevineStatus or ControllerOp.Debug => false,
+        ControllerOp.Ping or ControllerOp.Print or ControllerOp.Echo or ControllerOp.WindowCreate or ControllerOp.Debug => false,
         _ => true
     };
 
@@ -109,7 +109,6 @@ public static class Codec
         switch (op)
         {
             case ControllerOp.Ping:
-            case ControllerOp.GetWidevineStatus:
                 break;
             case ControllerOp.Print:
             case ControllerOp.Echo:
@@ -405,6 +404,7 @@ public static class Encode
     public static ReadOnlyMemory<byte> WindowClosed(int id) => Notification(ClientNotification.WindowClosed, b => b.I32(id));
     public static ReadOnlyMemory<byte> WindowFocused(int id) => Notification(ClientNotification.WindowFocused, b => b.I32(id));
     public static ReadOnlyMemory<byte> WindowUnfocused(int id) => Notification(ClientNotification.WindowUnfocused, b => b.I32(id));
+    public static ReadOnlyMemory<byte> WidevineStatus(int state, int reason, string detail, string version) => Notification(ClientNotification.WidevineStatus, b => b.I32(state).I32(reason).Str(detail).Str(version));
 
     public static ReadOnlyMemory<byte> FullscreenChanged(int id, bool fullscreen) =>
         Notification(ClientNotification.WindowFullscreenChanged, b => b.I32(id).Bool(fullscreen));

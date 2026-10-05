@@ -1,4 +1,5 @@
 #include "TestSupport.h"
+#include "../../native/src/widevine_status.h"
 
 #include "AsyncSignal.h"
 #include "JustCefProcess.h"
@@ -376,16 +377,6 @@ std::map<std::string, Expected> Expectations()
                                                         CHECK(reader.Read<bool>() == true);
                                                         CheckBlob(reader, "{}");
                                                     });
-    expectations["widevine_status_ok"] = Ok(59,
-                                            [](PacketReader& reader)
-                                            {
-                                                CHECK(reader.Read<std::int32_t>() == 2);
-                                                CHECK(ReadString(reader) == "4.10.2830.0");
-                                                CHECK(reader.Read<bool>() == true);
-                                                CHECK(reader.Read<bool>() == true);
-                                                CHECK(reader.Read<bool>() == false);
-                                            });
-    expectations["widevine_status_ok"].unsupported = "the cpp controller never sends GetWidevineStatus, so nothing produces or consumes this payload";
     expectations["bridge_rpc_request"] = Req(57,
                                              [](PacketReader& reader)
                                              {
@@ -527,6 +518,14 @@ std::map<std::string, Expected> Expectations()
                                            {
                                                CHECK(reader.Read<std::uint32_t>() == 1u);
                                            });
+    expectations["widevine_status"] = Notify(20,
+                                             [](PacketReader& reader)
+                                             {
+                                                 CHECK(reader.Read<std::int32_t>() == 1);
+                                                 CHECK(reader.Read<std::int32_t>() == 0);
+                                                 CHECK(ReadString(reader).empty());
+                                                 CHECK(ReadString(reader) == "4.10.2830.0");
+                                             });
     expectations["window_opened"] = Notify(2,
                                            [](PacketReader& reader)
                                            {
@@ -687,7 +686,7 @@ TEST_CASE("golden vectors without a cpp code path are decode only")
         MESSAGE("vector " << name << ": " << std::string(expected.unsupported));
     }
 
-    CHECK(unsupported == std::set<std::string>{"debug_notification", "widevine_status_ok"});
+    CHECK(unsupported == std::set<std::string>{"debug_notification"});
 }
 
 TEST_CASE("codec rejects oversize and truncated packets")
@@ -1593,3 +1592,31 @@ TEST_CASE("Transport closes the connection on an oversize packet")
 }
 
 #endif
+
+TEST_CASE("native Widevine status describes readiness rather than updater success")
+{
+    using shared::ResolveWidevineStatus;
+    using shared::WidevineState;
+    using shared::WidevineUnavailableReason;
+
+    const auto ready = ResolveWidevineStatus(true, false, "4.10.2830.0");
+    CHECK(ready.state == WidevineState::Ready);
+    CHECK(ready.reason == WidevineUnavailableReason::None);
+    CHECK(ready.version == "4.10.2830.0");
+
+    CHECK(ResolveWidevineStatus(true, true, "").state == WidevineState::RestartRequired);
+
+    const auto failed_update_with_cdm = ResolveWidevineStatus(true, false, "", WidevineUnavailableReason::UpdateFailed, "Update failed.");
+    CHECK(failed_update_with_cdm.state == WidevineState::Ready);
+    CHECK(failed_update_with_cdm.reason == WidevineUnavailableReason::None);
+    CHECK(failed_update_with_cdm.detail.empty());
+
+    const auto failed = ResolveWidevineStatus(false, false, "", WidevineUnavailableReason::UpdaterUnavailable, "Updater unavailable.");
+    CHECK(failed.state == WidevineState::Unavailable);
+    CHECK(failed.reason == WidevineUnavailableReason::UpdaterUnavailable);
+    CHECK(failed.detail == "Updater unavailable.");
+
+    const auto no_cdm_after_success = ResolveWidevineStatus(false, false, "");
+    CHECK(no_cdm_after_success.state == WidevineState::Unavailable);
+    CHECK(no_cdm_after_success.reason == WidevineUnavailableReason::NoUsableCdm);
+}

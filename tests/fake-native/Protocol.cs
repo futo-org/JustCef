@@ -68,7 +68,6 @@ public enum ControllerOp : byte
     WindowRemoveDomainToProxy = 55,
     WindowGetZoom = 56,
     WindowBridgeRpc = 57,
-    GetWidevineStatus = 59,
     Debug = 250
 }
 
@@ -107,6 +106,7 @@ public enum ClientNotification : byte
     WindowLoadingStateChanged = 17,
     StreamCredit = 18,
     StreamCancel = 19,
+    WidevineStatus = 20,
     Debug = 250
 }
 

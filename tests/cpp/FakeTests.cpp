@@ -1785,3 +1785,20 @@ TEST_CASE("fake the launcher path and environment reach the native process")
     CHECK(done);
 }
 #endif
+
+TEST_CASE("fake Widevine status resolves once native publishes it")
+{
+    Watchdog watchdog(30s, "WidevineStatus");
+    asio::thread_pool pool(2);
+    Harness harness;
+    harness.Start(pool.get_executor());
+    Await(pool.get_executor(), harness.process->WaitForReadyAsync());
+    harness.fake.Command({{"cmd", "notify"}, {"opcode", "WidevineStatus"}, {"state", static_cast<std::int32_t>(WidevineState::Unavailable)},
+                          {"reason", static_cast<std::int32_t>(WidevineUnavailableReason::UpdateFailed)}, {"detail", "Widevine CDM update failed (error 3)."}, {"version", ""}});
+    const auto status = Await(pool.get_executor(), harness.process->GetWidevineStatusAsync());
+    CHECK(status.state == WidevineState::Unavailable);
+    CHECK(status.reason == WidevineUnavailableReason::UpdateFailed);
+    CHECK(status.detail == "Widevine CDM update failed (error 3).");
+    CHECK_FALSE(status.version.has_value());
+    harness.process->Dispose();
+}

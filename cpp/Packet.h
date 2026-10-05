@@ -79,8 +79,7 @@ enum class OpcodeController : uint8_t
     WindowAddDomainToProxy = 54,
     WindowRemoveDomainToProxy = 55,
     WindowGetZoom = 56,
-    WindowBridgeRpc = 57,
-    GetWidevineStatus = 59
+    WindowBridgeRpc = 57
 };
 
 // Notifications from controller
@@ -126,7 +125,8 @@ enum class OpcodeClientNotification : uint8_t
     WindowDevToolsEvent = 16,
     WindowLoadingStateChanged = 17,
     StreamCredit = 18,
-    StreamCancel = 19
+    StreamCancel = 19,
+    WidevineStatus = 20
 };
 
 constexpr std::uint32_t kProtocolVersion = 2;

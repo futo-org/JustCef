@@ -25,6 +25,10 @@
 #include <vector>
 
 class Client;
+namespace shared
+{
+struct WidevineStatus;
+}
 
 // Requests from controller
 enum class OpcodeController : uint8_t
@@ -83,7 +87,6 @@ enum class OpcodeController : uint8_t
     WindowRemoveDomainToProxy = 55,
     WindowGetZoom = 56,
     WindowBridgeRpc = 57,
-    GetWidevineStatus = 59,
     Debug = 250
 };
 
@@ -131,6 +134,7 @@ enum class OpcodeClientNotification : uint8_t
     WindowLoadingStateChanged = 17,
     StreamCredit = 18,
     StreamCancel = 19,
+    WidevineStatus = 20,
     Debug = 250
 };
 
@@ -239,6 +243,7 @@ public:
     void NotifyWindowFrameLoadError(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, cef_errorcode_t errorCode, const CefString& errorText, const CefString& url);
     void NotifyWindowLoadingStateChanged(CefRefPtr<CefBrowser> browser, bool isLoading, bool canGoBack, bool canGoForward);
     void NotifyWindowDevToolsEvent(CefRefPtr<CefBrowser> browser, const CefString& method, const uint8_t* result, size_t result_size);
+    void NotifyWidevineStatus(const shared::WidevineStatus& status);
     void NotifyDebug(uint32_t sequence);
 
     void BeginAnnounceHold();
@@ -311,7 +316,6 @@ ipc::StatusCode HandleAddDevToolsEventMethod(PacketReader& reader, PacketWriter&
 ipc::StatusCode HandleRemoveDevToolsEventMethod(PacketReader& reader, PacketWriter& writer);
 ipc::StatusCode HandleWindowSetZoom(PacketReader& reader, PacketWriter& writer);
 ipc::StatusCode HandleWindowGetZoom(PacketReader& reader, PacketWriter& writer);
-ipc::StatusCode HandleGetWidevineStatus(PacketReader& reader, PacketWriter& writer);
 bool HandleWindowBridgeRpc(uint32_t requestId, PacketReader& reader, PacketWriter& writer);
 CefRefPtr<Client> CreateBrowserWindow(const IPCWindowCreate& windowCreate);
 void CreateTopLevelPopupWindow(CefRefPtr<CefBrowserView> popup_browser_view, bool is_devtools, const IPCWindowCreate& settings);

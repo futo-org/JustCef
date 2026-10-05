@@ -439,9 +439,6 @@ bool IPC::HandleRequest(ipc::Reply& reply, OpcodeController opcode, PacketReader
     case OpcodeController::WindowGetZoom:
         status = HandleWindowGetZoom(reader, writer);
         return true;
-    case OpcodeController::GetWidevineStatus:
-        status = HandleGetWidevineStatus(reader, writer);
-        return true;
     case OpcodeController::WindowRequestFocus:
         status = HandleWindowRequestFocus(reader, writer);
         return true;
@@ -1042,6 +1039,16 @@ void IPC::WindowViewCreated(int32_t parentIdentifier, int32_t viewIdentifier, co
 
                   callback(allow);
               });
+}
+
+void IPC::NotifyWidevineStatus(const shared::WidevineStatus& status)
+{
+    PacketWriter writer;
+    writer.write<int32_t>(static_cast<int32_t>(status.state));
+    writer.write<int32_t>(static_cast<int32_t>(status.reason));
+    writer.writeSizePrefixedString(status.detail);
+    writer.writeSizePrefixedString(status.version);
+    Notify(OpcodeClientNotification::WidevineStatus, writer);
 }
 
 void IPC::NotifyWindowOpened(CefRefPtr<CefBrowser> browser)
@@ -2066,18 +2073,6 @@ ipc::StatusCode HandleWindowSetZoom(PacketReader& reader, PacketWriter& writer)
 
     browser->GetHost()->SetZoomLevel(*zoom);
     justcef_view::PropagateHostZoom(browser, *zoom);
-    return ipc::StatusCode::Ok;
-}
-
-ipc::StatusCode HandleGetWidevineStatus(PacketReader& reader, PacketWriter& writer)
-{
-    const shared::WidevineStatus status = shared::GetWidevineStatus();
-
-    writer.write<int32_t>(status.state);
-    writer.writeSizePrefixedString(status.version);
-    writer.write<uint8_t>(status.registered ? 1 : 0);
-    writer.write<uint8_t>(status.installed ? 1 : 0);
-    writer.write<uint8_t>(status.requiresRestart ? 1 : 0);
     return ipc::StatusCode::Ok;
 }
 

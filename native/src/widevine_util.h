@@ -5,6 +5,7 @@
 #include <string>
 
 #include "include/cef_command_line.h"
+#include "widevine_status.h"
 
 namespace shared
 {
@@ -15,18 +16,9 @@ extern const char kWidevineComponentId[];
 extern const char kWidevineCdmPathSwitch[];
 #endif
 
-struct WidevineStatus
-{
-    bool registered = false;
-    bool installed = false;
-    bool requiresRestart = false;
-    int32_t state = 0;
-    std::string version;
-};
-
 void InitializeWidevineState(const CefRefPtr<CefCommandLine>& command_line, const std::string& root_cache_path);
 void RequestWidevineCdmUpdate();
-WidevineStatus GetWidevineStatus();
+void PublishWidevineStatus(WidevineUnavailableReason reason = WidevineUnavailableReason::None, const std::string& detail = {});
 
 } // namespace shared
 

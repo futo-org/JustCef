@@ -174,6 +174,10 @@ public:
         {
             shared::RequestWidevineCdmUpdate();
         }
+        else
+        {
+            shared::PublishWidevineStatus(shared::WidevineUnavailableReason::NoCachePath, "Widevine initialization requires a persistent cache path.");
+        }
 
         if (command_line->HasSwitch("simple-url"))
         {

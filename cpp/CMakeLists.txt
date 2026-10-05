@@ -49,6 +49,7 @@ set(LIBJUSTCEF_SOURCES
     Transport.cpp
     Transport.h
     WindowInternals.h
+    WidevineStatus.h
     DataStream.cpp
     DataStream.h
 )

@@ -1,5 +1,7 @@
 #include "widevine_util.h"
 
+#include "ipc.h"
+
 #include <filesystem>
 #include <fstream>
 #include <system_error>
@@ -177,11 +179,11 @@ public:
         if (error != CEF_COMPONENT_UPDATE_ERROR_NONE)
         {
             LOG(WARNING) << "Widevine CDM update failed with error " << error;
+            PublishWidevineStatus(WidevineUnavailableReason::UpdateFailed, "Widevine CDM update failed (error " + std::to_string(error) + ").");
             return;
         }
 
-        const WidevineStatus status = GetWidevineStatus();
-        LOG(INFO) << "Widevine CDM update completed, installed=" << status.installed << ", version=" << status.version << ", requiresRestart=" << status.requiresRestart;
+        PublishWidevineStatus();
     }
 
 private:
@@ -200,6 +202,7 @@ void RequestWidevineCdmUpdate(int attempt)
     if (!updater)
     {
         LOG(WARNING) << "Component updater unavailable, skipping the Widevine CDM update.";
+        PublishWidevineStatus(WidevineUnavailableReason::UpdaterUnavailable, "The Widevine component updater is unavailable.");
         return;
     }
 
@@ -213,12 +216,14 @@ void RequestWidevineCdmUpdate(int attempt)
         }
 
         LOG(INFO) << "Widevine is not a registered component.";
+        PublishWidevineStatus(WidevineUnavailableReason::NotSupported, "Widevine is not a registered component.");
         return;
     }
 
     if (IsInstalledState(component->GetState()))
     {
         LOG(INFO) << "Widevine CDM " << component->GetVersion().ToString() << " is already installed.";
+        PublishWidevineStatus();
         return;
     }
 
@@ -242,32 +247,30 @@ void RequestWidevineCdmUpdate()
     RequestWidevineCdmUpdate(0);
 }
 
-WidevineStatus GetWidevineStatus()
+void PublishWidevineStatus(WidevineUnavailableReason reason, const std::string& detail)
 {
-    WidevineStatus status;
+    CEF_REQUIRE_UI_THREAD();
 
+    bool installed = false;
+    std::string version;
     CefRefPtr<CefComponentUpdater> updater = CefComponentUpdater::GetComponentUpdater();
-    if (!updater)
-        return status;
-
-    CefRefPtr<CefComponent> component = updater->GetComponentByID(kWidevineComponentId);
-    if (!component)
-        return status;
-
-    const cef_component_state_t state = component->GetState();
-
-    status.registered = true;
-    status.installed = IsInstalledState(state);
-    status.state = static_cast<int32_t>(state);
-    status.version = component->GetVersion();
+    CefRefPtr<CefComponent> component = updater ? updater->GetComponentByID(kWidevineComponentId) : nullptr;
+    if (component)
+    {
+        installed = IsInstalledState(component->GetState());
+        version = component->GetVersion();
+    }
 
 #if defined(OS_LINUX)
-    status.requiresRestart = status.installed && !g_cdm_present_at_startup;
+    const bool requiresRestart = installed && !g_cdm_present_at_startup;
+    installed = installed || g_cdm_present_at_startup;
 #else
-    status.requiresRestart = false;
+    const bool requiresRestart = false;
 #endif
 
-    return status;
+    const WidevineStatus status = ResolveWidevineStatus(installed, requiresRestart, version, reason, detail);
+    LOG(INFO) << "Widevine status: state=" << static_cast<int32_t>(status.state) << ", reason=" << static_cast<int32_t>(status.reason) << ", version=" << status.version;
+    IPC::Singleton.NotifyWidevineStatus(status);
 }
 
 } // namespace shared

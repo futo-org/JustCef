@@ -8,10 +8,10 @@ N2C = "nativeToController"
 TYPES = {0: "Request", 1: "Response", 2: "Notification", 3: "Cancel"}
 STATUS = {0: "Ok", 1: "Error", 2: "Canceled", 3: "NotFound", 4: "NotHandled", 5: "Unsupported", 6: "ShuttingDown", 7: "TooLarge", 8: "InvalidRequest"}
 
-CONTROLLER_OPS = {0: "Ping", 1: "Print", 2: "Echo", 3: "WindowCreate", 6: "WindowLoadUrl", 9: "WindowSetZoom", 15: "WindowSetPosition", 20: "WindowShow", 22: "WindowClose", 34: "WindowSetModifyRequests", 39: "PickFile", 41: "SaveFile", 42: "WindowExecuteDevToolsMethod", 44: "WindowSetTitle", 50: "WindowGetSize", 56: "WindowGetZoom", 57: "WindowBridgeRpc", 59: "GetWidevineStatus", 99: "Unknown"}
+CONTROLLER_OPS = {0: "Ping", 1: "Print", 2: "Echo", 3: "WindowCreate", 6: "WindowLoadUrl", 9: "WindowSetZoom", 15: "WindowSetPosition", 20: "WindowShow", 22: "WindowClose", 34: "WindowSetModifyRequests", 39: "PickFile", 41: "SaveFile", 42: "WindowExecuteDevToolsMethod", 44: "WindowSetTitle", 50: "WindowGetSize", 56: "WindowGetZoom", 57: "WindowBridgeRpc", 99: "Unknown"}
 CONTROLLER_NOTIFICATIONS = {0: "Exit", 1: "StreamData", 2: "StreamEnd", 3: "StreamError"}
 CLIENT_OPS = {2: "Echo", 3: "WindowProxyRequest", 4: "WindowModifyRequest", 9: "WindowBridgeRpc", 11: "WindowViewCreated"}
-CLIENT_NOTIFICATIONS = {0: "Ready", 1: "Exit", 2: "WindowOpened", 3: "WindowClosed", 12: "WindowFullscreenChanged", 13: "WindowFrameLoadStart", 14: "WindowFrameLoadEnd", 15: "WindowFrameLoadError", 16: "WindowDevToolsEvent", 17: "WindowLoadingStateChanged", 18: "StreamCredit", 19: "StreamCancel", 250: "Debug"}
+CLIENT_NOTIFICATIONS = {0: "Ready", 1: "Exit", 2: "WindowOpened", 3: "WindowClosed", 12: "WindowFullscreenChanged", 13: "WindowFrameLoadStart", 14: "WindowFrameLoadEnd", 15: "WindowFrameLoadError", 16: "WindowDevToolsEvent", 17: "WindowLoadingStateChanged", 18: "StreamCredit", 19: "StreamCancel", 20: "WidevineStatus", 250: "Debug"}
 
 
 def enc(t, v):
@@ -183,7 +183,6 @@ vec("save_file_ok", N2C, RESP, 41, 7, [("path", "str", "/home/user/report.pdf")]
 vec("execute_devtools_method", C2N, REQ, 42, 7, [("browserId", "i32", 1), ("method", "str", "Browser.getVersion"), ("hasParams", "bool", False)])
 vec("execute_devtools_method_params", C2N, REQ, 42, 7, [("browserId", "i32", 1), ("method", "str", "Page.navigate"), ("hasParams", "bool", True), ("paramsJson", "bytes", b'{"url":"about:blank"}')])
 vec("execute_devtools_method_ok", N2C, RESP, 42, 7, [("success", "bool", True), ("result", "bytes", b"{}")], status=0)
-vec("widevine_status_ok", N2C, RESP, 59, 7, [("state", "i32", 2), ("version", "str", "4.10.2830.0"), ("registered", "bool", True), ("installed", "bool", True), ("requiresRestart", "bool", False)], status=0)
 
 vec("bridge_rpc_request", C2N, REQ, 57, 7, [("browserId", "i32", 1), ("method", "str", "add"), ("json", "bytes", b"[1,2]")])
 vec("bridge_rpc_ok", N2C, RESP, 57, 7, [("json", "bytes", b"3")], status=0)
@@ -283,6 +282,7 @@ vec("loading_state_changed", N2C, NOTIF, 17, 0, [("browserId", "i32", 1), ("isLo
 vec("frame_load_start", N2C, NOTIF, 13, 0, [("browserId", "i32", 1), ("frameId", "str", "main"), ("isMain", "bool", True), ("url", "str", "https://example.com/")])
 vec("frame_load_end", N2C, NOTIF, 14, 0, [("browserId", "i32", 1), ("frameId", "str", "main"), ("isMain", "bool", True), ("url", "str", "https://example.com/"), ("httpStatusCode", "i32", 200)])
 vec("frame_load_error", N2C, NOTIF, 15, 0, [("browserId", "i32", 1), ("frameId", "str", "main"), ("isMain", "bool", True), ("errorCode", "i32", -105), ("errorText", "str", "net::ERR_NAME_NOT_RESOLVED"), ("url", "str", "https://nonexistent.invalid/")])
+vec("widevine_status", N2C, NOTIF, 20, 0, [("state", "i32", 1), ("reason", "i32", 0), ("detail", "str", ""), ("version", "str", "4.10.2830.0")])
 vec("devtools_event", N2C, NOTIF, 16, 0, [("browserId", "i32", 1), ("method", "str", "Network.requestWillBeSent"), ("params", "bytes", b'{"requestId":"1"}')])
 vec("debug_notification", N2C, NOTIF, 250, 0, [("sequence", "u32", 42)])
 

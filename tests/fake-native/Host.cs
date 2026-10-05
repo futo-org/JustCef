@@ -376,8 +376,6 @@ public sealed class Host
             }
             case ControllerOp.WindowCreate:
                 return CreateWindow(req.Create!);
-            case ControllerOp.GetWidevineStatus:
-                return Result.Ok(b => b.I32(0).Str(null).Bool(false).Bool(false).Bool(false));
             case ControllerOp.Debug:
                 return Result.Fail(Status.Unsupported, "Debug requires --enable-ipc-debug");
         }
@@ -1006,6 +1004,9 @@ public sealed class Host
         ReadOnlyMemory<byte> packet;
         switch (op)
         {
+            case ClientNotification.WidevineStatus:
+                packet = Encode.WidevineStatus(Json.Int(o, "state", 0), Json.Int(o, "reason", 0), Json.Str(o, "detail") ?? "", Json.Str(o, "version") ?? "");
+                break;
             case ClientNotification.Ready:
                 packet = Encode.Ready((uint)Json.Long(o, "version", Protocol.Version));
                 break;

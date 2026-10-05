@@ -1,25 +1,20 @@
 namespace JustCef;
 
-public enum WidevineComponentState
+public enum WidevineState
 {
-    New = 0,
-    Checking = 1,
-    CanUpdate = 2,
-    Downloading = 3,
-    Decompressing = 4,
-    Patching = 5,
-    Updating = 6,
-    Updated = 7,
-    UpToDate = 8,
-    UpdateError = 9,
-    Run = 10
+    Ready = 0,
+    RestartRequired = 1,
+    Unavailable = 2
 }
 
-public class WidevineStatus
+public enum WidevineUnavailableReason
 {
-    public required bool Registered { get; init; }
-    public required bool Installed { get; init; }
-    public required bool RequiresRestart { get; init; }
-    public required WidevineComponentState State { get; init; }
-    public required string? Version { get; init; }
+    None = 0,
+    NotSupported = 1,
+    NoCachePath = 2,
+    UpdaterUnavailable = 3,
+    UpdateFailed = 4,
+    NoUsableCdm = 5
 }
+
+public sealed record WidevineStatus(WidevineState State, WidevineUnavailableReason Reason, string? Detail, string? Version);
