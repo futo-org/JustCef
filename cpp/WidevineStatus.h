@@ -16,7 +16,7 @@ enum class WidevineState : std::int32_t
 
 enum class WidevineUnavailableReason : std::int32_t
 {
-    None = 0,
+    NotApplicable = 0,
     NotSupported = 1,
     NoCachePath = 2,
     UpdaterUnavailable = 3,
@@ -27,7 +27,7 @@ enum class WidevineUnavailableReason : std::int32_t
 struct WidevineStatus
 {
     WidevineState state = WidevineState::Unavailable;
-    WidevineUnavailableReason reason = WidevineUnavailableReason::None;
+    WidevineUnavailableReason reason = WidevineUnavailableReason::NotApplicable;
     std::optional<std::string> detail;
     std::optional<std::string> version;
 };

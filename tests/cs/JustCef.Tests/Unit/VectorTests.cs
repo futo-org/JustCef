@@ -339,7 +339,7 @@ public class VectorTests
         using var peer = new PipePeer();
         peer.SendRaw(Bytes("widevine_status"));
         var status = await peer.Process.GetWidevineStatusAsync().WaitAsync(Timeout);
-        Assert.Equal(new WidevineStatus(WidevineState.RestartRequired, WidevineUnavailableReason.None, null, "4.10.2830.0"), status);
+        Assert.Equal(new WidevineStatus(WidevineState.RestartRequired, WidevineUnavailableReason.NotApplicable, null, "4.10.2830.0"), status);
     }
 
     [Fact]

@@ -9,7 +9,7 @@ public enum WidevineState
 
 public enum WidevineUnavailableReason
 {
-    None = 0,
+    NotApplicable = 0,
     NotSupported = 1,
     NoCachePath = 2,
     UpdaterUnavailable = 3,

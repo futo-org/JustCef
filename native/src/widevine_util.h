@@ -18,7 +18,7 @@ extern const char kWidevineCdmPathSwitch[];
 
 void InitializeWidevineState(const CefRefPtr<CefCommandLine>& command_line, const std::string& root_cache_path);
 void RequestWidevineCdmUpdate();
-void PublishWidevineStatus(WidevineUnavailableReason reason = WidevineUnavailableReason::None, const std::string& detail = {});
+void PublishWidevineStatus(WidevineUnavailableReason reason = WidevineUnavailableReason::NotApplicable, const std::string& detail = {});
 
 } // namespace shared
 

@@ -15,11 +15,11 @@ public class SmokeTests
         await harness.NotifyAsync((int)JustCefProcess.OpcodeClientNotification.WidevineStatus, 0, o =>
         {
             o["state"] = (int)WidevineState.Ready;
-            o["reason"] = (int)WidevineUnavailableReason.None;
+            o["reason"] = (int)WidevineUnavailableReason.NotApplicable;
             o["version"] = "4.10.2830.0";
         });
         var status = await pending.WithTimeout(TimeSpan.FromSeconds(10));
-        Assert.Equal(new WidevineStatus(WidevineState.Ready, WidevineUnavailableReason.None, null, "4.10.2830.0"), status);
+        Assert.Equal(new WidevineStatus(WidevineState.Ready, WidevineUnavailableReason.NotApplicable, null, "4.10.2830.0"), status);
         Assert.Equal(0, await harness.ViolationsAsync());
     }, TimeSpan.FromSeconds(60));
 

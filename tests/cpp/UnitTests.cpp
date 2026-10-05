@@ -1601,14 +1601,14 @@ TEST_CASE("native Widevine status describes readiness rather than updater succes
 
     const auto ready = ResolveWidevineStatus(true, false, "4.10.2830.0");
     CHECK(ready.state == WidevineState::Ready);
-    CHECK(ready.reason == WidevineUnavailableReason::None);
+    CHECK(ready.reason == WidevineUnavailableReason::NotApplicable);
     CHECK(ready.version == "4.10.2830.0");
 
     CHECK(ResolveWidevineStatus(true, true, "").state == WidevineState::RestartRequired);
 
     const auto failed_update_with_cdm = ResolveWidevineStatus(true, false, "", WidevineUnavailableReason::UpdateFailed, "Update failed.");
     CHECK(failed_update_with_cdm.state == WidevineState::Ready);
-    CHECK(failed_update_with_cdm.reason == WidevineUnavailableReason::None);
+    CHECK(failed_update_with_cdm.reason == WidevineUnavailableReason::NotApplicable);
     CHECK(failed_update_with_cdm.detail.empty());
 
     const auto failed = ResolveWidevineStatus(false, false, "", WidevineUnavailableReason::UpdaterUnavailable, "Updater unavailable.");
