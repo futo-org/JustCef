@@ -30,6 +30,8 @@ const char kWidevineCdmBaseDirectory[] = "WidevineCdm";
 const char kHintFileName[] = "latest-component-updated-widevine-cdm";
 
 bool g_cdm_present_at_startup = false;
+// Only the callback of the latest Update call publishes the state.
+int g_update_generation = 0;
 
 bool IsCdmDirectory(const std::filesystem::path& cdm_directory)
 {
@@ -169,13 +171,29 @@ bool IsInstalledState(cef_component_state_t state)
     return state == CEF_COMPONENT_STATE_UPDATED || state == CEF_COMPONENT_STATE_UP_TO_DATE || state == CEF_COMPONENT_STATE_RUN;
 }
 
+bool IsInProgressState(cef_component_state_t state)
+{
+    return state == CEF_COMPONENT_STATE_NEW || state == CEF_COMPONENT_STATE_CHECKING || state == CEF_COMPONENT_STATE_CAN_UPDATE
+        || state == CEF_COMPONENT_STATE_DOWNLOADING || state == CEF_COMPONENT_STATE_DECOMPRESSING
+        || state == CEF_COMPONENT_STATE_PATCHING || state == CEF_COMPONENT_STATE_UPDATING;
+}
+
 class WidevineUpdateCallback : public CefComponentUpdateCallback
 {
 public:
-    WidevineUpdateCallback() {}
+    static void Queue(CefRefPtr<CefComponentUpdater> updater)
+    {
+        updater->Update(kWidevineComponentId, CEF_COMPONENT_UPDATE_PRIORITY_FOREGROUND, new WidevineUpdateCallback(++g_update_generation));
+    }
 
     void OnComplete(const CefString& component_id, cef_component_update_error_t error) override
     {
+        if (_generation != g_update_generation)
+        {
+            LOG(INFO) << "Ignoring a Widevine CDM update callback superseded by a newer update.";
+            return;
+        }
+
         if (error != CEF_COMPONENT_UPDATE_ERROR_NONE)
         {
             LOG(WARNING) << "Widevine CDM update failed with error " << error;
@@ -183,10 +201,25 @@ public:
             return;
         }
 
+        // OnComplete runs after the next queued update task has started, so the component can report that task's state.
+        // Queue another update and read the state when it completes.
+        CefRefPtr<CefComponentUpdater> updater = CefComponentUpdater::GetComponentUpdater();
+        CefRefPtr<CefComponent> component = updater ? updater->GetComponentByID(kWidevineComponentId) : nullptr;
+        if (component && IsInProgressState(component->GetState()))
+        {
+            LOG(INFO) << "Widevine CDM update completed while another update is running (state " << component->GetState() << "), waiting for it.";
+            WidevineUpdateCallback::Queue(updater);
+            return;
+        }
+
         PublishWidevineStatus();
     }
 
 private:
+    explicit WidevineUpdateCallback(int generation) : _generation(generation) {}
+
+    int _generation;
+
     IMPLEMENT_REFCOUNTING(WidevineUpdateCallback);
     DISALLOW_COPY_AND_ASSIGN(WidevineUpdateCallback);
 };
@@ -227,7 +260,7 @@ void RequestWidevineCdmUpdate(int attempt)
         return;
     }
 
-    updater->Update(kWidevineComponentId, CEF_COMPONENT_UPDATE_PRIORITY_FOREGROUND, new WidevineUpdateCallback());
+    WidevineUpdateCallback::Queue(updater);
 }
 
 } // namespace

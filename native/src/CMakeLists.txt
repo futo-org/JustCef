@@ -85,7 +85,7 @@ macro(SET_DOTCEF_EXECUTABLE_TARGET_PROPERTIES target)
   SET_EXECUTABLE_TARGET_PROPERTIES(${target})
   SET_DOTCEF_PROPERTIES(${target})
 
-  target_compile_definitions(${target} PRIVATE JUSTCEF_NATIVE_VERSION=18)
+  target_compile_definitions(${target} PRIVATE JUSTCEF_NATIVE_VERSION=19)
 
   if(OS_LINUX)
     # Set rpath so that libraries can be placed next to the executable.
