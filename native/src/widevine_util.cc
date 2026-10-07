@@ -28,6 +28,8 @@ namespace
 
 const char kWidevineCdmBaseDirectory[] = "WidevineCdm";
 const char kHintFileName[] = "latest-component-updated-widevine-cdm";
+// Chromium's kNullVersion (components/component_updater/component_installer.cc): the version of a component with nothing installed.
+const char kNullComponentVersion[] = "0.0.0.0";
 
 bool g_cdm_present_at_startup = false;
 // Only the callback of the latest Update call publishes the state.
@@ -178,6 +180,23 @@ bool IsInProgressState(cef_component_state_t state)
         || state == CEF_COMPONENT_STATE_PATCHING || state == CEF_COMPONENT_STATE_UPDATING;
 }
 
+// Chromium registers the component with the newest CDM version on disk at startup, before any update check runs.
+bool IsCdmInstalled(const CefRefPtr<CefComponent>& component)
+{
+    const std::string version = component->GetVersion();
+    return IsInstalledState(component->GetState()) || (!version.empty() && version != kNullComponentVersion);
+}
+
+bool IsStatusKnownBeforeUpdate(const CefRefPtr<CefComponent>& component)
+{
+#if defined(OS_LINUX)
+    // Linux loads the CDM from the hint file at startup, which can point outside the component directory.
+    if (g_cdm_present_at_startup)
+        return true;
+#endif
+    return IsCdmInstalled(component);
+}
+
 class WidevineUpdateCallback : public CefComponentUpdateCallback
 {
 public:
@@ -224,8 +243,9 @@ private:
     DISALLOW_COPY_AND_ASSIGN(WidevineUpdateCallback);
 };
 
-const int kUpdateAttempts = 15;
-const int64_t kUpdateRetryDelayMs = 2000;
+// The component registers shortly after the context, so retry often for up to 30 seconds.
+const int kUpdateAttempts = 300;
+const int64_t kUpdateRetryDelayMs = 100;
 
 void RequestWidevineCdmUpdate(int attempt)
 {
@@ -253,13 +273,16 @@ void RequestWidevineCdmUpdate(int attempt)
         return;
     }
 
-    if (IsInstalledState(component->GetState()))
+    if (IsStatusKnownBeforeUpdate(component))
     {
-        LOG(INFO) << "Widevine CDM " << component->GetVersion().ToString() << " is already installed.";
+        LOG(INFO) << "Widevine CDM " << component->GetVersion().ToString() << " is available at startup (state " << component->GetState() << "), checking for a newer version in the background.";
         PublishWidevineStatus();
+        // A newer version is installed next to the loaded one and only used after a restart.
+        updater->Update(kWidevineComponentId, CEF_COMPONENT_UPDATE_PRIORITY_FOREGROUND, nullptr);
         return;
     }
 
+    LOG(INFO) << "No Widevine CDM installed yet (version " << component->GetVersion().ToString() << ", state " << component->GetState() << "), waiting for the update.";
     WidevineUpdateCallback::Queue(updater);
 }
 
@@ -290,7 +313,7 @@ void PublishWidevineStatus(WidevineUnavailableReason reason, const std::string& 
     CefRefPtr<CefComponent> component = updater ? updater->GetComponentByID(kWidevineComponentId) : nullptr;
     if (component)
     {
-        installed = IsInstalledState(component->GetState());
+        installed = IsCdmInstalled(component);
         version = component->GetVersion();
     }
 
