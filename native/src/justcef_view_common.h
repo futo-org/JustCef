@@ -17,7 +17,6 @@ constexpr char kViewCommandMessageName[] = "JustCef.View.Command";
 constexpr char kViewDestroyMessageName[] = "JustCef.View.Destroy";
 constexpr char kViewContextReleasedMessageName[] = "JustCef.View.ContextReleased";
 constexpr char kViewEventMessageName[] = "JustCef.View.Event";
-constexpr char kViewSnapshotMessageName[] = "JustCef.View.Snapshot";
 constexpr char kViewTakeFocusMessageName[] = "JustCef.View.TakeFocus";
 constexpr char kViewPingMessageName[] = "JustCef.View.Ping";
 constexpr char kViewPongMessageName[] = "JustCef.View.Pong";

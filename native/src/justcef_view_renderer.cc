@@ -27,7 +27,6 @@ constexpr char kViewBootstrapScript[] = R"JS((function (native) {
   const SCROLL_SETTLE_MS = 120;
   const RELEASE_STABLE_MS = 120;
   const DESTROY_GRACE_MS = 1000;
-  const SUSPEND_SNAPSHOT_MS = 150;
 
   const internals = new WeakMap();
   const elements = new Map();
@@ -50,9 +49,7 @@ constexpr char kViewBootstrapScript[] = R"JS((function (native) {
   }
 
   const sheet = new CSSStyleSheet();
-  sheet.replaceSync(':host{display:block;position:relative}' +
-    '.underlay{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;display:none}' +
-    '.underlay.shown{display:block}');
+  sheet.replaceSync(':host{display:block;position:relative}');
 
   const resizeObserver = new ResizeObserver(() => markHot());
 
@@ -378,13 +375,6 @@ constexpr char kViewBootstrapScript[] = R"JS((function (native) {
     }
   }
 
-  function decodeBase64(data) {
-    const binary = atob(data);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    return bytes;
-  }
-
   class JustCefViewElement extends HTMLElement {
     static get observedAttributes() {
       return ['src', 'anchor', 'transition', 'occlusion'];
@@ -395,21 +385,16 @@ constexpr char kViewBootstrapScript[] = R"JS((function (native) {
       const root = this.attachShadow({ mode: 'closed' });
       root.adoptedStyleSheets = [sheet];
       const slot = document.createElement('slot');
-      const canvas = document.createElement('canvas');
-      canvas.className = 'underlay';
-      root.append(slot, canvas);
+      root.append(slot);
 
       const el = this;
       const state = {
         id: ++nextId,
-        canvas,
         created: false,
         failed: false,
         viewId: null,
-        resizeMode: 'anchor',
         destroyTimer: 0,
         suspended: false,
-        suspendPending: 0,
         freezes: new Set(),
         releasing: new Map(),
         lastKey: '',
@@ -418,10 +403,6 @@ constexpr char kViewBootstrapScript[] = R"JS((function (native) {
         learned: { h: undefined, v: undefined },
         resizeBase: null,
         occluded: false,
-        hasSnapshot: false,
-        snapshotToken: 0,
-        snapshotPending: false,
-        pendingFreezes: new Set(),
 
         transition() {
           const value = (el.getAttribute('transition') || 'auto').toLowerCase();
@@ -429,28 +410,17 @@ constexpr char kViewBootstrapScript[] = R"JS((function (native) {
         },
 
         occlusion() {
-          const value = (el.getAttribute('occlusion') || 'snapshot').toLowerCase();
-          return value === 'hide' || value === 'none' ? value : 'snapshot';
+          return (el.getAttribute('occlusion') || '').toLowerCase() === 'none' ? 'none' : 'hide';
         },
 
         freeze(reason) {
-          if (this.transition() === 'live' && reason !== 'suspend') return;
-          if (reason !== 'suspend' && !this.hasSnapshot) {
-            this.pendingFreezes.add(reason);
-            if (!this.snapshotPending && this.created) {
-              this.snapshotPending = true;
-              native.command(this.id, 'snapshot');
-            }
-            return;
-          }
-          this.showUnderlay(true);
+          if (this.transition() !== 'freeze') return;
           this.freezes.add(reason);
           this.releasing.delete(reason);
           markHot();
         },
 
         release(reason) {
-          this.pendingFreezes.delete(reason);
           if (!this.freezes.has(reason) || this.releasing.has(reason)) return;
           this.releasing.set(reason, performance.now());
           markHot();
@@ -481,17 +451,10 @@ constexpr char kViewBootstrapScript[] = R"JS((function (native) {
         destroy() {
           clearTimeout(this.destroyTimer);
           this.destroyTimer = 0;
-          clearTimeout(this.suspendPending);
-          this.suspendPending = 0;
           if (this.created) native.destroy(this.id);
           this.created = false;
           this.viewId = null;
           this.lastKey = '';
-          this.snapshotToken++;
-          this.hasSnapshot = false;
-          this.snapshotPending = false;
-          this.pendingFreezes.clear();
-          this.showUnderlay(false);
           this.freezes.clear();
           this.releasing.clear();
           this.lastRect = null;
@@ -499,9 +462,6 @@ constexpr char kViewBootstrapScript[] = R"JS((function (native) {
           stopTracking(el);
         },
 
-        showUnderlay(show) {
-          this.canvas.classList.toggle('shown', !!show && this.hasSnapshot);
-        },
 )JS"
                                             R"JS(
         measure(order) {
@@ -575,7 +535,6 @@ constexpr char kViewBootstrapScript[] = R"JS((function (native) {
           if (occluded !== this.occluded) this.occluded = occluded;
 
           const show = visible && !occluded && !this.suspended;
-          this.showUnderlay(!(occluded && occlusionMode === 'hide'));
 
           const explicit = parseAnchor(el.getAttribute('anchor'));
           const anchorH = explicit.h !== null ? explicit.h : (this.learned.h !== undefined && this.learned.h !== null ? this.learned.h : guessHorizontal(rect, width));
@@ -592,46 +551,10 @@ constexpr char kViewBootstrapScript[] = R"JS((function (native) {
         },
 
         onWindowResize() {
-          const unpredictable = this.learned.h === null || this.learned.v === null;
-          if (this.transition() === 'freeze' || this.resizeMode === 'freeze' || unpredictable) this.freeze('resize');
+          if (this.transition() === 'freeze') this.freeze('resize');
         },
 
         onNative(kind, a, b) {
-          if (kind === 'snapshot') {
-            const token = ++this.snapshotToken;
-            this.snapshotPending = false;
-            let bytes;
-            try {
-              bytes = decodeBase64(a);
-            } catch (e) {
-              return;
-            }
-            createImageBitmap(new Blob([bytes], { type: 'image/jpeg' })).then((bitmap) => {
-              if (token !== this.snapshotToken) {
-                bitmap.close();
-                return;
-              }
-              this.canvas.width = bitmap.width;
-              this.canvas.height = bitmap.height;
-              const context = this.canvas.getContext('2d');
-              if (context) context.drawImage(bitmap, 0, 0);
-              bitmap.close();
-              this.hasSnapshot = true;
-              this.showUnderlay(!(this.occluded && this.occlusion() === 'hide'));
-              if (this.pendingFreezes.size) {
-                const reasons = Array.from(this.pendingFreezes);
-                this.pendingFreezes.clear();
-                for (const reason of reasons) this.freeze(reason);
-              }
-              if (this.suspendPending) {
-                clearTimeout(this.suspendPending);
-                this.suspendPending = 0;
-                this.freeze('suspend');
-              }
-            }, () => {});
-            return;
-          }
-
           if (kind === 'keyscroll') {
             keyboardScroll(el, a);
             return;
@@ -655,7 +578,6 @@ constexpr char kViewBootstrapScript[] = R"JS((function (native) {
 
           if (a === 'viewcreated') {
             this.viewId = detail ? detail.viewId : null;
-            this.resizeMode = detail && detail.resizeMode === 'freeze' ? 'freeze' : 'anchor';
             detail = { viewId: this.viewId };
           } else if (a === 'error') {
             if (this.viewId === null) {
@@ -706,28 +628,18 @@ constexpr char kViewBootstrapScript[] = R"JS((function (native) {
 
     suspend() {
       const state = internals.get(this);
-      if (!state || state.suspended || state.suspendPending) return;
-      if (!state.created) {
-        state.suspended = true;
-        return;
-      }
-      native.command(state.id, 'snapshot');
-      state.suspendPending = setTimeout(() => {
-        state.suspendPending = 0;
-        state.freeze('suspend');
-      }, SUSPEND_SNAPSHOT_MS);
+      if (!state || state.suspended) return;
       state.suspended = true;
-      state.freezes.delete('suspend');
+      markHot();
+      state.measure(documentOrder().indexOf(this));
     }
 
     resume() {
       const state = internals.get(this);
-      if (!state) return;
-      clearTimeout(state.suspendPending);
-      state.suspendPending = 0;
+      if (!state || !state.suspended) return;
       state.suspended = false;
-      state.release('suspend');
       markHot();
+      state.measure(documentOrder().indexOf(this));
     }
 
     _command(command) {
@@ -823,7 +735,7 @@ constexpr char kViewBootstrapScript[] = R"JS((function (native) {
   function onAnimationStart(event) {
     const target = event.target;
     forEachState((state, el) => {
-      if (state.transition() !== 'live' && target instanceof Element && composedContains(target, el)) state.freeze('animation');
+      if (state.transition() === 'freeze' && target instanceof Element && composedContains(target, el)) state.freeze('animation');
     });
   }
 
@@ -1562,12 +1474,6 @@ bool HandleViewProcessMessage(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame>
     if (name == kViewEventMessageName && args->GetSize() >= 4)
     {
         Dispatch(browser, token, "event", elementId, CefV8Value::CreateString(args->GetString(2)), CefV8Value::CreateString(args->GetString(3)));
-        return true;
-    }
-
-    if (name == kViewSnapshotMessageName)
-    {
-        Dispatch(browser, token, "snapshot", elementId, CefV8Value::CreateString(args->GetString(2)), nullptr);
         return true;
     }
 

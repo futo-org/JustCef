@@ -2,6 +2,7 @@
 
 #include "client.h"
 #include "client_manager.h"
+#include "client_util.h"
 #include "ipc.h"
 #include "justcef_view_client.h"
 #include "justcef_view_common.h"
@@ -37,8 +38,6 @@ namespace justcef_view
 namespace
 {
 
-constexpr int64_t kSnapshotAfterLoadMs = 500;
-constexpr int64_t kSnapshotIntervalMs = 2000;
 constexpr int64_t kZoomRecheckMs = 200;
 constexpr int64_t kHostZoomSyncMs = 100;
 
@@ -81,15 +80,6 @@ ViewBackend GetViewBackend()
     return static_cast<int>(std::lround(pixels * WHEEL_DELTA / (amount * 100.0 / 3.0)));
 #else
     return static_cast<int>(std::lround(pixels));
-#endif
-}
-
-bool FreezeOnWindowResize()
-{
-#if defined(OS_MAC)
-    return GetViewBackend() == ViewBackend::Overlay;
-#else
-    return false;
 #endif
 }
 
@@ -352,6 +342,8 @@ public:
 
         const bool hostWasActive = visible && window_ && window_->IsActive();
         controller_->SetVisible(visible);
+        if (visible && hasFrame_)
+            ApplyInternal(frame_);
         if (hostWasActive && !window_->IsActive())
             window_->Activate();
     }
@@ -410,6 +402,9 @@ private:
         ApplyClipLayout(clip_, frame);
         controller_->SetBounds(frame.clip);
         clip_->Layout();
+#if defined(OS_MAC)
+        shared::PlatformPositionOverlay(browserView_->GetBrowser(), window_->GetWindowHandle(), frame.clip);
+#endif
     }
 
     CefRefPtr<CefWindow> window_;
@@ -472,8 +467,6 @@ struct ViewEntry
     bool visibleApplied = false;
     bool fullscreen = false;
     bool restoreWindowFullscreen = false;
-    bool captureInFlight = false;
-    bool snapshotScheduled = false;
     bool focused = false;
     double wheelRemainderX = 0;
     double wheelRemainderY = 0;
@@ -691,7 +684,6 @@ void OnHandshakeResult(int32_t key, bool allow)
 
     CefRefPtr<CefDictionaryValue> detail = CefDictionaryValue::Create();
     detail->SetInt("viewId", entry->viewId);
-    detail->SetString("resizeMode", FreezeOnWindowResize() ? "freeze" : "anchor");
     SendEvent(entry, "viewcreated", detail);
 
     Refresh(entry);
@@ -796,18 +788,16 @@ std::optional<ViewFrame> ComputeFrame(const std::shared_ptr<ViewEntry>& entry, C
     frame.full = CefRect(originX + fullLeft, originY + fullTop, fullWidth, fullHeight);
     frame.contentOrigin = CefPoint(fullLeft, fullTop);
 
-    const int left = std::max({originX + clipLeft, frame.full.x, 0});
-    const int top = std::max({originY + clipTop, frame.full.y, 0});
-    const int right = std::min({originX + clipRight, frame.full.x + frame.full.width, container.width});
-    const int bottom = std::min({originY + clipBottom, frame.full.y + frame.full.height, container.height});
+    const int left = std::max({originX + clipLeft, frame.full.x, hostBounds.x});
+    const int top = std::max({originY + clipTop, frame.full.y, hostBounds.y});
+    const int right = std::min({originX + clipRight, frame.full.x + frame.full.width, hostBounds.x + hostBounds.width});
+    const int bottom = std::min({originY + clipBottom, frame.full.y + frame.full.height, hostBounds.y + hostBounds.height});
     frame.clip = CefRect(left, top, std::max(0, right - left), std::max(0, bottom - top));
     frame.anchorH = ToAnchor(u.anchorH);
     frame.anchorV = ToAnchor(u.anchorV);
     frame.container = container;
     return frame;
 }
-
-void ScheduleSnapshot(const std::shared_ptr<ViewEntry>& entry, int64_t delayMs);
 
 void Refresh(const std::shared_ptr<ViewEntry>& entry)
 {
@@ -880,85 +870,7 @@ void Refresh(const std::shared_ptr<ViewEntry>& entry)
         VLOG(1) << "View " << entry->viewId << " visible = " << visible;
         entry->visibleApplied = visible;
         entry->surface->SetVisible(visible);
-        if (visible)
-            ScheduleSnapshot(entry, kSnapshotIntervalMs);
     }
-}
-
-void OnSnapshotResult(int32_t key, bool success, std::string result)
-{
-    std::shared_ptr<ViewEntry> entry = FindByKey(key);
-    if (!entry)
-        return;
-
-    entry->captureInFlight = false;
-    if (!success || entry->detached)
-        return;
-
-    CefRefPtr<CefValue> value = CefParseJSON(result, JSON_PARSER_RFC);
-    if (!value || value->GetType() != VTYPE_DICTIONARY)
-        return;
-
-    CefRefPtr<CefDictionaryValue> dictionary = value->GetDictionary();
-    if (!dictionary->HasKey("data"))
-        return;
-
-    CefRefPtr<CefFrame> frame = TargetFrame(entry);
-    if (!frame)
-        return;
-
-    CefRefPtr<CefProcessMessage> message = CefProcessMessage::Create(kViewSnapshotMessageName);
-    CefRefPtr<CefListValue> args = message->GetArgumentList();
-    args->SetString(0, entry->docToken);
-    args->SetInt(1, entry->elementId);
-    args->SetString(2, dictionary->GetString("data"));
-    frame->SendProcessMessage(PID_RENDERER, message);
-}
-
-void Capture(const std::shared_ptr<ViewEntry>& entry)
-{
-    if (!entry->browser || !entry->client || !entry->visibleApplied || entry->captureInFlight || entry->detached)
-        return;
-
-    CefRefPtr<CefDictionaryValue> params = CefDictionaryValue::Create();
-    params->SetString("format", "jpeg");
-    params->SetInt("quality", 80);
-    params->SetBool("optimizeForSpeed", true);
-    params->SetBool("fromSurface", true);
-
-    entry->captureInFlight = true;
-    const int32_t key = entry->key;
-    if (!entry->client->ExecuteDevToolsMethodAsync(entry->browser, "Page.captureScreenshot", params,
-                                                   [key](bool success, std::string result)
-                                                   {
-                                                       OnSnapshotResult(key, success, std::move(result));
-                                                   }))
-    {
-        entry->captureInFlight = false;
-    }
-}
-
-void RunScheduledSnapshot(int32_t key)
-{
-    std::shared_ptr<ViewEntry> entry = FindByKey(key);
-    if (!entry)
-        return;
-
-    entry->snapshotScheduled = false;
-    if (entry->detached || !entry->visibleApplied)
-        return;
-
-    Capture(entry);
-    ScheduleSnapshot(entry, kSnapshotIntervalMs);
-}
-
-void ScheduleSnapshot(const std::shared_ptr<ViewEntry>& entry, int64_t delayMs)
-{
-    if (entry->snapshotScheduled || entry->detached)
-        return;
-
-    entry->snapshotScheduled = true;
-    CefPostDelayedTask(TID_UI, base::BindOnce(&RunScheduledSnapshot, entry->key), delayMs);
 }
 
 cef_color_t ToOpaqueColor(int32_t argb)
@@ -1248,12 +1160,6 @@ bool HandleHostProcessMessage(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame>
             return true;
         }
 
-        if (command == "snapshot")
-        {
-            Capture(entry);
-            return true;
-        }
-
         if (!entry->allowed || !entry->browser)
             return true;
 
@@ -1506,7 +1412,6 @@ void OnViewLoadEnd(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int
     detail->SetString("url", frame->GetURL());
     detail->SetInt("httpStatusCode", httpStatusCode);
     SendEvent(entry, "load", detail);
-    ScheduleSnapshot(entry, kSnapshotAfterLoadMs);
 }
 
 void OnViewLoadError(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int errorCode, const std::string& errorText, const std::string& failedUrl)

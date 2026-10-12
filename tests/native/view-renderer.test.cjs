@@ -16,6 +16,7 @@ function harness() {
   const messages = [];
   const classes = new Map();
   const listeners = new Map();
+  const createdTags = [];
   class Element {
     constructor() {
       this.attributes = new Map();
@@ -24,7 +25,6 @@ function harness() {
       this.classList = { toggle() {} };
     }
     attachShadow() { return { append() {} }; }
-    getContext() { return { drawImage() {} }; }
     addEventListener() {}
     getAttribute(name) { return this.attributes.get(name) ?? null; }
     setAttribute(name, value) {
@@ -44,7 +44,7 @@ function harness() {
   const document = {
     baseURI: 'https://app.test/', visibilityState: 'visible',
     documentElement: { clientWidth: 800, clientHeight: 600 },
-    createElement: () => new Element(), addEventListener: (name, fn) => listeners.set(name, fn),
+    createElement: tag => { createdTags.push(tag); return new Element(); }, addEventListener: (name, fn) => listeners.set(name, fn),
     querySelectorAll: () => [], elementsFromPoint: () => [],
   };
   const context = {
@@ -53,8 +53,7 @@ function harness() {
     ResizeObserver: class { observe() {} unobserve() {} },
     MutationObserver: class { observe() {} disconnect() {} },
     Node: { DOCUMENT_POSITION_FOLLOWING: 4 },
-    CustomEvent: class {}, document, URL, Blob, atob,
-    createImageBitmap: async () => ({ width: 100, height: 100, close() {} }),
+    CustomEvent: class {}, document, URL,
     customElements: { get: name => classes.get(name), define: (name, cls) => classes.set(name, cls) },
     innerWidth: 800, innerHeight: 600, devicePixelRatio: 1,
     performance: { now: () => now },
@@ -87,8 +86,12 @@ function harness() {
     }
   }
   function event(name, detail) { dispatch('event', id, name, JSON.stringify(detail)); }
-  return { view, document, messages, advance, event,
-    snapshot: async () => { dispatch('snapshot', id, '', null); await Promise.resolve(); },
+  return { view, document, messages, advance, event, createdTags,
+    resize: (width, height) => {
+      context.innerWidth = document.documentElement.clientWidth = width;
+      context.innerHeight = document.documentElement.clientHeight = height;
+      listeners.get('resize')();
+    },
     scroll: () => listeners.get('scroll')({ target: document }),
     pageEvent: name => listeners.get(name)({ persisted: true }) };
 }
@@ -98,7 +101,7 @@ test('clipped rounded corners do not hide the entire native view', () => {
   const background = {};
   h.document.elementsFromPoint = (x, y) =>
     (x === 21 || x === 119) && (y === 21 || y === 119) ? [background] : [h.view];
-  h.view.setAttribute('occlusion', 'snapshot');
+  h.view.setAttribute('occlusion', 'hide');
   h.advance(32);
   const update = h.messages.filter(m => m.name === 'update').at(-1);
   assert.equal(update.args[13], true, 'clipped corners are outside the visible element');
@@ -108,7 +111,6 @@ test('an overlay covering the native view still hides it and removal restores it
   const h = harness();
   const overlay = {};
   h.document.elementsFromPoint = () => [overlay, h.view];
-  h.view.setAttribute('occlusion', 'snapshot');
   h.advance(32);
   assert.equal(h.messages.filter(m => m.name === 'update').at(-1).args[13], false);
   h.document.elementsFromPoint = () => [h.view];
@@ -116,14 +118,16 @@ test('an overlay covering the native view still hides it and removal restores it
   assert.equal(h.messages.filter(m => m.name === 'update').at(-1).args[13], true);
 });
 
-test('motion freeze resumes after geometry settles', async () => {
+test('explicit motion freeze hides immediately and resumes after geometry settles', () => {
   const h = harness();
   h.event('viewcreated', { viewId: 10 });
-  await h.snapshot();
   h.view.setAttribute('transition', 'freeze');
   h.view.rect = { left: 40, top: 20, width: 100, height: 100, right: 140, bottom: 120 };
   h.advance(32);
-  assert.ok(h.messages.some(m => m.name === 'update' && m.args[17] === true));
+  const frozen = h.messages.filter(m => m.name === 'update').at(-1);
+  assert.equal(frozen.args[17], true);
+  assert.equal(frozen.args[13], false);
+  assert.equal(h.messages.filter(m => m.name === 'command').length, 0);
   h.advance(400);
   const last = h.messages.filter(m => m.name === 'update').at(-1);
   assert.equal(last.args[17], false, 'must leave frozen mode');
@@ -201,4 +205,50 @@ test('back-forward cache releases native surfaces and recreates on restore', () 
   assert.equal(h.messages.at(-1).name, 'destroy');
   h.pageEvent('pageshow');
   assert.equal(h.messages.filter(m => m.name === 'create').length, 2);
+});
+
+
+test('default movement and resizing keep the native view live without a canvas', () => {
+  const h = harness();
+  h.event('viewcreated', { viewId: 10 });
+  h.view.rect = { left: 40, top: 30, width: 120, height: 110, right: 160, bottom: 140 };
+  h.resize(900, 700);
+  h.advance(32);
+  const last = h.messages.filter(m => m.name === 'update').at(-1);
+  assert.equal(last.args[3], 30);
+  assert.equal(last.args[4], 120);
+  assert.equal(last.args[13], true);
+  assert.equal(last.args[17], false);
+  assert.equal(h.createdTags.includes('canvas'), false);
+  assert.equal(h.messages.filter(m => m.name === 'command').length, 0);
+});
+
+test('explicit resize freeze restores the native view after resizing settles', () => {
+  const h = harness();
+  h.event('viewcreated', { viewId: 10 });
+  h.view.setAttribute('transition', 'freeze');
+  h.resize(900, 700);
+  h.advance(32);
+  const hidden = h.messages.filter(m => m.name === 'update').at(-1);
+  assert.equal(hidden.args[13], false);
+  assert.equal(hidden.args[17], true);
+  h.advance(400);
+  const restored = h.messages.filter(m => m.name === 'update').at(-1);
+  assert.equal(restored.args[13], true);
+  assert.equal(restored.args[17], false);
+  assert.equal(h.messages.filter(m => m.name === 'command').length, 0);
+});
+
+test('suspend hides immediately and resume restores current geometry without captures', () => {
+  const h = harness();
+  h.event('viewcreated', { viewId: 10 });
+  h.view.suspend();
+  assert.equal(h.messages.filter(m => m.name === 'update').at(-1).args[13], false);
+  h.view.rect = { left: 40, top: 30, width: 120, height: 110, right: 160, bottom: 140 };
+  h.advance(32);
+  h.view.resume();
+  const last = h.messages.filter(m => m.name === 'update').at(-1);
+  assert.equal(last.args[3], 30);
+  assert.equal(last.args[13], true);
+  assert.equal(h.messages.filter(m => m.name === 'command').length, 0);
 });

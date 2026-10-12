@@ -32,6 +32,9 @@ void PlatformSetWindowSize(CefRefPtr<CefBrowser> browser, const CefSize& size);
 CefPoint PlatformGetWindowPosition(CefRefPtr<CefBrowser> browser);
 void PlatformSetWindowPosition(CefRefPtr<CefBrowser> browser, const CefPoint& position);
 void PlatformWindowRequestFocus(CefRefPtr<CefBrowser> browser);
+#if defined(OS_MAC)
+void PlatformPositionOverlay(CefRefPtr<CefBrowser> browser, CefWindowHandle parentView, const CefRect& bounds);
+#endif
 void PlatformPickFiles(int browser_identifier, bool multiple, const std::vector<std::pair<std::string /* name [Text Files (*.txt)] */, std::string /* *.txt */>>& filters,
                        std::function<void(std::vector<std::string>)> callback);
 void PlatformPickDirectory(int browser_identifier, std::function<void(std::string)> callback);

@@ -306,4 +306,22 @@ namespace shared {
 
         [window makeKeyWindow];
     }
+
+    void PlatformPositionOverlay(CefRefPtr<CefBrowser> browser, CefWindowHandle parentViewHandle, const CefRect& bounds)
+    {
+        if (!browser) return;
+        NSView* parentView = (__bridge NSView*)parentViewHandle;
+        NSWindow* parentWindow = parentView.window;
+        NSWindow* overlayWindow = BrowserNSWindow(browser);
+        if (!parentView || !parentWindow || !overlayWindow || overlayWindow == parentWindow) return;
+
+        const NSRect parentBounds = parentView.bounds;
+        const CGFloat y = parentView.isFlipped
+            ? NSMinY(parentBounds) + bounds.y
+            : NSMaxY(parentBounds) - bounds.y - bounds.height;
+        const NSRect rect = NSMakeRect(NSMinX(parentBounds) + bounds.x, y, bounds.width, bounds.height);
+        const NSRect windowRect = [parentView convertRect:rect toView:nil];
+        const NSRect screenRect = [parentWindow convertRectToScreen:windowRect];
+        [overlayWindow setFrameOrigin:screenRect.origin];
+    }
 }
