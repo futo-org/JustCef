@@ -583,7 +583,6 @@ CefRefPtr<CefDictionaryValue> ErrorDetail(const std::string& reason)
 }
 
 void Refresh(const std::shared_ptr<ViewEntry>& entry);
-void Capture(const std::shared_ptr<ViewEntry>& entry);
 void OnHostActivity(CefRefPtr<CefBrowser> host, const std::string& kind);
 
 void SyncHostZoom(int parentId)
