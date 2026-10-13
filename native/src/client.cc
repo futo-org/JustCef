@@ -297,9 +297,22 @@ void Client::OnTitleChange(CefRefPtr<CefBrowser> browser, const CefString& title
 
 void Client::OnFullscreenModeChange(CefRefPtr<CefBrowser> browser, bool fullscreen)
 {
-    bool isViewsEnabled = CefBrowserView::GetForBrowser(browser) ? true : false;
-    if (!isViewsEnabled && _manageNativeWindow)
-        shared::PlatformSetFullscreen(browser, fullscreen);
+    CEF_REQUIRE_UI_THREAD();
+
+    if (_manageNativeWindow)
+    {
+        CefRefPtr<CefBrowserView> browser_view = CefBrowserView::GetForBrowser(browser);
+        if (browser_view)
+        {
+            CefRefPtr<CefWindow> window = browser_view->GetWindow();
+            if (window)
+                window->SetFullscreen(fullscreen);
+        }
+        else
+        {
+            shared::PlatformSetFullscreen(browser, fullscreen);
+        }
+    }
 
     IPC::Singleton.NotifyWindowFullscreenChanged(browser, fullscreen);
 }
