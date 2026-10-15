@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>JustCef frameless window</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #171c25; color: #e8eef8; font: 15px system-ui, sans-serif; }
+  header { height: 48px; display: flex; align-items: center; padding-left: 20px;
+    background: #252e3e; -webkit-app-region: drag; user-select: none; }
+  header strong { flex: 1; }
+  header button { -webkit-app-region: no-drag; width: 48px; height: 40px;
+    border: 0; background: transparent; color: inherit; font-size: 18px; }
+  header button:hover { background: #3c4b64; }
+  main { padding: 24px; }
+  input { padding: 8px; }
+</style>
+<header>
+  <strong>JustCef native drag area</strong>
+  <button aria-label="Minimize" data-caption-button="1" data-command="window.minimize">&#x2212;</button>
+  <button aria-label="Maximize" data-caption-button="2" data-command="window.maximize">&#x25a1;</button>
+  <button aria-label="Restore" data-command="window.restore">&#x2750;</button>
+  <button aria-label="Close" data-caption-button="3" data-command="window.close">&#xd7;</button>
+</header>
+<main>
+  <h1>Frameless window</h1>
+  <p>Drag the title bar to move the window. Try the screen edges to snap or tile,
+    double-click the title bar, and resize from the window edges and corners.</p>
+  <p>Controls inside the title bar use <code>-webkit-app-region: no-drag</code>.</p>
+  <input aria-label="Normal content" placeholder="Normal content stays interactive">
+  <p id="status" role="status">Window buttons call the host through bridge.rpc.</p>
+</main>
+<script>
+  globalThis.getCaptionButtonRegions = (zoomFactor = 1) =>
+    [...document.querySelectorAll('[data-caption-button]')]
+      .filter(button => !button.disabled && button.getClientRects().length &&
+        getComputedStyle(button).visibility === 'visible').map(button => {
+      const rect = button.getBoundingClientRect();
+      const x = Math.round(rect.left * zoomFactor);
+      const y = Math.round(rect.top * zoomFactor);
+      return { X: x, Y: y,
+        Width: Math.round(rect.right * zoomFactor) - x,
+        Height: Math.round(rect.bottom * zoomFactor) - y,
+        Button: Number(button.dataset.captionButton) };
+    });
+  for (const button of document.querySelectorAll('[data-command]')) {
+    button.addEventListener('click', async () => {
+      try {
+        if (!globalThis.bridge?.rpc) throw new Error('Enable bridgeEnabled and configure the host window command handler.');
+        await bridge.rpc.call(button.dataset.command);
+      } catch (error) {
+        document.getElementById('status').textContent = error.message;
+      }
+    });
+  }
+</script>
+</html>

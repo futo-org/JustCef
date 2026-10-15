@@ -8,7 +8,11 @@ usage() {
 
 REPO_ROOT=$(CDPATH= cd -- "$(dirname "$0")/../.." && pwd)
 CEF_BRANCH=$(tr -d '\r\n' < "${REPO_ROOT}/cef.branch")
-CEF_CHECKOUT_RAW="${CEF_CHECKOUT:-}"
+CEF_VERSION=$(tr -d '\r\n' < "${REPO_ROOT}/cef.version")
+DOWNLOAD_DIR="${DOWNLOAD_DIR:-/home/ubuntu/code/chromium_git}"
+DEPOT_TOOLS_DIR="${DEPOT_TOOLS_DIR:-/home/ubuntu/code/depot_tools}"
+CEF_OUTPUT_DIR="${CEF_OUTPUT_DIR:-${REPO_ROOT}/artifacts}"
+CEF_CHECKOUT_RAW="${CEF_CHECKOUT:-${CEF_VERSION}}"
 CEF_CHECKOUT=""
 CHECKOUT_ARG=""
 
@@ -65,16 +69,23 @@ run_build() {
   fi
   python3 "${REPO_ROOT}/automate/automate-git.py" \
     --branch="${CEF_BRANCH}" \
-    --download-dir=/home/ubuntu/code/chromium_git \
-    --depot-tools-dir=/home/ubuntu/code/depot_tools \
+    --download-dir="${DOWNLOAD_DIR}" \
+    --depot-tools-dir="${DEPOT_TOOLS_DIR}" \
     --minimal-distrib-only \
     --build-target=cefsimple \
     --force-clean \
     --force-build \
+    --force-distrib \
     --with-pgo-profiles \
     --no-debug-build \
     ${CHECKOUT_ARG:+${CHECKOUT_ARG}} \
     "${arch_arg}"
+
+  python3 "${REPO_ROOT}/automate/copy_distrib.py" \
+    --download-dir="${DOWNLOAD_DIR}" \
+    --output-dir="${CEF_OUTPUT_DIR}" \
+    --platform=linux \
+    --arch="${arch}"
 }
 
 build_x64=0

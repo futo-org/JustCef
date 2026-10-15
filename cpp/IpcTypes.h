@@ -19,6 +19,27 @@ namespace justcef
 
 class JustCefWindow;
 
+enum class RuntimeOperatingSystem : std::uint8_t
+{
+    Unknown = 0,
+    Windows = 1,
+    MacOS = 2,
+    Linux = 3
+};
+
+enum class LinuxWindowingBackend : std::uint8_t
+{
+    Unknown = 0,
+    X11 = 1,
+    Wayland = 2
+};
+
+struct RuntimeInfo
+{
+    RuntimeOperatingSystem operating_system = RuntimeOperatingSystem::Unknown;
+    std::optional<LinuxWindowingBackend> linux_windowing_backend;
+};
+
 struct CaseInsensitiveLess
 {
     bool operator()(const std::string& left, const std::string& right) const
@@ -124,6 +145,31 @@ struct Size
 {
     int width = 0;
     int height = 0;
+};
+
+struct DraggableRegion
+{
+    int x = 0;
+    int y = 0;
+    int width = 0;
+    int height = 0;
+    bool draggable = true;
+};
+
+enum class CaptionButton : std::uint8_t
+{
+    Minimize = 1,
+    Maximize = 2,
+    Close = 3
+};
+
+struct CaptionButtonRegion
+{
+    int x = 0;
+    int y = 0;
+    int width = 0;
+    int height = 0;
+    CaptionButton button = CaptionButton::Maximize;
 };
 
 struct FileFilter

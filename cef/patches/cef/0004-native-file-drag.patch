@@ -1,0 +1,400 @@
+diff --git a/include/cef_drag_handler.h b/include/cef_drag_handler.h
+index cd354d782960c92b26e663330bfbfdf95c761d97..344b02e14214f73df3073ff23f3cdac6ff73ae61 100644
+--- a/include/cef_drag_handler.h
++++ b/include/cef_drag_handler.h
+@@ -65,6 +65,18 @@ class CefDragHandler : public virtual CefBaseRefCounted {
+     return false;
+   }
+
++#if CEF_API_ADDED(CEF_EXPERIMENTAL)
++  ///
++  ///
++  ///
++  /*--cef(added=experimental)--*/
++  virtual bool OnBeforeFileDrag(CefRefPtr<CefBrowser> browser,
++                                CefRefPtr<CefFrame> frame,
++                                std::vector<CefString>& filePaths) {
++    return false;
++  }
++#endif
++
+   ///
+   /// Called whenever draggable regions for the browser window change. These can
+   /// be specified using the '-webkit-app-region: drag/no-drag' CSS-property. If
+diff --git a/libcef/browser/chrome/chrome_content_browser_client_cef.cc b/libcef/browser/chrome/chrome_content_browser_client_cef.cc
+index 3febdad9fbc90f80fd418f32da6f725707700bcb..f6fc316b1481366b3670ee3be14f767211295b84 100644
+--- a/libcef/browser/chrome/chrome_content_browser_client_cef.cc
++++ b/libcef/browser/chrome/chrome_content_browser_client_cef.cc
+@@ -318,6 +318,37 @@ void ChromeContentBrowserClientCef::AllowCertificateError(
+       strict_enforcement, std::move(returned_callback));
+ }
+
++bool ChromeContentBrowserClientCef::OverrideDragFilePaths(
++    content::RenderFrameHost& source_frame,
++    std::vector<base::FilePath>* file_paths) {
++  CEF_REQUIRE_UIT();
++
++  auto browser = CefBrowserHostBase::GetBrowserForContents(
++      content::WebContents::FromRenderFrameHost(&source_frame));
++  if (!browser || browser->IsWindowless()) {
++    return false;
++  }
++  auto client = browser->GetClient();
++  auto handler = client ? client->GetDragHandler() : nullptr;
++  auto frame = browser->GetFrameForHost(&source_frame);
++  if (!handler || !frame) {
++    return false;
++  }
++
++  std::vector<CefString> paths;
++  if (!handler->OnBeforeFileDrag(browser.get(), frame, paths)) {
++    return false;
++  }
++  for (const auto& path : paths) {
++    if (path.ToString16().find(u'\0') != std::u16string::npos) {
++      file_paths->clear();
++      return true;
++    }
++    file_paths->emplace_back(path);
++  }
++  return true;
++}
++
+ base::OnceClosure ChromeContentBrowserClientCef::SelectClientCertificate(
+     content::BrowserContext* browser_context,
+     int process_id,
+diff --git a/libcef/browser/chrome/chrome_content_browser_client_cef.h b/libcef/browser/chrome/chrome_content_browser_client_cef.h
+index 5fdb4d8d4eab9a0fbc5a9f5a1ab1670a0df2adee..fc8fe673cb5151482c761e192972fdb8af7cc933 100644
+--- a/libcef/browser/chrome/chrome_content_browser_client_cef.h
++++ b/libcef/browser/chrome/chrome_content_browser_client_cef.h
+@@ -27,6 +27,8 @@ class ChromeContentBrowserClientCef : public ChromeContentBrowserClient {
+   ~ChromeContentBrowserClientCef() override;
+
+   void CleanupOnUIThread() override;
++  bool OverrideDragFilePaths(content::RenderFrameHost& source_frame,
++                             std::vector<base::FilePath>* file_paths) override;
+
+   // ChromeContentBrowserClient overrides.
+   std::unique_ptr<content::BrowserMainParts> CreateBrowserMainParts(
+diff --git a/patch/patch.cfg b/patch/patch.cfg
+index 92cd766431d645a085d133741c2cb871eace230d..14ab5d9860f17157c02f53c4716c5496030e3b02 100644
+--- a/patch/patch.cfg
++++ b/patch/patch.cfg
+@@ -16,6 +16,9 @@
+ # report that the patch relates to.
+
+ patches = [
++  {
++    'name': 'justcef_native_file_drag',
++  },
+   {
+     # Necessary for grit integration.
+     'name': 'gritsettings',
+diff --git a/patch/patches/justcef_native_file_drag.patch b/patch/patches/justcef_native_file_drag.patch
+new file mode 100644
+index 0000000000000000000000000000000000000000..cd9ee1418d219fb164b7f668d4e60c1cb4e4de8e
+--- /dev/null
++++ b/patch/patches/justcef_native_file_drag.patch
+@@ -0,0 +1,302 @@
++diff --git content/browser/renderer_host/render_widget_host_impl.cc content/browser/renderer_host/render_widget_host_impl.cc
++index 5d7ac29023337fa551f106c4d41b190d7bc6bf48..2535d07745736073e55bb2c5fe5f98146bd99815 100644
++--- content/browser/renderer_host/render_widget_host_impl.cc
+++++ content/browser/renderer_host/render_widget_host_impl.cc
++@@ -108,6 +108,7 @@
++ #include "content/public/browser/render_widget_host_observer.h"
++ #include "content/public/browser/storage_partition.h"
++ #include "content/public/browser/tracked_element_observer.h"
+++#include "content/public/browser/weak_document_ptr.h"
++ #include "content/public/common/content_client.h"
++ #include "content/public/common/content_constants.h"
++ #include "content/public/common/content_features.h"
++@@ -3160,6 +3161,50 @@ void RenderWidgetHostImpl::StartDragging(
++     DragSourceSystemDragEnded();
++     return;
++   }
+++  if (!source_rfh.IsActive() || !source_rfh.IsRenderFrameLive()) {
+++    DragSourceSystemDragEnded();
+++    return;
+++  }
+++  auto weak_this = weak_factory_.GetWeakPtr();
+++  const auto source_document = source_rfh.GetWeakDocumentPtr();
+++  std::vector<base::FilePath> file_paths;
+++  const bool override_files =
+++      GetContentClient()->browser()->OverrideDragFilePaths(source_rfh,
+++                                                           &file_paths);
+++  if (!weak_this) {
+++    return;
+++  }
+++  auto* active_source = source_document.AsRenderFrameHostIfValid();
+++  if (!active_source || !active_source->IsActive() ||
+++      !active_source->IsRenderFrameLive() || !delegate_ || !GetView()) {
+++    DragSourceSystemDragEnded();
+++    return;
+++  }
+++  view = delegate_->GetDelegateView();
+++  if (!view) {
+++    DragSourceSystemDragEnded();
+++    return;
+++  }
+++  if (override_files) {
+++    if (file_paths.empty()) {
+++      DragSourceSystemDragEnded();
+++      return;
+++    }
+++    for (const auto& path : file_paths) {
+++      if (!path.IsAbsolute() || path.ReferencesParent() ||
+++          path.value().find(base::FilePath::CharType()) !=
+++              base::FilePath::StringType::npos) {
+++        DragSourceSystemDragEnded();
+++        return;
+++      }
+++    }
+++    filtered_data = DropData();
+++    for (const auto& path : file_paths) {
+++      filtered_data.filenames.emplace_back(path, base::FilePath());
+++    }
+++    drag_operations_mask = blink::kDragOperationCopy;
+++  }
+++
++   float scale = GetScaleFactorForView(GetView());
++   gfx::ImageSkia image = gfx::ImageSkia::CreateFromBitmap(bitmap, scale);
++   gfx::Vector2d offset = cursor_offset_in_dip;
++@@ -3175,8 +3220,8 @@ void RenderWidgetHostImpl::StartDragging(
++   scaled_rect.Scale(scale);
++   rect = gfx::ToRoundedRect(scaled_rect);
++ #endif
++-  view->StartDragging(source_rfh, filtered_data, drag_operations_mask, image,
++-                      offset, rect, *event_info);
+++  view->StartDragging(*active_source, filtered_data, drag_operations_mask,
+++                      image, offset, rect, *event_info);
++ }
++
++ #if BUILDFLAG(IS_ANDROID)
++diff --git content/browser/renderer_host/render_widget_host_unittest.cc content/browser/renderer_host/render_widget_host_unittest.cc
++index d97f7781b66e799a528e4d9b79d4cfedba5bf131..4a0dac6c95bc94b7897207fb27a50653666729cb 100644
++--- content/browser/renderer_host/render_widget_host_unittest.cc
+++++ content/browser/renderer_host/render_widget_host_unittest.cc
++@@ -296,6 +296,7 @@ class MockRenderViewHostDelegateView : public RenderViewHostDelegateView {
++
++   int start_dragging_count() const { return start_dragging_count_; }
++   const DropData& drop_data() const { return drop_data_; }
+++  blink::DragOperationsMask allowed_ops() const { return allowed_ops_; }
++
++   // RenderViewHostDelegateView:
++   void StartDragging(
++@@ -308,11 +309,13 @@ class MockRenderViewHostDelegateView : public RenderViewHostDelegateView {
++       const blink::mojom::DragEventSourceInfo& event_info) override {
++     ++start_dragging_count_;
++     drop_data_ = drop_data;
+++    allowed_ops_ = allowed_ops;
++   }
++
++  private:
++   int start_dragging_count_ = 0;
++   DropData drop_data_;
+++  blink::DragOperationsMask allowed_ops_ = blink::kDragOperationNone;
++ };
++
++ // FakeRenderFrameMetadataObserver -----------------------------------------
++@@ -2288,6 +2291,23 @@ TEST_F(RenderWidgetHostTest, VisualProperties) {
++
++ class DragTestContentBrowserClient : public ContentBrowserClient {
++  public:
+++  bool OverrideDragFilePaths(RenderFrameHost& source_frame,
+++                             std::vector<base::FilePath>* file_paths) override {
+++    ++override_calls;
+++    source_frame_seen = source_frame.GetGlobalId();
+++    *file_paths = paths;
+++    if (on_override) {
+++      on_override.Run();
+++    }
+++    return override_files;
+++  }
+++
+++  bool override_files = false;
+++  int override_calls = 0;
+++  std::vector<base::FilePath> paths;
+++  std::optional<GlobalRenderFrameHostId> source_frame_seen;
+++  base::RepeatingClosure on_override;
+++
++   // The default implementation returns `false`, but this means that
++   // `CanRequestURL()` for a URL with a file scheme ends up returning true,
++   // since `ChildProcessSecurityPolicy` assumes that unhandled schemes are
++@@ -2369,6 +2389,12 @@ class RenderWidgetHostDragTest : public RenderViewHostImplTestHarness {
++   }
++
++   const DropData& drop_data() const { return mock_delegate_view_.drop_data(); }
+++  blink::DragOperationsMask allowed_ops() const {
+++    return mock_delegate_view_.allowed_ops();
+++  }
+++  DragTestContentBrowserClient& drag_browser_client() {
+++    return drag_browser_client_;
+++  }
++
++  private:
++   DragTestContentBrowserClient drag_browser_client_;
++@@ -2376,6 +2402,133 @@ class RenderWidgetHostDragTest : public RenderViewHostImplTestHarness {
++   MockRenderViewHostDelegateView mock_delegate_view_;
++ };
++
+++namespace {
+++
+++base::FilePath GetHostDragPath() {
+++#if BUILDFLAG(IS_WIN)
+++  return base::FilePath(FILE_PATH_LITERAL("C:/justcef/file.txt"));
+++#else
+++  return base::FilePath(FILE_PATH_LITERAL("/tmp/justcef-file.txt"));
+++#endif
+++}
+++
+++}
+++
+++TEST_F(RenderWidgetHostDragTest, HostFileDragReplacesPayloadWithCopyOnly) {
+++  NavigateAndCommit(GURL("https://example.com"));
+++  const auto host_path = GetHostDragPath();
+++  auto* policy = ChildProcessSecurityPolicyImpl::GetInstance();
+++  const auto process_id = main_test_rfh()->GetProcess()->GetID();
+++  ASSERT_FALSE(policy->CanReadFile(process_id, host_path));
+++  drag_browser_client().override_files = true;
+++  drag_browser_client().paths = {host_path};
+++
+++  DropData original;
+++  original.url_infos = {
+++      ui::ClipboardUrlInfo{GURL("https://example.com"), u"url"}};
+++  original.text = u"original text";
+++  original.html = u"<b>original html</b>";
+++  original.custom_data[u"application/x-test"] = u"original custom data";
+++  StartDragWithDropData(original);
+++
+++  ASSERT_EQ(1, start_dragging_count());
+++  ASSERT_TRUE(drag_browser_client().source_frame_seen.has_value());
+++  EXPECT_EQ(main_test_rfh()->GetGlobalId(),
+++            drag_browser_client().source_frame_seen.value());
+++  ASSERT_EQ(1u, drop_data().filenames.size());
+++  EXPECT_EQ(host_path, drop_data().filenames[0].path);
+++  EXPECT_EQ(blink::kDragOperationCopy, allowed_ops());
+++  EXPECT_TRUE(drop_data().url_infos.empty());
+++  EXPECT_FALSE(drop_data().text.has_value());
+++  EXPECT_FALSE(drop_data().html.has_value());
+++  EXPECT_TRUE(drop_data().custom_data.empty());
+++  EXPECT_TRUE(drop_data().file_system_files.empty());
+++  EXPECT_TRUE(drop_data().file_contents.empty());
+++  EXPECT_FALSE(drop_data().download_metadata.has_value());
+++  EXPECT_FALSE(policy->CanReadFile(process_id, host_path));
+++}
+++
+++TEST_F(RenderWidgetHostDragTest, HostFileDragFalsePreservesOriginalPayload) {
+++  drag_browser_client().paths = {GetHostDragPath()};
+++  DropData original;
+++  original.text = u"original text";
+++  StartDragWithDropData(original);
+++  ASSERT_EQ(1, start_dragging_count());
+++  EXPECT_EQ(original.text, drop_data().text);
+++  EXPECT_TRUE(drop_data().filenames.empty());
+++  EXPECT_EQ(blink::kDragOperationEvery, allowed_ops());
+++}
+++
+++TEST_F(RenderWidgetHostDragTest, HostFileDragEmptyListCancels) {
+++  drag_browser_client().override_files = true;
+++  DropData original;
+++  original.text = u"original text";
+++  StartDragWithDropData(original);
+++  EXPECT_EQ(0, start_dragging_count());
+++  EXPECT_EQ(1, drag_browser_client().override_calls);
+++}
+++
+++TEST_F(RenderWidgetHostDragTest, HostFileDragRejectsRelativeAndParentPaths) {
+++  drag_browser_client().override_files = true;
+++  const std::vector<base::FilePath> invalid_paths = {
+++      base::FilePath(), base::FilePath(FILE_PATH_LITERAL("relative.txt")),
+++      GetHostDragPath()
+++          .DirName()
+++          .Append(FILE_PATH_LITERAL(".."))
+++          .Append(FILE_PATH_LITERAL("file.txt"))};
+++  for (const auto& invalid_path : invalid_paths) {
+++    drag_browser_client().paths = {GetHostDragPath(), invalid_path};
+++    StartDragWithDropData(DropData());
+++    EXPECT_EQ(0, start_dragging_count());
+++  }
+++}
+++
+++TEST_F(RenderWidgetHostDragTest, HostFileDragNavigationDuringCallbackCancels) {
+++  NavigateAndCommit(GURL("https://example.com"));
+++  drag_browser_client().override_files = true;
+++  drag_browser_client().paths = {GetHostDragPath()};
+++  drag_browser_client().on_override = base::BindRepeating(
+++      [](RenderWidgetHostDragTest* test) {
+++        test->NavigateAndCommit(GURL("https://other.example.com"));
+++      },
+++      base::Unretained(this));
+++  StartDragWithDropData(DropData());
+++  EXPECT_EQ(0, start_dragging_count());
+++}
+++
+++TEST_F(RenderWidgetHostDragTest,
+++       HostFileDragRendererExitDuringCallbackCancels) {
+++  drag_browser_client().override_files = true;
+++  drag_browser_client().paths = {GetHostDragPath()};
+++  drag_browser_client().on_override = base::BindRepeating(
+++      [](RenderWidgetHostDragTest* test) {
+++        test->GetRenderWidgetHost()->RendererExited();
+++      },
+++      base::Unretained(this));
+++  StartDragWithDropData(DropData());
+++  EXPECT_EQ(0, start_dragging_count());
+++}
+++
+++TEST_F(RenderWidgetHostDragTest, HostFileDragRetainedInactiveDocumentCancels) {
+++  NavigateAndCommit(GURL("https://example.com"));
+++  auto* source_frame = main_test_rfh();
+++  const auto source_document = source_frame->GetWeakDocumentPtr();
+++  drag_browser_client().override_files = true;
+++  drag_browser_client().paths = {GetHostDragPath()};
+++  drag_browser_client().on_override = base::BindRepeating(
+++      [](TestRenderFrameHost* source) {
+++        source->SetLifecycleState(
+++            RenderFrameHostImpl::LifecycleStateImpl::kInBackForwardCache);
+++      },
+++      base::Unretained(source_frame));
+++  StartDragWithDropData(DropData());
+++  EXPECT_EQ(source_frame, source_document.AsRenderFrameHostIfValid());
+++  EXPECT_FALSE(source_frame->IsActive());
+++  EXPECT_EQ(0, start_dragging_count());
+++  source_frame->SetLifecycleState(
+++      RenderFrameHostImpl::LifecycleStateImpl::kActive);
+++}
+++
++ // Make sure no dragging occurs after renderer exited. See crbug.com/704832.
++ TEST_F(RenderWidgetHostDragTest, RendererExitedNoDrag) {
++   EXPECT_EQ(start_dragging_count(), 0);
++diff --git content/public/browser/content_browser_client.cc content/public/browser/content_browser_client.cc
++index 6499e2f1fedb93031d97e3142404b4c3759e237e..c30a07d90b69d6a6d20caf98c9e62a8b7d9c07bc 100644
++--- content/public/browser/content_browser_client.cc
+++++ content/public/browser/content_browser_client.cc
++@@ -1549,6 +1549,12 @@ bool ContentBrowserClient::IsDragAllowedByPolicy(
++   return true;
++ }
++
+++bool ContentBrowserClient::OverrideDragFilePaths(
+++    RenderFrameHost& source_frame,
+++    std::vector<base::FilePath>* file_paths) {
+++  return false;
+++}
+++
++ #if BUILDFLAG(ENABLE_VR)
++ XrIntegrationClient* ContentBrowserClient::GetXrIntegrationClient() {
++   return nullptr;
++diff --git content/public/browser/content_browser_client.h content/public/browser/content_browser_client.h
++index 933ff42f840d51de2ffa0b65a75405b957b06204..8ff029b16a639a4e374b5b910aaa68120955b6a3 100644
++--- content/public/browser/content_browser_client.h
+++++ content/public/browser/content_browser_client.h
++@@ -330,6 +330,9 @@ class CONTENT_EXPORT ContentBrowserClient {
++   virtual bool IsDragAllowedByPolicy(const ClipboardEndpoint& source,
++                                      const struct DropData& drop_data);
++
+++  virtual bool OverrideDragFilePaths(RenderFrameHost& source_frame,
+++                                     std::vector<base::FilePath>* file_paths);
+++
++   // Records the detailed reason for ShouldUseSpareRenderProcessHost returning
++   // .
++   //

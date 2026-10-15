@@ -3,10 +3,10 @@ COPY native/ci/sources.list /etc/apt/sources.list
 RUN apt-get -o Acquire::Retries=10 -o Acquire::http::Timeout=120 update && \
     apt-get -o Acquire::Retries=10 -o Acquire::http::Timeout=120 -o Acquire::http::Pipeline-Depth=0 install -y --no-install-recommends ca-certificates curl bzip2 && \
     rm -rf /var/lib/apt/lists/*
-COPY native/CMakeLists.txt /CEF-CMakeLists.txt
+COPY cef/cef.version /cef.version
 ARG TARGETARCH
 RUN set -eu; \
-    version=$(sed -n 's/^set(CEF_VERSION "\(.*\)")/\1/p' /CEF-CMakeLists.txt); \
+    version=$(tr -d '\r\n' < /cef.version); \
     test -n "$version"; \
     case "$TARGETARCH" in amd64) platform=linux64 ;; arm64) platform=linuxarm64 ;; *) exit 1 ;; esac; \
     archive="cef_binary_${version}_${platform}_minimal.tar.bz2"; \
@@ -36,6 +36,7 @@ RUN case "$TARGETARCH" in \
 FROM toolchain AS build
 WORKDIR /src
 COPY native /src/native
+COPY cef/cef.version /src/cef/cef.version
 COPY --from=cef /cef /src/native/third_party/cef
 COPY tests/native /src/tests/native
 COPY tests/pages /src/tests/pages

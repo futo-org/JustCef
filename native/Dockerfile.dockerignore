@@ -1,4 +1,7 @@
 *
+!cef
+cef/*
+!cef/cef.version
 !native
 native/*
 !native/CMakeLists.txt

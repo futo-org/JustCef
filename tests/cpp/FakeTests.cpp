@@ -214,6 +214,142 @@ bool IsDisconnected(std::exception_ptr exception)
 
 } // namespace
 
+TEST_CASE("runtime info reports native OS and Linux backend without a window")
+{
+    Watchdog watchdog(60s, "runtime info");
+    asio::io_context io;
+    Harness harness;
+    harness.Start(io.get_executor());
+    const bool done =
+        RunUntilIdle(io,
+                     [&]() -> asio::awaitable<void>
+                     {
+                         const std::array<std::array<int, 2>, 6> cases{{{0, 0}, {1, 0}, {2, 0}, {3, 0}, {3, 1}, {3, 2}}};
+                         for (const auto& value : cases)
+                         {
+                             harness.fake.Command(Configure("GetRuntimeInfo", "ok", {{"runtimeInfo", Json::array({value[0], value[1]})}}));
+                             const auto info = co_await harness.process->GetRuntimeInfoAsync();
+                             CHECK(info.operating_system == static_cast<RuntimeOperatingSystem>(value[0]));
+                             if (value[0] == 3)
+                                 CHECK(info.linux_windowing_backend == static_cast<LinuxWindowingBackend>(value[1]));
+                             else
+                                 CHECK_FALSE(info.linux_windowing_backend.has_value());
+                         }
+                         const std::vector<Json> invalid{Json::array(), Json::array({3}), Json::array({3, 2, 0}), Json::array({4, 0}), Json::array({3, 3}), Json::array({1, 2})};
+                         for (const auto& payload : invalid)
+                         {
+                             harness.fake.Command(Configure("GetRuntimeInfo", "ok", {{"runtimeInfo", payload}}));
+                             CHECK_THROWS_AS(co_await harness.process->GetRuntimeInfoAsync(), detail::ProtocolError);
+                         }
+                         harness.fake.Command(Configure("GetRuntimeInfo", "status", {{"status", 5}}));
+                         try
+                         {
+                             co_await harness.process->GetRuntimeInfoAsync();
+                             FAIL("expected Unsupported");
+                         }
+                         catch (const RemoteError& error)
+                         {
+                             CHECK(error.GetStatus() == Status::Unsupported);
+                         }
+                         CHECK(harness.process->Windows().empty());
+                     }());
+    CHECK(done);
+    CHECK(harness.fake.ViolationCount() == 0);
+}
+
+TEST_CASE("caption regions serialize roles, reject ambiguous bounds and clear on navigation")
+{
+    Watchdog watchdog(60s, "caption button regions");
+    asio::io_context io;
+    Harness harness;
+    harness.Start(io.get_executor());
+    const bool done = RunUntilIdle(
+        io,
+        [&]() -> asio::awaitable<void>
+        {
+            co_await harness.process->WaitForReadyAsync();
+            WindowCreateOptions options;
+            options.frameless = true;
+            auto window = co_await harness.process->CreateWindowAsync(options);
+            std::vector<CaptionButtonRegion> regions{{660, 4, 46, 36, CaptionButton::Minimize}, {706, 4, 46, 36, CaptionButton::Maximize}, {752, 4, 46, 36, CaptionButton::Close}};
+            co_await window->SetCaptionButtonRegionsAsync(regions);
+            const Json expected = Json::array({Json::array({660, 4, 46, 36, 1}), Json::array({706, 4, 46, 36, 2}), Json::array({752, 4, 46, 36, 3})});
+            CHECK(harness.fake.State()["windows"][0]["captionButtonRegions"] == expected);
+            co_await window->NavigateAsync("https://app/next");
+            CHECK(harness.fake.State()["windows"][0]["captionButtonRegions"].empty());
+            co_await window->SetCaptionButtonRegionsAsync(regions);
+            co_await window->SetCaptionButtonRegionsAsync();
+            CHECK(harness.fake.State()["windows"][0]["captionButtonRegions"].empty());
+            regions = {{0, 0, 20, 20, CaptionButton::Close}, {0, 0, 20, 20, CaptionButton::Maximize}};
+            CHECK_THROWS_AS(co_await window->SetCaptionButtonRegionsAsync(regions), std::invalid_argument);
+            regions[1] = {100, 0, 20, 20, CaptionButton::Close};
+            CHECK_THROWS_AS(co_await window->SetCaptionButtonRegionsAsync(regions), std::invalid_argument);
+            regions = {{INT32_MAX, 0, 1, 20, CaptionButton::Maximize}};
+            CHECK_THROWS_AS(co_await window->SetCaptionButtonRegionsAsync(regions), std::invalid_argument);
+            regions = {{0, 0, 1, 20, static_cast<CaptionButton>(255)}};
+            CHECK_THROWS_AS(co_await window->SetCaptionButtonRegionsAsync(regions), std::invalid_argument);
+            regions.resize(4);
+            CHECK_THROWS_AS(co_await window->SetCaptionButtonRegionsAsync(regions), std::invalid_argument);
+            auto framed = co_await harness.process->CreateWindowAsync(WindowCreateOptions{});
+            try
+            {
+                co_await framed->SetCaptionButtonRegionsAsync();
+                FAIL("expected Unsupported");
+            }
+            catch (const RemoteError& error)
+            {
+                CHECK(error.GetStatus() == Status::Unsupported);
+            }
+        }());
+    CHECK(done);
+    CHECK(harness.fake.ViolationCount() == 0);
+}
+
+TEST_CASE("frameless drag overrides preserve exclusions, validate bounds and restore CSS")
+{
+    Watchdog watchdog(60s, "draggable regions");
+    asio::io_context io;
+    Harness harness;
+    harness.Start(io.get_executor());
+    const bool done = RunUntilIdle(io,
+                                   [&]() -> asio::awaitable<void>
+                                   {
+                                       co_await harness.process->WaitForReadyAsync();
+                                       WindowCreateOptions options;
+                                       options.frameless = true;
+                                       auto window = co_await harness.process->CreateWindowAsync(options);
+                                       std::vector<DraggableRegion> regions{{0, 0, 800, 40}, {700, 0, 100, 40, false}};
+                                       co_await window->SetDraggableRegionsAsync(regions);
+                                       const Json expected = Json::array({Json::array({0, 0, 800, 40, true}), Json::array({700, 0, 100, 40, false})});
+                                       CHECK(harness.fake.State()["windows"][0]["draggableRegions"] == expected);
+                                       co_await window->NavigateAsync("https://app/next");
+                                       CHECK(harness.fake.State()["windows"][0]["draggableRegions"] == expected);
+                                       co_await window->SetDraggableRegionsAsync(std::vector<DraggableRegion>{});
+                                       CHECK(harness.fake.State()["windows"][0]["draggableRegions"].empty());
+                                       co_await window->SetDraggableRegionsAsync();
+                                       CHECK(harness.fake.State()["windows"][0]["draggableRegions"].is_null());
+
+                                       regions = {{0, 0, 0, 40}};
+                                       CHECK_THROWS_AS(co_await window->SetDraggableRegionsAsync(regions), std::invalid_argument);
+                                       regions = {{INT32_MAX, 0, 1, 40}};
+                                       CHECK_THROWS_AS(co_await window->SetDraggableRegionsAsync(regions), std::invalid_argument);
+                                       regions.resize(4097);
+                                       CHECK_THROWS_AS(co_await window->SetDraggableRegionsAsync(regions), std::invalid_argument);
+                                       auto framed = co_await harness.process->CreateWindowAsync(WindowCreateOptions{});
+                                       try
+                                       {
+                                           co_await framed->SetDraggableRegionsAsync();
+                                           FAIL("expected Unsupported");
+                                       }
+                                       catch (const RemoteError& error)
+                                       {
+                                           CHECK(error.GetStatus() == Status::Unsupported);
+                                       }
+                                   }());
+    CHECK(done);
+    CHECK(harness.fake.ViolationCount() == 0);
+}
+
 TEST_CASE("fake C10 WaitUntilLoadedAsync and NavigateAsync complete on a single-threaded io_context")
 {
     Watchdog watchdog(60s, "C10");

@@ -135,6 +135,8 @@ public:
     asio::awaitable<void> SetPositionAsync(int x, int y);
     asio::awaitable<Position> GetPositionAsync();
     asio::awaitable<void> SetSizeAsync(int width, int height);
+    asio::awaitable<void> SetDraggableRegionsAsync(std::optional<std::vector<DraggableRegion>> regions = std::nullopt);
+    asio::awaitable<void> SetCaptionButtonRegionsAsync(std::vector<CaptionButtonRegion> regions = {});
     asio::awaitable<Size> GetSizeAsync();
     asio::awaitable<void> SetFullscreenAsync(bool fullscreen);
     asio::awaitable<std::string> CallBridgeRpcAsync(std::string method, std::optional<std::string> json = std::nullopt);

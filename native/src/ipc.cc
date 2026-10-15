@@ -1,10 +1,12 @@
 #include "ipc.h"
+
 #include "bridge.h"
 #include "client.h"
 #include "client_manager.h"
 #include "client_util.h"
 #include "justcef_view_host.h"
 #include "widevine_util.h"
+#include <array>
 
 #include "devtoolsclient.h"
 #include "include/base/cef_callback.h"
@@ -118,6 +120,8 @@ bool IsBrowserRequest(OpcodeController opcode)
     case OpcodeController::WindowRemoveDomainToProxy:
     case OpcodeController::WindowGetZoom:
     case OpcodeController::WindowBridgeRpc:
+    case OpcodeController::WindowSetDraggableRegions:
+    case OpcodeController::WindowSetCaptionButtonRegions:
         return true;
     default:
         return false;
@@ -364,6 +368,27 @@ bool IPC::HandleRequest(ipc::Reply& reply, OpcodeController opcode, PacketReader
     {
     case OpcodeController::Ping:
         return true;
+    case OpcodeController::GetRuntimeInfo:
+    {
+        if (reader.remainingSize() != 0)
+        {
+            status = ipc::StatusCode::InvalidRequest;
+            return true;
+        }
+        uint8_t os = 0;
+        uint8_t backend = 0;
+#if defined(OS_WIN)
+        os = 1;
+#elif defined(OS_MAC)
+        os = 2;
+#elif defined(OS_LINUX)
+        os = 3;
+        backend = static_cast<uint8_t>(CefGetLinuxWindowingBackend());
+#endif
+        writer.write<uint8_t>(os);
+        writer.write<uint8_t>(backend);
+        return true;
+    }
     case OpcodeController::Print:
     {
         std::optional<std::string> str = reader.readString((uint32_t)reader.remainingSize());
@@ -486,6 +511,12 @@ bool IPC::HandleRequest(ipc::Reply& reply, OpcodeController opcode, PacketReader
         return true;
     case OpcodeController::WindowSetSize:
         status = HandleWindowSetSize(reader, writer);
+        return true;
+    case OpcodeController::WindowSetCaptionButtonRegions:
+        status = HandleWindowSetCaptionButtonRegions(reader, writer);
+        return true;
+    case OpcodeController::WindowSetDraggableRegions:
+        status = HandleWindowSetDraggableRegions(reader, writer);
         return true;
     case OpcodeController::WindowAddDevToolsEventMethod:
         status = HandleAddDevToolsEventMethod(reader, writer);
@@ -1238,6 +1269,13 @@ public:
 
     void OnWindowClosing(CefRefPtr<CefWindow> window) override { justcef_view::OnHostWindowClosing(window); }
 
+    void OnWindowFullscreenTransition(CefRefPtr<CefWindow> window, bool is_completed) override
+    {
+        auto browser = browser_view_ ? browser_view_->GetBrowser() : nullptr;
+        if (browser)
+            static_cast<Client*>(browser->GetHost()->GetClient().get())->ApplyDraggableRegions(browser);
+    }
+
     void OnWindowDestroyed(CefRefPtr<CefWindow> window) override
     {
         justcef_view::OnHostWindowClosing(window);
@@ -1249,7 +1287,12 @@ public:
         CefRefPtr<CefPanel> panel = view ? view->AsPanel() : nullptr;
         CefRefPtr<CefWindow> window = panel ? panel->AsWindow() : nullptr;
         if (window)
+        {
             justcef_view::OnHostWindowLayoutChanged(window);
+            auto browser = browser_view_ ? browser_view_->GetBrowser() : nullptr;
+            if (browser)
+                static_cast<Client*>(browser->GetHost()->GetClient().get())->ApplyDraggableRegions(browser);
+        }
     }
 
     bool CanClose(CefRefPtr<CefWindow> window) override
@@ -1277,16 +1320,11 @@ public:
 
     bool IsFrameless(CefRefPtr<CefWindow> window) override { return _settings.frameless == 1; }
     bool CanResize(CefRefPtr<CefWindow> window) override { return _settings.resizable == 1; }
+    bool CanMaximize(CefRefPtr<CefWindow> window) override { return _settings.resizable; }
 
     CefSize GetPreferredSize(CefRefPtr<CefView> view) override { return CefSize(_settings.preferredWidth, _settings.preferredHeight); }
 
-    /*CefSize GetPreferredSize(CefRefPtr<CefView> view) override {
-        return CefSize(800, 600);
-    }*/
-
-    /*CefSize GetMinimumSize(CefRefPtr<CefView> view) override {
-        return CefSize(_settings.minimumWidth, _settings.minimumHeight);
-    }*/
+    CefSize GetMinimumSize(CefRefPtr<CefView> view) override { return CefSize(_settings.minimumWidth, _settings.minimumHeight); }
 
 private:
     CefRefPtr<CefBrowserView> browser_view_;
@@ -1337,8 +1375,10 @@ public:
         }
         else
         {
-            cef_show_state_t showState = _settings.shown ? (_settings.fullscreen ? CEF_SHOW_STATE_FULLSCREEN : CEF_SHOW_STATE_NORMAL) : CEF_SHOW_STATE_HIDDEN;
-            CefWindow::CreateTopLevelWindow(new WindowDelegate(popup_browser_view, runtime_style_, showState, _settings));
+            auto popup_settings = _settings;
+            popup_settings.frameless = false;
+            cef_show_state_t showState = popup_settings.shown ? (popup_settings.fullscreen ? CEF_SHOW_STATE_FULLSCREEN : CEF_SHOW_STATE_NORMAL) : CEF_SHOW_STATE_HIDDEN;
+            CefWindow::CreateTopLevelWindow(new WindowDelegate(popup_browser_view, runtime_style_, showState, popup_settings));
         }
         return true;
     }
@@ -2626,6 +2666,84 @@ ipc::StatusCode HandleWindowGetSize(PacketReader& reader, PacketWriter& writer)
     return ipc::StatusCode::Ok;
 }
 
+ipc::StatusCode HandleWindowSetCaptionButtonRegions(PacketReader& reader, PacketWriter& writer)
+{
+    CEF_REQUIRE_UI_THREAD();
+    const auto identifier = reader.read<int32_t>();
+    const auto count = reader.read<uint32_t>();
+    if (!identifier || !count || *count > 3 || reader.remainingSize() != *count * 17)
+        return ipc::StatusCode::InvalidRequest;
+    std::array<CefRect, 3> regions{};
+    uint8_t seen = 0;
+    for (uint32_t i = 0; i < *count; ++i)
+    {
+        const auto x = reader.read<int32_t>();
+        const auto y = reader.read<int32_t>();
+        const auto width = reader.read<int32_t>();
+        const auto height = reader.read<int32_t>();
+        const auto role = reader.read<uint8_t>();
+        if (!x || !y || !width || !height || !role || *role < 1 || *role > 3 || (seen & (1u << *role)) || *width <= 0 || *height <= 0 || int64_t(*x) + *width > INT32_MAX ||
+            int64_t(*y) + *height > INT32_MAX)
+            return ipc::StatusCode::InvalidRequest;
+        const CefRect rect(*x, *y, *width, *height);
+        for (const auto& other : regions)
+            if (!other.IsEmpty() && rect.x < int64_t(other.x) + other.width && other.x < int64_t(rect.x) + rect.width && rect.y < int64_t(other.y) + other.height &&
+                other.y < int64_t(rect.y) + rect.height)
+                return ipc::StatusCode::InvalidRequest;
+        regions[*role - 1] = rect;
+        seen |= 1u << *role;
+    }
+    auto browser = ClientManager::GetInstance()->AcquirePointer(*identifier);
+    if (!browser)
+        return ipc::StatusCode::NotFound;
+    auto* client = static_cast<Client*>(browser->GetHost()->GetClient().get());
+    return client->SetCaptionButtonRegions(browser, regions);
+}
+
+ipc::StatusCode HandleWindowSetDraggableRegions(PacketReader& reader, PacketWriter& writer)
+{
+    CEF_REQUIRE_UI_THREAD();
+    const auto identifier = reader.read<int32_t>();
+    const auto has_override = reader.read<uint8_t>();
+    if (!identifier || !has_override || *has_override > 1)
+        return ipc::StatusCode::InvalidRequest;
+
+    std::optional<std::vector<CefDraggableRegion>> regions;
+    if (*has_override)
+    {
+        const auto count = reader.read<uint32_t>();
+        constexpr uint32_t kMaxRegions = 4096;
+        constexpr size_t kRegionBytes = 4 * sizeof(int32_t) + 1;
+        if (!count || *count > kMaxRegions || reader.remainingSize() != *count * kRegionBytes)
+            return ipc::StatusCode::InvalidRequest;
+        regions.emplace();
+        regions->reserve(*count);
+        for (uint32_t i = 0; i < *count; ++i)
+        {
+            const auto x = reader.read<int32_t>();
+            const auto y = reader.read<int32_t>();
+            const auto width = reader.read<int32_t>();
+            const auto height = reader.read<int32_t>();
+            const auto draggable = reader.read<uint8_t>();
+            if (!x || !y || !width || !height || !draggable || *draggable > 1 || *width <= 0 || *height <= 0 || int64_t(*x) + *width > (std::numeric_limits<int32_t>::max)() ||
+                int64_t(*y) + *height > (std::numeric_limits<int32_t>::max)())
+                return ipc::StatusCode::InvalidRequest;
+            CefDraggableRegion region;
+            region.bounds = CefRect(*x, *y, *width, *height);
+            region.draggable = *draggable;
+            regions->push_back(region);
+        }
+    }
+    if (reader.remainingSize() != 0)
+        return ipc::StatusCode::InvalidRequest;
+
+    auto browser = ClientManager::GetInstance()->AcquirePointer(*identifier);
+    if (!browser)
+        return ipc::StatusCode::NotFound;
+    auto* client = static_cast<Client*>(browser->GetHost()->GetClient().get());
+    return client->SetDraggableRegions(browser, regions);
+}
+
 ipc::StatusCode HandleWindowSetSize(PacketReader& reader, PacketWriter& writer)
 {
     std::optional<int32_t> identifier = reader.read<int32_t>();
@@ -2784,6 +2902,35 @@ void IPC::HandleDebug(ipc::Reply reply, PacketReader& reader)
                                     }
                                 },
                                 *value, sharedReply));
+        return;
+    }
+
+    if (*action == 3)
+    {
+        CefPostTask(TID_UI, base::BindOnce(
+                                [](uint32_t identifier, ipc::Reply reply)
+                                {
+                                    auto browser = ClientManager::GetInstance()->AcquirePointer(static_cast<int>(identifier));
+                                    if (!browser)
+                                    {
+                                        reply.Fail(ipc::StatusCode::NotFound, "Browser not found.");
+                                        return;
+                                    }
+                                    auto* client = static_cast<Client*>(browser->GetHost()->GetClient().get());
+                                    const auto regions = client->GetWindowDraggableRegions(browser);
+                                    PacketWriter writer;
+                                    writer.write<uint32_t>(static_cast<uint32_t>(regions.size()));
+                                    for (const auto& region : regions)
+                                    {
+                                        writer.write<int32_t>(region.bounds.x);
+                                        writer.write<int32_t>(region.bounds.y);
+                                        writer.write<int32_t>(region.bounds.width);
+                                        writer.write<int32_t>(region.bounds.height);
+                                        writer.write<bool>(region.draggable != 0);
+                                    }
+                                    reply.Ok(writer.data(), writer.size());
+                                },
+                                *value, std::move(reply)));
         return;
     }
 

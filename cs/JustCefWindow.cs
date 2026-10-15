@@ -397,6 +397,10 @@ namespace JustCef
         public async Task SetPositionAsync(int x, int y, CancellationToken cancellationToken = default) => await _process.WindowSetPositionAsync(Identifier, x, y, cancellationToken).ConfigureAwait(false);
         public async Task<(int X, int Y)> GetPositionAsync(CancellationToken cancellationToken = default) => await _process.WindowGetPositionAsync(Identifier, cancellationToken).ConfigureAwait(false);
         public async Task SetSizeAsync(int width, int height, CancellationToken cancellationToken = default) => await _process.WindowSetSizeAsync(Identifier, width, height, cancellationToken).ConfigureAwait(false);
+        public Task SetDraggableRegionsAsync(IReadOnlyList<DraggableRegion>? regions = null, CancellationToken cancellationToken = default)
+            => _process.WindowSetDraggableRegionsAsync(Identifier, regions, cancellationToken);
+        public Task SetCaptionButtonRegionsAsync(IReadOnlyList<CaptionButtonRegion>? regions = null, CancellationToken cancellationToken = default)
+            => _process.WindowSetCaptionButtonRegionsAsync(Identifier, regions, cancellationToken);
         public async Task<(int Width, int Height)> GetSizeAsync(CancellationToken cancellationToken = default) => await _process.WindowGetSizeAsync(Identifier, cancellationToken).ConfigureAwait(false);
         public async Task SetFullscreenAsync(bool fullscreen, CancellationToken cancellationToken = default) => await _process.WindowSetFullscreenAsync(Identifier, fullscreen, cancellationToken).ConfigureAwait(false);
         public async Task<string> CallBridgeRpcAsync(string method, string? json = null, CancellationToken cancellationToken = default)

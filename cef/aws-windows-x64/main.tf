@@ -137,8 +137,16 @@ EOF
     destination = "c:/code/cefbuilder/cef.branch"
   }
   provisioner "file" {
+    source      = "../cef.version"
+    destination = "c:/code/cefbuilder/cef.version"
+  }
+  provisioner "file" {
     source      = "../automate/automate-git.py"
     destination = "c:/code/cefbuilder/automate/automate-git.py"
+  }
+  provisioner "file" {
+    source      = "../automate/copy_distrib.py"
+    destination = "c:/code/cefbuilder/automate/copy_distrib.py"
   }
   provisioner "file" {
     source      = "../patches/apply_cef_patches.py"
@@ -147,6 +155,22 @@ EOF
   provisioner "file" {
     source      = "../patches/cef/0001-file-paths.patch"
     destination = "c:/code/cefbuilder/patches/cef/0001-file-paths.patch"
+  }
+  provisioner "file" {
+    source      = "../patches/cef/0002-wayland-frameless.patch"
+    destination = "c:/code/cefbuilder/patches/cef/0002-wayland-frameless.patch"
+  }
+  provisioner "file" {
+    source      = "../patches/cef/0003-caption-button-regions.patch"
+    destination = "c:/code/cefbuilder/patches/cef/0003-caption-button-regions.patch"
+  }
+  provisioner "file" {
+    source      = "../patches/cef/0004-native-file-drag.patch"
+    destination = "c:/code/cefbuilder/patches/cef/0004-native-file-drag.patch"
+  }
+  provisioner "file" {
+    source      = "../patches/cef/0005-linux-windowing-backend.patch"
+    destination = "c:/code/cefbuilder/patches/cef/0005-linux-windowing-backend.patch"
   }
   provisioner "file" {
     source      = "scripts/build-x64.bat"

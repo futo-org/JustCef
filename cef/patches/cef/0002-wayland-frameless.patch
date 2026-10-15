@@ -1,0 +1,136 @@
+diff --git a/BUILD.gn b/BUILD.gn
+index 92c540976cbcff3784eca9f11a35b87e98dc1428..4a461db9928fa2553f144d5164a720ea04e79f82 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -1072,12 +1072,14 @@ source_set("libcef_static") {
+       "libcef/browser/osr/browser_platform_delegate_osr_linux.h",
+       "libcef/browser/printing/print_dialog_linux.cc",
+       "libcef/browser/printing/print_dialog_linux.h",
++      "libcef/browser/views/view_util_linux.cc",
+       "libcef/common/util_linux.h",
+       "libcef/common/util_linux.cc",
+     ]
+
+     deps += [
+       "//third_party/fontconfig",
++      "//ui/linux:linux_ui",
+     ]
+
+     if (ozone_platform_x11) {
+diff --git a/libcef/browser/views/view_util.h b/libcef/browser/views/view_util.h
+index b1f5df332919b46d94ef394715b43f6171ee6b81..c6228bb062f0a0bbdfb510b12bbe02d23730991c 100644
+--- a/libcef/browser/views/view_util.h
++++ b/libcef/browser/views/view_util.h
+@@ -46,6 +46,10 @@ class CefWindowDelegate;
+
+ namespace view_util {
+
++#if BUILDFLAG(IS_OZONE)
++bool IsRunningOnWayland();
++#endif
++
+ // Default values.
+ extern const char kDefaultFontList[];
+
+diff --git a/libcef/browser/views/view_util_linux.cc b/libcef/browser/views/view_util_linux.cc
+new file mode 100644
+index 0000000000000000000000000000000000000000..3e13ccb50006e98fe864fc52def5e8380eccc7d2
+--- /dev/null
++++ b/libcef/browser/views/view_util_linux.cc
+@@ -0,0 +1,13 @@
++#include "cef/libcef/browser/views/view_util.h"
++
++#include "ui/linux/linux_ui_delegate.h"
++
++namespace view_util {
++
++// Returns true if running on the Wayland platform.
++bool IsRunningOnWayland() {
++  auto* delegate = ui::LinuxUiDelegate::GetInstance();
++  return delegate && delegate->GetBackend() == ui::LinuxUiBackend::kWayland;
++}
++
++}
+diff --git a/libcef/browser/views/window_impl.cc b/libcef/browser/views/window_impl.cc
+index 008b42056e390d872c464f047f216aca21097a74..40723daf061fe1fd6c50bf48448cbb25f4f42b04 100644
+--- a/libcef/browser/views/window_impl.cc
++++ b/libcef/browser/views/window_impl.cc
+@@ -37,19 +37,11 @@
+ #include "ui/aura/env.h"
+ #include "ui/aura/test/event_generator_delegate_aura.h"
+ #include "ui/events/test/event_generator.h"
+-#include "ui/ozone/public/ozone_platform.h"
+ #include "ui/views/widget/desktop_aura/desktop_window_tree_host_platform.h"
+ #endif
+
+ namespace {
+
+-#if BUILDFLAG(IS_OZONE)
+-// Returns true if running on the Wayland platform.
+-bool IsRunningOnWayland() {
+-  return ui::OzonePlatform::GetPlatformNameForTest() == "wayland";
+-}
+-#endif
+-
+ // Based on chrome/test/base/interactive_ui_tests_main.cc.
+ // Note: On Ozone/Wayland, ui_controls requires a test compositor with
+ // WaylandProxy infrastructure. Instead, we use ui::test::EventGenerator
+@@ -60,7 +52,7 @@ void InitializeUITesting() {
+ #if BUILDFLAG(IS_WIN)
+     aura::test::EnableUIControlsAuraWin();
+ #elif BUILDFLAG(IS_OZONE)
+-    if (IsRunningOnWayland()) {
++    if (view_util::IsRunningOnWayland()) {
+       // On Wayland, we use EventGenerator instead of ui_controls.
+       ui::test::EventGeneratorDelegate::SetFactoryFunction(
+           base::BindRepeating(&aura::test::EventGeneratorDelegateAura::Create));
+@@ -699,7 +691,7 @@ void CefWindowImpl::SendKeyPress(int key_code, uint32_t event_flags) {
+   }
+
+ #if BUILDFLAG(IS_OZONE)
+-  if (IsRunningOnWayland()) {
++  if (view_util::IsRunningOnWayland()) {
+     // On Wayland, use EventGenerator which dispatches events directly
+     // to the window event dispatcher without requiring test compositor support.
+     gfx::Rect bounds = widget_->GetWindowBoundsInScreen();
+@@ -741,7 +733,7 @@ void CefWindowImpl::SendMouseMove(int screen_x, int screen_y) {
+   gfx::Point point(screen_x, screen_y);
+
+ #if BUILDFLAG(IS_OZONE)
+-  if (IsRunningOnWayland()) {
++  if (view_util::IsRunningOnWayland()) {
+     EnsureEventGenerator(point);
+     if (event_generator_) {
+       event_generator_->MoveMouseTo(point);
+@@ -765,7 +757,7 @@ void CefWindowImpl::SendMouseEvents(cef_mouse_button_type_t button,
+   InitializeUITesting();
+
+ #if BUILDFLAG(IS_OZONE)
+-  if (IsRunningOnWayland()) {
++  if (view_util::IsRunningOnWayland()) {
+     // Use the last known mouse position to find the correct target window.
+     gfx::Point mouse_location = aura::Env::GetInstance()->last_mouse_location();
+     EnsureEventGenerator(mouse_location);
+diff --git a/libcef/browser/views/window_view.cc b/libcef/browser/views/window_view.cc
+index 9c030f0db7d1c8815bf33da2c482e92f260608d4..5ed5048355f5f2cc08c301892f904c5773a788cd 100644
+--- a/libcef/browser/views/window_view.cc
++++ b/libcef/browser/views/window_view.cc
+@@ -19,6 +19,7 @@
+
+ #include "cef/libcef/browser/geometry_util.h"
+ #include "cef/libcef/browser/image_impl.h"
++#include "cef/libcef/browser/views/view_util.h"
+ #include "cef/libcef/browser/views/widget.h"
+ #include "cef/libcef/browser/views/window_impl.h"
+ #include "ui/base/hit_test.h"
+@@ -660,6 +661,10 @@ void CefWindowView::CreateWidget(gfx::AcceleratedWidget parent_widget) {
+     // result in window resize artifacts.
+     params.remove_standard_frame = true;
+   }
++#elif BUILDFLAG(IS_OZONE)
++  if (is_frameless_ && view_util::IsRunningOnWayland()) {
++    params.remove_standard_frame = true;
++  }
+ #endif
+
+   widget->Init(std::move(params));

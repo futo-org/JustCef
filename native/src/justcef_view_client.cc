@@ -56,7 +56,7 @@ IPCWindowCreate MakeViewPopupSettings(const IPCWindowCreate& settings)
     return popupSettings;
 }
 
-ViewClient::ViewClient(const IPCWindowCreate& settings) : Client(settings), _permissionHandler(new ViewPermissionHandler())
+ViewClient::ViewClient(const IPCWindowCreate& settings) : Client(settings, false), _permissionHandler(new ViewPermissionHandler())
 {
 }
 

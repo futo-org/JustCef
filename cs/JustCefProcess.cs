@@ -95,8 +95,9 @@ namespace JustCef
             WindowRemoveDomainToProxy = 55,
             WindowGetZoom = 56,
             WindowBridgeRpc = 57,
-            //StreamEnd = 58,
-            //GetWidevineStatus = 59
+            WindowSetDraggableRegions = 58,
+            WindowSetCaptionButtonRegions = 59,
+            GetRuntimeInfo = 60,
         }
 
         public enum OpcodeControllerNotification : byte
@@ -1600,6 +1601,19 @@ namespace JustCef
         public async Task EchoAsync(byte[] data, CancellationToken cancellationToken = default) => await CallAsync(OpcodeController.Echo, data, cancellationToken).ConfigureAwait(false);
         public async Task PingAsync(CancellationToken cancellationToken = default) => await CallAsync(OpcodeController.Ping, cancellationToken).ConfigureAwait(false);
 
+        public async Task<RuntimeInfo> GetRuntimeInfoAsync(CancellationToken cancellationToken = default)
+        {
+            await WaitForReadyAsync(cancellationToken).ConfigureAwait(false);
+            var reader = await CallAsync(OpcodeController.GetRuntimeInfo, cancellationToken).ConfigureAwait(false);
+            if (reader.RemainingSize != 2)
+                throw new InvalidOperationException("Invalid runtime information response length.");
+            var os = reader.Read<byte>();
+            var backend = reader.Read<byte>();
+            if (os > 3 || backend > 2 || (os != 3 && backend != 0))
+                throw new InvalidOperationException("Invalid runtime information response.");
+            return new RuntimeInfo((RuntimeOperatingSystem)os, os == 3 ? (LinuxWindowingBackend)backend : null);
+        }
+
         public async Task PrintAsync(string message, CancellationToken cancellationToken = default) => await CallAsync(OpcodeController.Print, Encoding.UTF8.GetBytes(message), cancellationToken).ConfigureAwait(false);
 
         private void EnsureStarted()
@@ -1799,6 +1813,52 @@ namespace JustCef
             var x = reader.Read<int>();
             var y = reader.Read<int>();
             return (x, y);
+        }
+
+        public async Task WindowSetDraggableRegionsAsync(int identifier, IReadOnlyList<DraggableRegion>? regions = null, CancellationToken cancellationToken = default)
+        {
+            using var writer = new PacketWriter().Write(identifier).Write(regions != null);
+            if (regions != null)
+            {
+                if (regions.Count > 4096)
+                    throw new ArgumentOutOfRangeException(nameof(regions), "At most 4096 draggable regions are supported.");
+                writer.Write((uint)regions.Count);
+                foreach (var region in regions)
+                {
+                    if (region.Width <= 0 || region.Height <= 0 ||
+                        (long)region.X + region.Width > int.MaxValue || (long)region.Y + region.Height > int.MaxValue)
+                        throw new ArgumentOutOfRangeException(nameof(regions), "Regions must have positive dimensions and fit in signed 32-bit coordinates.");
+                    writer.Write(region.X).Write(region.Y).Write(region.Width).Write(region.Height).Write(region.Draggable);
+                }
+            }
+            await CallAsync(OpcodeController.WindowSetDraggableRegions, writer, cancellationToken).ConfigureAwait(false);
+        }
+
+        public async Task WindowSetCaptionButtonRegionsAsync(int identifier, IReadOnlyList<CaptionButtonRegion>? regions = null, CancellationToken cancellationToken = default)
+        {
+            var count = regions?.Count ?? 0;
+            if (count > 3)
+                throw new ArgumentOutOfRangeException(nameof(regions), "At most three caption button regions are supported.");
+            byte seen = 0;
+            using var writer = new PacketWriter().Write(identifier).Write((uint)count);
+            for (var i = 0; i < count; ++i)
+            {
+                var r = regions![i];
+                var role = (byte)r.Button;
+                if (role < 1 || role > 3 || (seen & (1 << role)) != 0 || r.Width <= 0 || r.Height <= 0 ||
+                    (long)r.X + r.Width > int.MaxValue || (long)r.Y + r.Height > int.MaxValue)
+                    throw new ArgumentOutOfRangeException(nameof(regions), "Caption regions require unique roles and positive, signed 32-bit bounds.");
+                for (var j = 0; j < i; ++j)
+                {
+                    var other = regions[j];
+                    if (r.X < (long)other.X + other.Width && other.X < (long)r.X + r.Width &&
+                        r.Y < (long)other.Y + other.Height && other.Y < (long)r.Y + r.Height)
+                        throw new ArgumentOutOfRangeException(nameof(regions), "Caption button regions must not overlap.");
+                }
+                seen |= (byte)(1 << role);
+                writer.Write(r.X).Write(r.Y).Write(r.Width).Write(r.Height).Write(role);
+            }
+            await CallAsync(OpcodeController.WindowSetCaptionButtonRegions, writer, cancellationToken).ConfigureAwait(false);
         }
 
         public async Task WindowSetSizeAsync(int identifier, int width, int height, CancellationToken cancellationToken = default)

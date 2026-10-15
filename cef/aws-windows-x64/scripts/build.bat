@@ -5,6 +5,9 @@ rem Resolve repository root relative to this script:
 rem   <repo>\aws-windows-x64\scripts\build.bat
 rem   -> <repo>
 for %%I in ("%~dp0..\..") do set "REPO_ROOT=%%~fI"
+if not defined DOWNLOAD_DIR set "DOWNLOAD_DIR=c:\code\chromium_git"
+if not defined DEPOT_TOOLS_DIR set "DEPOT_TOOLS_DIR=c:\code\depot_tools"
+if not defined CEF_OUTPUT_DIR set "CEF_OUTPUT_DIR=%REPO_ROOT%\artifacts"
 
 rem Read the CEF branch.
 set "CEF_BRANCH="
@@ -12,6 +15,14 @@ set /p CEF_BRANCH=<"%REPO_ROOT%\cef.branch"
 
 if not defined CEF_BRANCH (
   echo Failed to read CEF branch from "%REPO_ROOT%\cef.branch"
+  exit /b 1
+)
+
+if not defined CEF_CHECKOUT (
+  set /p CEF_CHECKOUT=<"%REPO_ROOT%\cef.version"
+)
+if not defined CEF_CHECKOUT (
+  echo Failed to read CEF version from "%REPO_ROOT%\cef.version"
   exit /b 1
 )
 
@@ -95,12 +106,12 @@ goto parse_args
 
 if "%BUILD_X64%"=="1" (
   call :run_build x64
-  if errorlevel 1 exit /b 1
+  if errorlevel 1 exit /b !ERRORLEVEL!
 )
 
 if "%BUILD_ARM64%"=="1" (
   call :run_build arm64
-  if errorlevel 1 exit /b 1
+  if errorlevel 1 exit /b !ERRORLEVEL!
 )
 
 exit /b 0
@@ -133,18 +144,30 @@ if defined CEF_CHECKOUT (
   echo ==^> Pinning CEF checkout to !CEF_CHECKOUT_NORMALIZED! ^(from !CEF_CHECKOUT!^)
 )
 
-python "%REPO_ROOT%\automate\automate-git.py" ^
+call python "%REPO_ROOT%\automate\automate-git.py" ^
   --branch=!CEF_BRANCH! ^
-  --download-dir=c:\code\chromium_git ^
-  --depot-tools-dir=c:\code\depot_tools ^
+  --download-dir="%DOWNLOAD_DIR%" ^
+  --depot-tools-dir="%DEPOT_TOOLS_DIR%" ^
   --minimal-distrib-only ^
   --build-target=cefsimple ^
   --force-clean ^
   --force-build ^
+  --force-distrib ^
   --with-pgo-profiles ^
   --no-debug-build ^
   !ARCH_ARG! ^
   !CHECKOUT_ARG!
+
+set "RESULT=!ERRORLEVEL!"
+if not "!RESULT!"=="0" (
+  endlocal & exit /b %RESULT%
+)
+
+call python "%REPO_ROOT%\automate\copy_distrib.py" ^
+  --download-dir="%DOWNLOAD_DIR%" ^
+  --output-dir="%CEF_OUTPUT_DIR%" ^
+  --platform=windows ^
+  --arch=!ARCH!
 
 set "RESULT=!ERRORLEVEL!"
 

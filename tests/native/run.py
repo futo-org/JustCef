@@ -231,6 +231,130 @@ def test_shutdown_with_pending_work():
     check(time.time() - started < 5, "shutdown is prompt")
 
 
+def drag_regions(ctl, wid):
+    st, payload = ctl.result(ctl.call(C["Debug"], W().u8(3).u32(wid).b))
+    check(st == OK, "drag region inspection failed")
+    r = Rd(payload)
+    return [(r.i32(), r.i32(), r.i32(), r.i32(), r.b1()) for _ in range(r.u32())]
+
+
+def wait_drag_regions(ctl, wid, predicate):
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        regions = drag_regions(ctl, wid)
+        if predicate(regions):
+            return regions
+        time.sleep(0.02)
+    raise AssertionError("unexpected drag regions: %r" % (regions,))
+
+
+def test_runtime_info():
+    ctl = Ctl()
+    ctl.wait_note("Ready")
+    status, payload = ctl.result(ctl.call(C["GetRuntimeInfo"], b""))
+    check(status == OK and len(payload) == 2, "runtime information response")
+    check(payload[0] == (3 if sys.platform.startswith("linux") else 2), "native operating system")
+    check(payload[1] in (0, 1, 2), "known Linux backend")
+    if payload[0] != 3:
+        check(payload[1] == 0, "Linux backend not applicable")
+    expected = os.environ.get("JUSTCEF_TEST_EXPECT_LINUX_BACKEND")
+    if expected:
+        check(payload[1] == {"unknown": 0, "x11": 1, "wayland": 2}[expected], "active Linux backend")
+    check(ctl.result(ctl.call(C["GetRuntimeInfo"], b"\0"))[0] == 8, "runtime info rejects request payload")
+    shutdown(ctl)
+
+
+def test_caption_button_regions():
+    ctl = Ctl()
+    ctl.wait_note("Ready")
+    wid = ctl.create("about:blank", frameless=True)
+    valid = W().i32(wid).u32(1).i32(700).i32(4).i32(46).i32(36).u8(2).b
+    check(ctl.result(ctl.call(C["SetCaptionButtonRegions"], valid))[0] == 5, "caption targets are Windows-only")
+    malformed = [W().i32(wid).u32(4).b, valid[:-1], valid + b"\0"]
+    for role in (0, 4, 255):
+        malformed.append(W().i32(wid).u32(1).i32(0).i32(4).i32(46).i32(36).u8(role).b)
+    for x, y, w, h in [(0, 0, 0, 10), (0, 0, 10, -1), (2147483647, 0, 1, 10), (0, 2147483647, 10, 1)]:
+        malformed.append(W().i32(wid).u32(1).i32(x).i32(y).i32(w).i32(h).u8(2).b)
+    for second_role, second_x in [(2, 100), (3, 0)]:
+        body = W().i32(wid).u32(2).i32(0).i32(4).i32(46).i32(36).u8(2)
+        malformed.append(body.i32(second_x).i32(4).i32(46).i32(36).u8(second_role).b)
+    for body in malformed:
+        check(ctl.result(ctl.call(C["SetCaptionButtonRegions"], body))[0] == 8, "invalid caption target packet rejected")
+    check(ctl.result(ctl.call(C["SetCaptionButtonRegions"], W().i32(2147483647).u32(0).b))[0] == 3, "missing browser")
+    shutdown(ctl)
+
+
+def test_frameless_drag_regions():
+    server = PageServer(PAGES)
+    try:
+        for style in ([], ["--use-alloy-style"]):
+            ctl = Ctl(style)
+            ctl.wait_note("Ready")
+            ctl.handlers[R["ViewCreated"]] = lambda r: (OK, W().b1(True).b)
+            wid = ctl.create(server.origin + "/frameless.html", frameless=True, bridge=False, views=True)
+            ctl.wait_note("LoadingState", lambda r: r.i32() == wid and not r.b1())
+            regions = wait_drag_regions(ctl, wid, lambda rs: any(r[4] for r in rs) and any(not r[4] for r in rs))
+            check(any(r[3] == 48 and r[4] for r in regions), "CSS title bar geometry")
+
+            devtools_eval(ctl, wid, "document.querySelector('header').style.height = '64px'")
+            wait_drag_regions(ctl, wid, lambda rs: any(r[3] == 64 and r[4] for r in rs))
+            st, _ = ctl.result(ctl.call(9, W().i32(wid).f64(1).b))
+            check(st == OK, "set zoom")
+            wait_drag_regions(ctl, wid, lambda rs: any(r[3] > 64 and r[4] for r in rs))
+            ctl.result(ctl.call(9, W().i32(wid).f64(0).b))
+            wait_drag_regions(ctl, wid, lambda rs: any(r[3] == 64 and r[4] for r in rs))
+
+            override = W().i32(wid).b1(True).u32(2).i32(0).i32(0).i32(800).i32(40).b1(True).i32(700).i32(0).i32(100).i32(40).b1(False)
+            check(ctl.result(ctl.call(C["SetDraggableRegions"], override.b))[0] == OK, "set override")
+            expected = [(0, 0, 800, 40, True), (700, 0, 100, 40, False)]
+            check(drag_regions(ctl, wid) == expected, "host rectangles and exclusions")
+
+            if os.environ.get("JUSTCEF_TEST_WINDOW_MANAGER") == "1":
+                check(ctl.result(ctl.call(31, W().i32(wid).b1(True).b))[0] == OK, "fullscreen")
+                wait_drag_regions(ctl, wid, lambda rs: not rs)
+                check(ctl.result(ctl.call(31, W().i32(wid).b1(False).b))[0] == OK, "exit fullscreen")
+                wait_drag_regions(ctl, wid, lambda rs: rs == expected)
+
+            malformed = [W().i32(wid).u8(2).b, W().i32(wid).b1(False).u8(0).b,
+                         W().i32(wid).b1(True).u32(4097).b,
+                         W().i32(wid).b1(True).u32(1).i32(0).i32(0).i32(0).i32(40).b1(True).b,
+                         W().i32(wid).b1(True).u32(1).i32(2147483647).i32(0).i32(1).i32(40).b1(True).b,
+                         W().i32(wid).b1(True).u32(1).i32(0).i32(0).i32(1).i32(40).u8(2).b]
+            for body in malformed:
+                check(ctl.result(ctl.call(C["SetDraggableRegions"], body))[0] == 8, "reject malformed regions")
+                check(drag_regions(ctl, wid) == expected, "invalid packet cannot mutate regions")
+
+            ctl.result(ctl.call(C["SetDraggableRegions"], W().i32(wid).b1(True).u32(0).b))
+            check(not drag_regions(ctl, wid), "empty override disables dragging")
+            ctl.result(ctl.call(C["SetDraggableRegions"], W().i32(wid).b1(False).b))
+            wait_drag_regions(ctl, wid, lambda rs: any(r[3] == 64 and r[4] for r in rs) and any(not r[4] for r in rs))
+
+            ctl.result(ctl.call(C["SetDraggableRegions"], override.b))
+            ctl.result(ctl.call(C["LoadUrl"], W().i32(wid).s(server.origin + "/view.html").b))
+            ctl.wait_note("LoadingState", lambda r: r.i32() == wid and not r.b1())
+            check(drag_regions(ctl, wid) == expected, "override survives navigation")
+            ctl.result(ctl.call(C["SetDraggableRegions"], W().i32(wid).b1(False).b))
+            check(not drag_regions(ctl, wid), "navigation clears stale CSS drag regions")
+
+            child = devtools_eval(ctl, wid, """new Promise((resolve, reject) => {
+                const view = document.createElement('justcef-view');
+                view.style.cssText = 'display:block;width:400px;height:300px';
+                setTimeout(() => reject('embedded view was not created'), 10000);
+                view.addEventListener('viewcreated', () => resolve(view.viewId), {once:true});
+                view.setAttribute('src', 'frameless.html');
+                document.body.append(view);
+            })""")
+            devtools_eval(ctl, child, "new Promise(resolve => document.readyState === 'complete' ? resolve() : addEventListener('load', resolve, {once:true}))")
+            check(not drag_regions(ctl, child) and not drag_regions(ctl, wid), "embedded CSS cannot replace the host drag regions")
+            check(ctl.result(ctl.call(C["SetDraggableRegions"], W().i32(child).b1(False).b))[0] == 5, "embedded overrides unsupported")
+
+            framed = ctl.create("about:blank", bridge=False)
+            check(ctl.result(ctl.call(C["SetDraggableRegions"], W().i32(framed).b1(False).b))[0] == 5, "framed windows unsupported")
+            shutdown(ctl)
+    finally:
+        server.close()
+
+
 def test_views_handshake():
     server = PageServer(PAGES)
     try:
@@ -369,7 +493,7 @@ def test_views_lifecycle():
 
 
 TESTS = [test_protocol_vectors, test_ordering_and_basics, test_bridge_calls_that_call_native, test_large_bridge_payloads, test_async_modify, test_streams_and_cancel,
-         test_backpressure_and_threads, test_shutdown_with_pending_work, test_views_handshake, test_views_rounded_clipping, test_views_lifecycle]
+         test_backpressure_and_threads, test_shutdown_with_pending_work, test_runtime_info, test_frameless_drag_regions, test_caption_button_regions, test_views_handshake, test_views_rounded_clipping, test_views_lifecycle]
 
 if __name__ == "__main__":
     if not NATIVE or not os.path.exists(NATIVE):

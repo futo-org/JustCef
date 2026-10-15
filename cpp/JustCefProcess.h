@@ -94,6 +94,7 @@ public:
     void WaitForReady() const;
     asio::awaitable<void> WaitForReadyAsync() const;
     asio::awaitable<WidevineStatus> GetWidevineStatusAsync() const;
+    asio::awaitable<RuntimeInfo> GetRuntimeInfoAsync();
 
     asio::awaitable<void> EchoAsync(std::vector<std::uint8_t> data);
     asio::awaitable<void> PingAsync();

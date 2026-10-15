@@ -9,11 +9,12 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
-#include <chrono>
 #include <cerrno>
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <map>
 #include <mutex>
 #include <optional>
@@ -1035,6 +1036,24 @@ public:
 
     asio::awaitable<void> PingAsync() { co_await AsyncVoidCall(detail::OpcodeController::Ping, detail::PacketWriter{}); }
 
+    asio::awaitable<RuntimeInfo> GetRuntimeInfoAsync()
+    {
+        co_await WaitForReadyAsync();
+        co_return co_await AsyncParsedCall<RuntimeInfo>(detail::OpcodeController::GetRuntimeInfo, detail::PacketWriter{},
+                                                        [](detail::PacketReader& reader)
+                                                        {
+                                                            const auto os = ReadRequired<std::uint8_t>(reader, "operatingSystem");
+                                                            const auto backend = ReadRequired<std::uint8_t>(reader, "linuxWindowingBackend");
+                                                            if (reader.RemainingSize() != 0 || os > 3 || backend > 2 || (os != 3 && backend != 0))
+                                                                throw detail::ProtocolError("Invalid runtime information response.");
+                                                            RuntimeInfo info;
+                                                            info.operating_system = static_cast<RuntimeOperatingSystem>(os);
+                                                            if (info.operating_system == RuntimeOperatingSystem::Linux)
+                                                                info.linux_windowing_backend = static_cast<LinuxWindowingBackend>(backend);
+                                                            return info;
+                                                        });
+    }
+
     asio::awaitable<void> PrintAsync(std::string message)
     {
         detail::PacketWriter writer;
@@ -1225,6 +1244,63 @@ public:
         writer.Write<std::int32_t>(width);
         writer.Write<std::int32_t>(height);
         co_await AsyncVoidCall(detail::OpcodeController::WindowSetSize, std::move(writer));
+    }
+
+    asio::awaitable<void> WindowSetDraggableRegionsAsync(int identifier, std::optional<std::vector<DraggableRegion>> regions)
+    {
+        detail::PacketWriter writer;
+        writer.Write<std::int32_t>(identifier);
+        writer.Write<bool>(regions.has_value());
+        if (regions)
+        {
+            if (regions->size() > 4096)
+                throw std::invalid_argument("At most 4096 draggable regions are supported.");
+            writer.Write<std::uint32_t>(static_cast<std::uint32_t>(regions->size()));
+            for (const auto& region : *regions)
+            {
+                if (region.width <= 0 || region.height <= 0 || std::int64_t(region.x) + region.width > (std::numeric_limits<std::int32_t>::max)() ||
+                    std::int64_t(region.y) + region.height > (std::numeric_limits<std::int32_t>::max)())
+                    throw std::invalid_argument("Regions must have positive dimensions and fit in signed 32-bit coordinates.");
+                writer.Write<std::int32_t>(region.x);
+                writer.Write<std::int32_t>(region.y);
+                writer.Write<std::int32_t>(region.width);
+                writer.Write<std::int32_t>(region.height);
+                writer.Write<bool>(region.draggable);
+            }
+        }
+        co_await AsyncVoidCall(detail::OpcodeController::WindowSetDraggableRegions, std::move(writer));
+    }
+
+    asio::awaitable<void> WindowSetCaptionButtonRegionsAsync(int identifier, std::vector<CaptionButtonRegion> regions)
+    {
+        if (regions.size() > 3)
+            throw std::invalid_argument("At most three caption button regions are supported.");
+        std::uint8_t seen = 0;
+        detail::PacketWriter writer;
+        writer.Write<std::int32_t>(identifier);
+        writer.Write<std::uint32_t>(static_cast<std::uint32_t>(regions.size()));
+        for (std::size_t i = 0; i < regions.size(); ++i)
+        {
+            const auto& r = regions[i];
+            const auto role = static_cast<std::uint8_t>(r.button);
+            if (role < 1 || role > 3 || (seen & (1u << role)) || r.width <= 0 || r.height <= 0 || std::int64_t(r.x) + r.width > INT32_MAX ||
+                std::int64_t(r.y) + r.height > INT32_MAX)
+                throw std::invalid_argument("Caption regions require unique roles and positive, signed 32-bit bounds.");
+            for (std::size_t j = 0; j < i; ++j)
+            {
+                const auto& other = regions[j];
+                if (r.x < std::int64_t(other.x) + other.width && other.x < std::int64_t(r.x) + r.width && r.y < std::int64_t(other.y) + other.height &&
+                    other.y < std::int64_t(r.y) + r.height)
+                    throw std::invalid_argument("Caption button regions must not overlap.");
+            }
+            seen |= 1u << role;
+            writer.Write<std::int32_t>(r.x);
+            writer.Write<std::int32_t>(r.y);
+            writer.Write<std::int32_t>(r.width);
+            writer.Write<std::int32_t>(r.height);
+            writer.Write<std::uint8_t>(role);
+        }
+        co_await AsyncVoidCall(detail::OpcodeController::WindowSetCaptionButtonRegions, std::move(writer));
     }
 
     asio::awaitable<Size> WindowGetSizeAsync(int identifier)
@@ -2707,6 +2783,11 @@ asio::awaitable<void> JustCefProcess::EchoAsync(std::vector<std::uint8_t> data)
 asio::awaitable<void> JustCefProcess::PingAsync()
 {
     return impl_->PingAsync();
+}
+
+asio::awaitable<RuntimeInfo> JustCefProcess::GetRuntimeInfoAsync()
+{
+    return impl_->GetRuntimeInfoAsync();
 }
 
 asio::awaitable<void> JustCefProcess::PrintAsync(std::string message)

@@ -1,0 +1,119 @@
+diff --git a/include/cef_app.h b/include/cef_app.h
+index 260644d178899be0438ae1959632aac3b803772e..faaee58ed5e6ba6c4462cf469801400509e3edef 100644
+--- a/include/cef_app.h
++++ b/include/cef_app.h
+@@ -94,6 +94,14 @@ bool CefInitialize(const CefMainArgs& args,
+ /*--cef()--*/
+ int CefGetExitCode();
+
++#if CEF_API_ADDED(CEF_EXPERIMENTAL)
++///
++///
++///
++/*--cef(added=experimental,default_retval=CEF_LINUX_WINDOWING_BACKEND_UNKNOWN)--*/
++cef_linux_windowing_backend_t CefGetLinuxWindowingBackend();
++#endif
++
+ ///
+ /// This function should be called on the main application thread to shut down
+ /// the CEF browser process before the application exits. Do not call any
+diff --git a/include/internal/cef_types.h b/include/internal/cef_types.h
+index fed23a55ef5536fa024de6df99fe802f976ab545..aa76b55ec2a97413f97619c6069cc679f8b67524 100644
+--- a/include/internal/cef_types.h
++++ b/include/internal/cef_types.h
+@@ -51,6 +51,14 @@
+ #include "include/internal/cef_types_linux.h"
+ #endif
+
++#if CEF_API_ADDED(CEF_EXPERIMENTAL)
++typedef enum {
++  CEF_LINUX_WINDOWING_BACKEND_UNKNOWN = 0,
++  CEF_LINUX_WINDOWING_BACKEND_X11 = 1,
++  CEF_LINUX_WINDOWING_BACKEND_WAYLAND = 2,
++} cef_linux_windowing_backend_t;
++#endif
++
+ // 32-bit ARGB color value, not premultiplied. The color components are always
+ // in a known order. Equivalent to the SkColor type.
+ typedef uint32_t cef_color_t;
+diff --git a/libcef/browser/context.cc b/libcef/browser/context.cc
+index 53abc8dba78916ee0c46f8eb1bb918ccec45641a..6e97bc8356c5a430983f5a4b10372366e51b917c 100644
+--- a/libcef/browser/context.cc
++++ b/libcef/browser/context.cc
+@@ -22,6 +22,10 @@
+ #include "components/network_session_configurator/common/network_switches.h"
+ #include "ui/base/ui_base_switches.h"
+
++#if BUILDFLAG(IS_LINUX)
++#include "ui/linux/linux_ui_delegate.h"
++#endif
++
+ #if BUILDFLAG(IS_WIN)
+ #include "base/strings/utf_string_conversions.h"
+ #include "cef/include/internal/cef_win.h"
+@@ -241,6 +245,23 @@ bool CefInitialize(const CefMainArgs& args,
+   return true;
+ }
+
++cef_linux_windowing_backend_t CefGetLinuxWindowingBackend() {
++  CEF_REQUIRE_UIT_RETURN(CEF_LINUX_WINDOWING_BACKEND_UNKNOWN);
++#if BUILDFLAG(IS_LINUX)
++  if (auto* delegate = ui::LinuxUiDelegate::GetInstance()) {
++    switch (delegate->GetBackend()) {
++      case ui::LinuxUiBackend::kX11:
++        return CEF_LINUX_WINDOWING_BACKEND_X11;
++      case ui::LinuxUiBackend::kWayland:
++        return CEF_LINUX_WINDOWING_BACKEND_WAYLAND;
++      case ui::LinuxUiBackend::kStub:
++        break;
++    }
++  }
++#endif
++  return CEF_LINUX_WINDOWING_BACKEND_UNKNOWN;
++}
++
+ int CefGetExitCode() {
+   DCHECK_NE(g_exit_code, -1) << "invalid call to CefGetExitCode";
+   return g_exit_code;
+diff --git a/tests/ceftests/display_unittest.cc b/tests/ceftests/display_unittest.cc
+index 0f35d0932c5bbe18ab06f307373a2bad01c47086..3b40d8c3f01bb959f3d82f8d2c16983b74d99210 100644
+--- a/tests/ceftests/display_unittest.cc
++++ b/tests/ceftests/display_unittest.cc
+@@ -5,6 +5,7 @@
+ #include <list>
+
+ #include "include/base/cef_callback.h"
++#include "include/cef_app.h"
+ #include "include/wrapper/cef_closure_task.h"
+ #include "tests/ceftests/routing_test_handler.h"
+ #include "tests/ceftests/test_handler.h"
+@@ -533,3 +534,29 @@ TEST(DisplayTest, LoadingProgress) {
+   handler->ExecuteTest();
+   ReleaseAndWaitForDestructor(handler);
+ }
++
++namespace {
++
++void LinuxWindowingBackendImpl() {
++  const auto backend = CefGetLinuxWindowingBackend();
++#if defined(OS_LINUX)
++  EXPECT_GE(backend, CEF_LINUX_WINDOWING_BACKEND_UNKNOWN);
++  EXPECT_LE(backend, CEF_LINUX_WINDOWING_BACKEND_WAYLAND);
++  const auto requested = CefCommandLine::GetGlobalCommandLine()
++                             ->GetSwitchValue("ozone-platform")
++                             .ToString();
++  if (requested == "x11") {
++    EXPECT_EQ(CEF_LINUX_WINDOWING_BACKEND_X11, backend);
++  } else if (requested == "wayland") {
++    EXPECT_EQ(CEF_LINUX_WINDOWING_BACKEND_WAYLAND, backend);
++  } else if (requested == "headless") {
++    EXPECT_EQ(CEF_LINUX_WINDOWING_BACKEND_UNKNOWN, backend);
++  }
++#else
++  EXPECT_EQ(CEF_LINUX_WINDOWING_BACKEND_UNKNOWN, backend);
++#endif
++}
++
++}
++
++UI_THREAD_TEST(RuntimeTest, LinuxWindowingBackend)

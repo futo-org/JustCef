@@ -87,6 +87,9 @@ enum class OpcodeController : uint8_t
     WindowRemoveDomainToProxy = 55,
     WindowGetZoom = 56,
     WindowBridgeRpc = 57,
+    WindowSetDraggableRegions = 58,
+    WindowSetCaptionButtonRegions = 59,
+    GetRuntimeInfo = 60,
     Debug = 250
 };
 
@@ -312,6 +315,8 @@ ipc::StatusCode HandleAddUrlToModify(PacketReader& reader, PacketWriter& writer)
 ipc::StatusCode HandleRemoveUrlToModify(PacketReader& reader, PacketWriter& writer);
 ipc::StatusCode HandleWindowGetSize(PacketReader& reader, PacketWriter& writer);
 ipc::StatusCode HandleWindowSetSize(PacketReader& reader, PacketWriter& writer);
+ipc::StatusCode HandleWindowSetCaptionButtonRegions(PacketReader& reader, PacketWriter& writer);
+ipc::StatusCode HandleWindowSetDraggableRegions(PacketReader& reader, PacketWriter& writer);
 ipc::StatusCode HandleAddDevToolsEventMethod(PacketReader& reader, PacketWriter& writer);
 ipc::StatusCode HandleRemoveDevToolsEventMethod(PacketReader& reader, PacketWriter& writer);
 ipc::StatusCode HandleWindowSetZoom(PacketReader& reader, PacketWriter& writer);

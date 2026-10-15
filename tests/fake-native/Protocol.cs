@@ -68,6 +68,9 @@ public enum ControllerOp : byte
     WindowRemoveDomainToProxy = 55,
     WindowGetZoom = 56,
     WindowBridgeRpc = 57,
+    WindowSetDraggableRegions = 58,
+    WindowSetCaptionButtonRegions = 59,
+    GetRuntimeInfo = 60,
     Debug = 250
 }
 

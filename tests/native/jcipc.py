@@ -1,6 +1,7 @@
 import os
 import tempfile
 import queue
+import shlex
 import struct
 import subprocess
 import sys
@@ -40,7 +41,7 @@ def packet(typ, op, rid, body=b""):
     return struct.pack("<IIBB", 10 + len(body) - 4, rid, typ, op) + bytes(body)
 
 
-C = dict(Ping=0, Print=1, Echo=2, WindowCreate=3, LoadUrl=6, GetSize=50, GetZoom=56, Close=22, ExecuteDevTools=42, BridgeRpc=57,
+C = dict(Ping=0, Print=1, Echo=2, WindowCreate=3, LoadUrl=6, GetSize=50, GetZoom=56, Close=22, ExecuteDevTools=42, BridgeRpc=57, SetDraggableRegions=58, SetCaptionButtonRegions=59, GetRuntimeInfo=60,
          SetModify=34, AddUrlToModify=48, Debug=250)
 CN = dict(Exit=0, StreamData=1, StreamEnd=2, StreamError=3)
 N = {0: "Ready", 1: "Exit", 2: "WindowOpened", 3: "WindowClosed", 5: "WindowFocused", 6: "WindowUnfocused", 12: "Fullscreen", 13: "FrameLoadStart",
@@ -97,7 +98,7 @@ class Ctl:
     def __init__(self, extra=None):
         c2n_r, c2n_w = os.pipe()
         n2c_r, n2c_w = os.pipe()
-        args = [NATIVE, "--change-stack-guard-on-fork=disable", "--parent-to-child", str(c2n_r), "--child-to-parent", str(n2c_w), "--no-sandbox", "--enable-ipc-debug"] + (extra or [])
+        args = [NATIVE, "--change-stack-guard-on-fork=disable", "--parent-to-child", str(c2n_r), "--child-to-parent", str(n2c_w), "--no-sandbox", "--enable-ipc-debug"] + shlex.split(os.environ.get("JUSTCEF_NATIVE_ARGS", "")) + (extra or [])
         os.makedirs(LOG_DIR, exist_ok=True)
         with _reg:
             _seq[0] += 1
@@ -215,9 +216,9 @@ class Ctl:
                 return Rd(body)
         raise TimeoutError(f"no {name}; saw {seen[-20:]}")
 
-    def create(self, url, proxy=False, bridge=True, modify=False, modify_body=False, shown=True, views=False, modify_timeout=0, policy=0, proxy_timeout=0):
+    def create(self, url, proxy=False, bridge=True, modify=False, modify_body=False, shown=True, views=False, modify_timeout=0, policy=0, proxy_timeout=0, frameless=False, resizable=True):
         w = W()
-        for v in [True, False, False, True, shown, True, True, modify, modify_body, proxy, True, bridge]:
+        for v in [resizable, frameless, False, True, shown, True, True, modify, modify_body, proxy, True, bridge]:
             w.b1(v)
         for v in [800, 600, 900, 700]:
             w.i32(v)

@@ -6,6 +6,7 @@
 #include "include/wrapper/cef_resource_manager.h"
 #include "ipc.h"
 
+#include <array>
 #include <atomic>
 #include <functional>
 #include <unordered_map>
@@ -25,7 +26,8 @@ class Client : public CefClient,
                public CefRenderHandler,
                public CefDevToolsMessageObserver,
                public CefJSDialogHandler,
-               public CefFrameHandler
+               public CefFrameHandler,
+               public CefDragHandler
 {
 public:
     Client(const IPCWindowCreate& settings, bool manageNativeWindow = true);
@@ -39,6 +41,7 @@ public:
     CefRefPtr<CefRequestHandler> GetRequestHandler() override { return this; }
     CefRefPtr<CefJSDialogHandler> GetJSDialogHandler() override { return this; }
     CefRefPtr<CefFrameHandler> GetFrameHandler() override { return this; }
+    CefRefPtr<CefDragHandler> GetDragHandler() override { return this; }
     CefRefPtr<CefResourceRequestHandler> GetResourceRequestHandler(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefRefPtr<CefRequest> request, bool is_navigation,
                                                                    bool is_download, const CefString& request_initiator, bool& disable_default_handling) override
     {
@@ -88,6 +91,7 @@ public:
     // CefFrameHandler methods:
     void OnFrameDetached(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame) override;
     void OnMainFrameChanged(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> old_frame, CefRefPtr<CefFrame> new_frame) override;
+    void OnDraggableRegionsChanged(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, const std::vector<CefDraggableRegion>& regions) override;
     // CefDevToolsMessageObserver methods:
     void OnDevToolsMethodResult(CefRefPtr<CefBrowser> browser, int message_id, bool success, const void* result, size_t result_size) override;
     void OnDevToolsEvent(CefRefPtr<CefBrowser> browser, const CefString& method, const void* params, size_t params_size) override;
@@ -112,6 +116,10 @@ public:
     void StartBridgeRpcCall(CefRefPtr<CefBrowser> browser, const std::string& method, const std::string& payload_json, ipc::Reply reply);
     void SetProxyRequests(bool proxyRequests);
     void SetModifyRequests(bool modifyRequests, bool modifyRequestBody);
+    ipc::StatusCode SetDraggableRegions(CefRefPtr<CefBrowser> browser, const std::optional<std::vector<CefDraggableRegion>>& regions);
+    ipc::StatusCode SetCaptionButtonRegions(CefRefPtr<CefBrowser> browser, const std::array<CefRect, 3>& regions);
+    void ApplyDraggableRegions(CefRefPtr<CefBrowser> browser);
+    std::vector<CefDraggableRegion> GetWindowDraggableRegions(CefRefPtr<CefBrowser> browser);
 
     IPCWindowCreate settings;
     bool _manageNativeWindow;
@@ -126,6 +134,10 @@ private:
     void FailAllBridgeRpcCalls(const std::string& error);
     void CancelHostCalls();
     void CancelPendingModifies();
+    void ClearCssDraggableRegions(CefRefPtr<CefBrowser> browser);
+
+    std::vector<CefDraggableRegion> _cssDraggableRegions;
+    std::optional<std::vector<CefDraggableRegion>> _draggableRegionsOverride;
 
     std::map<int32_t, std::function<void(bool, std::string)>> _devToolsMethodCallbacks;
     int _primaryIdentifier = 0;

@@ -1,51 +1,76 @@
-diff --git a/BUILD.gn b/BUILD.gn
-index 53053ea..9bcebdb 100644
---- a/BUILD.gn
-+++ b/BUILD.gn
-@@ -984,6 +984,7 @@ source_set("libcef_static") {
-     "//third_party/blink/public:blink",
-     "//third_party/brotli:dec",
-     "//third_party/cld_3/src/src:cld_3",
-+    "//third_party/highway:libhwy",
-     "//third_party/crashpad/crashpad/handler",
-     "//third_party/hunspell",
-     "//third_party/leveldatabase",
 diff --git a/include/cef_v8.h b/include/cef_v8.h
-index be77ff3..bfa95ea 100644
+index 4f6104bff1b9940f964ac9753595e318a442641d..8d3fee7f254e0bceb59e0e24fd29d44d35ce4c19 100644
 --- a/include/cef_v8.h
 +++ b/include/cef_v8.h
-@@ -1027,6 +1027,14 @@ class CefV8Value : public virtual CefBaseRefCounted {
+@@ -1030,6 +1030,14 @@ class CefV8Value : public virtual CefBaseRefCounted {
    ///
    /*--cef()--*/
    virtual bool RejectPromise(const CefString& errorMsg) = 0;
 +
 +#if CEF_API_ADDED(CEF_EXPERIMENTAL)
 +  ///
-+  /// Returns the backing filesystem path for a DOM File, or an empty string.
++  ///
 +  ///
 +  /*--cef(added=experimental)--*/
 +  virtual CefString GetPathForFile() = 0;
 +#endif
  };
- 
+
  ///
+diff --git a/libcef/renderer/blink_glue.cc b/libcef/renderer/blink_glue.cc
+index a9a030ef95b247c1e05ecad37de0b73eab8eb373..90d9e667400b180594342dcd16c07fa012e773bf 100644
+--- a/libcef/renderer/blink_glue.cc
++++ b/libcef/renderer/blink_glue.cc
+@@ -16,6 +16,7 @@
+ #include "third_party/blink/renderer/bindings/core/v8/sanitize_script_errors.h"
+ #include "third_party/blink/renderer/bindings/core/v8/script_evaluation_result.h"
+ #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_core.h"
++#include "third_party/blink/renderer/bindings/core/v8/v8_file.h"
+ #include "third_party/blink/renderer/core/dom/document.h"
+ #include "third_party/blink/renderer/core/dom/element.h"
+ #include "third_party/blink/renderer/core/dom/node.h"
+@@ -23,6 +24,7 @@
+ #include "third_party/blink/renderer/core/execution_context/execution_context.h"
+ #include "third_party/blink/renderer/core/execution_context/execution_context_lifecycle_state_observer.h"
+ #include "third_party/blink/renderer/core/exported/web_view_impl.h"
++#include "third_party/blink/renderer/core/fileapi/file.h"
+ #include "third_party/blink/renderer/core/frame/frame_owner.h"
+ #include "third_party/blink/renderer/core/frame/local_dom_window.h"
+ #include "third_party/blink/renderer/core/frame/local_frame.h"
+@@ -325,4 +327,11 @@ void SetUseExternalPopupMenus(blink::WebView* view, bool value) {
+       .SetUseExternalPopupMenus(value);
+ }
+
++blink::WebString GetPathForFile(v8::Isolate* isolate,
++                                v8::Local<v8::Value> value) {
++  auto* file = blink::V8File::ToWrappable(isolate, value);
++  return file && file->HasBackingFile() ? blink::WebString(file->GetPath())
++                                        : blink::WebString();
++}
++
+ }  // namespace blink_glue
+diff --git a/libcef/renderer/blink_glue.h b/libcef/renderer/blink_glue.h
+index 1d096de0fc717aa5d9ce806e2d83eee960ab7d45..f11f5745d06021caea43bf42166690c072639d68 100644
+--- a/libcef/renderer/blink_glue.h
++++ b/libcef/renderer/blink_glue.h
+@@ -70,6 +70,9 @@ BLINK_EXPORT v8::MicrotaskQueue* GetMicrotaskQueue(
+
+ BLINK_EXPORT bool IsScriptForbidden();
+
++BLINK_EXPORT blink::WebString GetPathForFile(v8::Isolate* isolate,
++                                             v8::Local<v8::Value> value);
++
+ class BLINK_EXPORT CefObserverRegistration {
+  public:
+   CefObserverRegistration() = default;
 diff --git a/libcef/renderer/v8_impl.cc b/libcef/renderer/v8_impl.cc
-index 0bcf093..83d12c9 100644
+index 28f8ff6e25103d4b6d1ea5205d0e11556c8abb2c..8357a62500c66f5846d1726a9013f53034383132 100644
 --- a/libcef/renderer/v8_impl.cc
 +++ b/libcef/renderer/v8_impl.cc
-@@ -40,6 +40,8 @@
- #include "cef/libcef/renderer/v8_impl.h"
- #include "third_party/abseil-cpp/absl/base/attributes.h"
- #include "third_party/blink/public/web/blink.h"
-+#include "third_party/blink/renderer/bindings/core/v8/v8_file.h"
-+#include "third_party/blink/renderer/core/fileapi/file.h"
- #include "third_party/blink/public/web/web_frame.h"
- #include "third_party/blink/public/web/web_local_frame.h"
- #include "third_party/blink/public/web/web_script_controller.h"
-@@ -2006,6 +2008,26 @@ CefString CefV8ValueImpl::GetStringValue() {
+@@ -1960,6 +1960,20 @@ CefString CefV8ValueImpl::GetStringValue() {
    return rv;
  }
- 
+
 +CefString CefV8ValueImpl::GetPathForFile() {
 +  CefString rv;
 +  CEF_V8_REQUIRE_MLT_RETURN(rv);
@@ -54,30 +79,79 @@ index 0bcf093..83d12c9 100644
 +  }
 +
 +  v8::HandleScope handle_scope(handle_->isolate());
-+  auto value = handle_->GetNewV8Handle(false);
-+  if (auto* file = blink::V8File::ToWrappable(handle_->isolate(), value);
-+      file && file->HasBackingFile()) {
-+    auto path = file->GetPath();
-+    if (!path.empty()) {
-+      path.Ensure16Bit();
-+      rv = CefString(path.Span16().data(), path.length());
-+    }
-+  }
++  rv = blink_glue::GetPathForFile(handle_->isolate(),
++                                  handle_->GetNewV8Handle(false))
++           .Utf16();
 +  return rv;
 +}
 +
  bool CefV8ValueImpl::IsUserCreated() {
    CEF_V8_REQUIRE_OBJECT_RETURN(false);
- 
+
 diff --git a/libcef/renderer/v8_impl.h b/libcef/renderer/v8_impl.h
-index 1c5c146..7c4530d 100644
+index 0f5ff91098b701db065e93388f62b458c746cc23..600d74c863ce7a4b12eaef58210a60b7e2b7002a 100644
 --- a/libcef/renderer/v8_impl.h
 +++ b/libcef/renderer/v8_impl.h
 @@ -286,6 +286,7 @@ class CefV8ValueImpl : public CefV8Value {
- 
+
    bool ResolvePromise(CefRefPtr<CefV8Value> arg) override;
    bool RejectPromise(const CefString& errorMsg) override;
 +  CefString GetPathForFile() override;
- 
+
   private:
    // Test for and record any exception.
+diff --git a/tests/ceftests/v8_unittest.cc b/tests/ceftests/v8_unittest.cc
+index 252830f078bd7c6af213e2608cfe67d8fce1ba3a..30f61d2e9374a07222f17c19611a223da4e3df33 100644
+--- a/tests/ceftests/v8_unittest.cc
++++ b/tests/ceftests/v8_unittest.cc
+@@ -56,6 +56,7 @@ enum V8TestMode {
+   V8TEST_DATE_CREATE,
+   V8TEST_STRING_CREATE,
+   V8TEST_EMPTY_STRING_CREATE,
++  V8TEST_FILE_PATH_WITHOUT_BACKING_FILE,
+   V8TEST_ARRAY_CREATE,
+   V8TEST_ARRAY_VALUE,
+ #ifndef CEF_V8_ENABLE_SANDBOX
+@@ -143,6 +144,9 @@ class V8RendererTest : public ClientAppRenderer::Delegate,
+       case V8TEST_STRING_CREATE:
+         RunStringCreateTest();
+         break;
++      case V8TEST_FILE_PATH_WITHOUT_BACKING_FILE:
++        RunFilePathWithoutBackingFileTest();
++        break;
+       case V8TEST_EMPTY_STRING_CREATE:
+         RunEmptyStringCreateTest();
+         break;
+@@ -509,6 +513,24 @@ class V8RendererTest : public ClientAppRenderer::Delegate,
+     DestroyTest();
+   }
+
++  void RunFilePathWithoutBackingFileTest() {
++    CefRefPtr<CefV8Context> context = GetContext();
++    EXPECT_TRUE(context->Enter());
++    for (const auto* script :
++         {"new File(['hello'], '/tmp/claimed-path')", "new Blob(['hello'])",
++          "({name: '/tmp/claimed-path', path: '/tmp/fake'})", "null",
++          "'not a file'", "42"}) {
++      CefRefPtr<CefV8Value> value;
++      CefRefPtr<CefV8Exception> exception;
++      EXPECT_TRUE(context->Eval(script, CefString(), 0, value, exception));
++      EXPECT_FALSE(exception);
++      ASSERT_TRUE(value);
++      EXPECT_TRUE(value->GetPathForFile().empty());
++    }
++    EXPECT_TRUE(context->Exit());
++    DestroyTest();
++  }
++
+   void RunEmptyStringCreateTest() {
+     CefRefPtr<CefV8Value> value = CefV8Value::CreateString(CefString());
+     EXPECT_TRUE(value.get());
+@@ -3482,6 +3504,7 @@ V8_TEST(DoubleCreate, V8TEST_DOUBLE_CREATE)
+ V8_TEST(DateCreate, V8TEST_DATE_CREATE)
+ V8_TEST(StringCreate, V8TEST_STRING_CREATE)
+ V8_TEST(EmptyStringCreate, V8TEST_EMPTY_STRING_CREATE)
++V8_TEST(FilePathWithoutBackingFile, V8TEST_FILE_PATH_WITHOUT_BACKING_FILE)
+ V8_TEST(ArrayCreate, V8TEST_ARRAY_CREATE)
+ V8_TEST(ArrayValue, V8TEST_ARRAY_VALUE)
+ #ifndef CEF_V8_ENABLE_SANDBOX

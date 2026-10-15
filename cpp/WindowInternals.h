@@ -35,6 +35,8 @@ public:
     virtual asio::awaitable<void> WindowSetPositionAsync(int identifier, int x, int y) = 0;
     virtual asio::awaitable<Position> WindowGetPositionAsync(int identifier) = 0;
     virtual asio::awaitable<void> WindowSetSizeAsync(int identifier, int width, int height) = 0;
+    virtual asio::awaitable<void> WindowSetCaptionButtonRegionsAsync(int identifier, std::vector<CaptionButtonRegion> regions) = 0;
+    virtual asio::awaitable<void> WindowSetDraggableRegionsAsync(int identifier, std::optional<std::vector<DraggableRegion>> regions) = 0;
     virtual asio::awaitable<Size> WindowGetSizeAsync(int identifier) = 0;
     virtual asio::awaitable<void> WindowSetZoomAsync(int identifier, double zoom) = 0;
     virtual asio::awaitable<double> WindowGetZoomAsync(int identifier) = 0;

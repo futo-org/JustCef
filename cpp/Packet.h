@@ -79,7 +79,10 @@ enum class OpcodeController : uint8_t
     WindowAddDomainToProxy = 54,
     WindowRemoveDomainToProxy = 55,
     WindowGetZoom = 56,
-    WindowBridgeRpc = 57
+    WindowBridgeRpc = 57,
+    WindowSetDraggableRegions = 58,
+    WindowSetCaptionButtonRegions = 59,
+    GetRuntimeInfo = 60
 };
 
 // Notifications from controller

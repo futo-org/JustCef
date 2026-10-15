@@ -1,0 +1,407 @@
+diff --git a/include/views/cef_window.h b/include/views/cef_window.h
+index 06221be3b749b82a0d18c3164996c27a3e85f837..7f9253e7c4f32144db3aadbcf8c1a2b28d9f219f 100644
+--- a/include/views/cef_window.h
++++ b/include/views/cef_window.h
+@@ -316,6 +316,16 @@ class CefWindow : public CefPanel {
+   virtual void SetDraggableRegions(
+       const std::vector<CefDraggableRegion>& regions) = 0;
+
++#if CEF_API_ADDED(CEF_EXPERIMENTAL)
++  ///
++  ///
++  ///
++  /*--cef(added=experimental)--*/
++  virtual bool SetCaptionButtonRegions(const CefRect& minimize,
++                                       const CefRect& maximize,
++                                       const CefRect& close) = 0;
++#endif
++
+   ///
+   /// Retrieve the platform window handle for this Window.
+   ///
+diff --git a/libcef/browser/views/window_impl.cc b/libcef/browser/views/window_impl.cc
+index 40723daf061fe1fd6c50bf48448cbb25f4f42b04..d49daf5b6e1fa5780901da49b63e29ded69b870c 100644
+--- a/libcef/browser/views/window_impl.cc
++++ b/libcef/browser/views/window_impl.cc
+@@ -619,6 +619,14 @@ CefRect CefWindowImpl::GetClientAreaBoundsInScreen() {
+   return CefRect();
+ }
+
++bool CefWindowImpl::SetCaptionButtonRegions(const CefRect& minimize,
++                                            const CefRect& maximize,
++                                            const CefRect& close) {
++  CEF_REQUIRE_VALID_RETURN(false);
++  return root_view() &&
++         root_view()->SetCaptionButtonRegions(minimize, maximize, close);
++}
++
+ void CefWindowImpl::SetDraggableRegions(
+     const std::vector<CefDraggableRegion>& regions) {
+   CEF_REQUIRE_VALID_RETURN_VOID();
+diff --git a/libcef/browser/views/window_impl.h b/libcef/browser/views/window_impl.h
+index 83dfcb119af05dba5215b0646c777fde8e287447..0f623ea0ea5becf083046daeb36b435b109b6a2f 100644
+--- a/libcef/browser/views/window_impl.h
++++ b/libcef/browser/views/window_impl.h
+@@ -81,6 +81,9 @@ class CefWindowImpl
+   void CancelMenu() override;
+   CefRefPtr<CefDisplay> GetDisplay() override;
+   CefRect GetClientAreaBoundsInScreen() override;
++  bool SetCaptionButtonRegions(const CefRect& minimize,
++                               const CefRect& maximize,
++                               const CefRect& close) override;
+   void SetDraggableRegions(
+       const std::vector<CefDraggableRegion>& regions) override;
+   CefWindowHandle GetWindowHandle() override;
+diff --git a/libcef/browser/views/window_view.cc b/libcef/browser/views/window_view.cc
+index 5ed5048355f5f2cc08c301892f904c5773a788cd..e8665134431ae87a26535b30f3eba68ef30f31a2 100644
+--- a/libcef/browser/views/window_view.cc
++++ b/libcef/browser/views/window_view.cc
+@@ -4,6 +4,7 @@
+
+ #include "cef/libcef/browser/views/window_view.h"
+
++#include <limits>
+ #include <memory>
+ #include <ranges>
+
+@@ -42,7 +43,12 @@
+ #endif
+
+ #if BUILDFLAG(IS_WIN)
++#include "ui/aura/window_observer.h"
++#include "ui/aura/window_tree_host.h"
+ #include "ui/display/win/screen_win.h"
++#include "ui/events/event.h"
++#include "ui/events/event_handler.h"
++#include "ui/events/event_sink.h"
+ #include "ui/views/win/hwnd_util.h"
+ #endif
+
+@@ -224,6 +230,11 @@ class CaptionlessFrameView : public views::FrameView {
+       return frame_component;
+     }
+
++    const int caption_component = view_->GetCaptionButtonComponent(point);
++    if (caption_component != HTNOWHERE) {
++      return caption_component;
++    }
++
+     // Test for mouse clicks that fall within the draggable region.
+     SkRegion* draggable_region = view_->draggable_region();
+     if (draggable_region && draggable_region->contains(point.x(), point.y())) {
+@@ -391,6 +402,79 @@ bool ComputeAlloyStyle(CefWindowDelegate* cef_delegate) {
+
+ }  // namespace
+
++#if BUILDFLAG(IS_WIN)
++class CefWindowView::CaptionButtonEventHandler : public ui::EventHandler,
++                                                 public aura::WindowObserver {
++ public:
++  CaptionButtonEventHandler(CefWindowView* view, aura::Window* window)
++      : view_(view), window_(window) {
++    window_->AddObserver(this);
++    window_->AddPreTargetHandler(this);
++  }
++
++  ~CaptionButtonEventHandler() override {
++    if (window_) {
++      window_->RemovePreTargetHandler(this);
++      window_->RemoveObserver(this);
++    }
++  }
++
++  void OnWindowDestroying(aura::Window* window) override {
++    window_->RemovePreTargetHandler(this);
++    window_->RemoveObserver(this);
++    window_ = nullptr;
++  }
++
++  void OnMouseEvent(ui::MouseEvent* event) override {
++    if (!window_ || !(event->flags() & ui::EF_IS_NON_CLIENT)) {
++      return;
++    }
++    gfx::Point point = event->root_location();
++    aura::Window::ConvertPointToTarget(window_->GetRootWindow(), window_,
++                                       &point);
++    auto* frame = view_->GetFrameView();
++    if (!frame) {
++      return;
++    }
++    const int component = frame->NonClientHitTest(point);
++    if (component != HTMINBUTTON && component != HTMAXBUTTON &&
++        component != HTCLOSE) {
++      return;
++    }
++    if (!event->HasNativeEvent()) {
++      event->SetFlags(event->flags() & ~ui::EF_IS_NON_CLIENT);
++      return;
++    }
++    ui::MouseEvent client_event(event->type(), event->root_location_f(),
++                                event->root_location_f(), event->time_stamp(),
++                                event->flags() & ~ui::EF_IS_NON_CLIENT,
++                                event->changed_button_flags());
++    auto* host = window_->GetHost();
++    client_event.UpdateForRootTransform(
++        host->GetRootTransform(),
++        host->GetRootTransformForLocalEventCoordinates());
++    auto* sink = host->GetEventSink();
++    const auto native_event = event->native_event();
++    const bool native_hover = event->type() == ui::EventType::kMouseMoved &&
++                              native_event.message == WM_NCMOUSEMOVE;
++    const auto weak_view = view_->weak_ptr_factory_.GetWeakPtr();
++    const auto weak_window = window_->GetWeakPtrAsWindow();
++    event->StopPropagation();
++    sink->OnEventFromSource(&client_event);
++    if (native_hover && weak_view && weak_window &&
++        views::HWNDForNativeWindow(weak_window.get()) == native_event.hwnd &&
++        ::IsWindow(native_event.hwnd)) {
++      ::DefWindowProc(native_event.hwnd, native_event.message,
++                      native_event.wParam, native_event.lParam);
++    }
++  }
++
++ private:
++  const raw_ptr<CefWindowView> view_;
++  raw_ptr<aura::Window> window_;
++};
++#endif
++
+ // Manages the views-based root window. This object will be deleted when the
+ // associated root window is destroyed.
+ class CefWindowWidgetDelegate : public views::WidgetDelegate {
+@@ -681,6 +765,12 @@ void CefWindowView::CreateWidget(gfx::AcceleratedWidget parent_widget) {
+   }
+
+   cef_widget->Initialized();
++#if BUILDFLAG(IS_WIN)
++  if (is_frameless_) {
++    caption_button_event_handler_ = std::make_unique<CaptionButtonEventHandler>(
++        this, widget->GetNativeWindow());
++  }
++#endif
+
+ #if BUILDFLAG(IS_LINUX)
+ #if BUILDFLAG(SUPPORTS_OZONE_X11)
+@@ -828,6 +918,10 @@ bool CefWindowView::ShouldDescendIntoChildForEventHandling(
+       if (IsWindowBorderHit(result)) {
+         return false;
+       }
++      if (result == HTMINBUTTON || result == HTMAXBUTTON || result == HTCLOSE ||
++          GetCaptionButtonComponent(location) == HTCLIENT) {
++        return true;
++      }
+     }
+   }
+
+@@ -985,6 +1079,57 @@ void CefWindowView::InvalidateExclusionRegions() {
+   }
+ }
+
++bool CefWindowView::SetCaptionButtonRegions(const CefRect& minimize,
++                                            const CefRect& maximize,
++                                            const CefRect& close) {
++#if BUILDFLAG(IS_WIN)
++  if (!is_frameless_ || !GetWidget()) {
++    return false;
++  }
++  const std::array<CefRect, 3> input{minimize, maximize, close};
++  std::array<gfx::Rect, 3> regions;
++  for (size_t i = 0; i < input.size(); ++i) {
++    const auto& rect = input[i];
++    if (rect.width == 0 && rect.height == 0) {
++      continue;
++    }
++    if (rect.width <= 0 || rect.height <= 0 ||
++        int64_t(rect.x) + rect.width > std::numeric_limits<int32_t>::max() ||
++        int64_t(rect.y) + rect.height > std::numeric_limits<int32_t>::max()) {
++      return false;
++    }
++    regions[i] = gfx::Rect(rect.x, rect.y, rect.width, rect.height);
++    for (size_t j = 0; j < i; ++j) {
++      if (regions[i].Intersects(regions[j])) {
++        return false;
++      }
++    }
++  }
++  caption_button_regions_ = regions;
++  return true;
++#else
++  return false;
++#endif
++}
++
++int CefWindowView::GetCaptionButtonComponent(const gfx::Point& point) const {
++#if BUILDFLAG(IS_WIN)
++  auto* widget = GetWidget();
++  if (is_frameless_ && widget && !widget->IsFullscreen()) {
++    if (caption_button_regions_[0].Contains(point)) {
++      return CanMinimize() ? HTMINBUTTON : HTCLIENT;
++    }
++    if (caption_button_regions_[1].Contains(point)) {
++      return CanMaximize() ? HTMAXBUTTON : HTCLIENT;
++    }
++    if (caption_button_regions_[2].Contains(point)) {
++      return HTCLOSE;
++    }
++  }
++#endif
++  return HTNOWHERE;
++}
++
+ void CefWindowView::SetDraggableRegions(
+     const std::vector<CefDraggableRegion>& regions) {
+   if (regions.empty() && !draggable_region_) {
+diff --git a/libcef/browser/views/window_view.h b/libcef/browser/views/window_view.h
+index 458ddcd489a622aba7ebbf95ed88345f2b0a22b9..df0db31fd468b877b94f8b05f190b47bc52280fb 100644
+--- a/libcef/browser/views/window_view.h
++++ b/libcef/browser/views/window_view.h
+@@ -6,6 +6,7 @@
+ #define CEF_LIBCEF_BROWSER_VIEWS_WINDOW_VIEW_H_
+ #pragma once
+
++#include <array>
+ #include <optional>
+ #include <vector>
+
+@@ -116,6 +117,11 @@ class CefWindowView : public CefPanelView<views::View, CefWindowDelegate>,
+   void SetDraggableRegions(const std::vector<CefDraggableRegion>& regions);
+   SkRegion* draggable_region() const { return draggable_region_.get(); }
+
++  bool SetCaptionButtonRegions(const CefRect& minimize,
++                               const CefRect& maximize,
++                               const CefRect& close);
++  int GetCaptionButtonComponent(const gfx::Point& point) const;
++
+   // Called from CefOverlayViewHost::SetOverlayBounds().
+   void OnOverlayBoundsChanged();
+
+@@ -170,6 +176,12 @@ class CefWindowView : public CefPanelView<views::View, CefWindowDelegate>,
+   std::unique_ptr<SkRegion> draggable_region_;
+   std::vector<gfx::Rect> draggable_rects_;
+
++#if BUILDFLAG(IS_WIN)
++  class CaptionButtonEventHandler;
++  std::unique_ptr<CaptionButtonEventHandler> caption_button_event_handler_;
++  std::array<gfx::Rect, 3> caption_button_regions_;
++#endif
++
+   mutable int last_dialog_top_y_ = -1;
+   mutable int last_dialog_top_inset_ = -1;
+
+diff --git a/tests/ceftests/views/window_unittest.cc b/tests/ceftests/views/window_unittest.cc
+index 97b7769b2d36e1671fbe4b468c64a540f3657224..e1dcf167d01ea98b8466b86f56cd026af2abef91 100644
+--- a/tests/ceftests/views/window_unittest.cc
++++ b/tests/ceftests/views/window_unittest.cc
+@@ -4,6 +4,7 @@
+
+ #include "include/base/cef_callback.h"
+ #include "include/views/cef_box_layout.h"
++#include "include/views/cef_label_button.h"
+ #include "include/views/cef_layout.h"
+ #include "include/views/cef_panel.h"
+ #include "include/wrapper/cef_closure_task.h"
+@@ -47,6 +48,95 @@ void WindowCreateImpl(CefRefPtr<CefWaitableEvent> event) {
+   TestWindowDelegate::RunTest(event, std::move(config));
+ }
+
++#if defined(OS_WIN)
++class CaptionButtonPressDelegate : public CefButtonDelegate {
++ public:
++  void OnButtonPressed(CefRefPtr<CefButton> button) override { ++presses; }
++  int presses = 0;
++
++ private:
++  IMPLEMENT_REFCOUNTING(CaptionButtonPressDelegate);
++};
++#endif
++
++void RunWindowCaptionButtonRegions(CefRefPtr<CefWindow> window) {
++  const CefRect minimize(0, 0, 60, 40);
++  const CefRect maximize(60, 0, 60, 40);
++  const CefRect close(120, 0, 60, 40);
++#if defined(OS_WIN)
++  window->Show();
++  window->Layout();
++  EXPECT_TRUE(window->SetCaptionButtonRegions(minimize, maximize, close));
++  const auto hwnd = window->GetWindowHandle();
++  const auto hit_test = [hwnd](int x, int y) {
++    const int dpi = GetDpiForWindow(hwnd);
++    POINT point{MulDiv(x, dpi, 96), MulDiv(y, dpi, 96)};
++    ClientToScreen(hwnd, &point);
++    return SendMessage(hwnd, WM_NCHITTEST, 0, MAKELPARAM(point.x, point.y));
++  };
++  std::vector<CefDraggableRegion> drag(1);
++  drag[0].bounds = CefRect(0, 0, 240, 40);
++  drag[0].draggable = true;
++  window->SetDraggableRegions(drag);
++  EXPECT_EQ(HTMINBUTTON, hit_test(30, 20));
++  EXPECT_EQ(HTMAXBUTTON, hit_test(90, 20));
++  EXPECT_EQ(HTCLOSE, hit_test(150, 20));
++  EXPECT_EQ(HTCAPTION, hit_test(210, 20));
++  EXPECT_EQ(HTTOPLEFT, hit_test(1, 1));
++  EXPECT_FALSE(window->SetCaptionButtonRegions(minimize, minimize, close));
++  EXPECT_FALSE(
++      window->SetCaptionButtonRegions(CefRect(0, 0, -1, 20), maximize, close));
++  EXPECT_FALSE(window->SetCaptionButtonRegions(CefRect(INT32_MAX, 0, 1, 20),
++                                               maximize, close));
++  EXPECT_EQ(HTMAXBUTTON, hit_test(90, 20));
++  CefRefPtr<CaptionButtonPressDelegate> pressed =
++      new CaptionButtonPressDelegate;
++  auto button = CefLabelButton::CreateLabelButton(pressed, "Maximize");
++  window->AddChildView(button);
++  button->SetBounds(maximize);
++  POINT client_point{MulDiv(90, GetDpiForWindow(hwnd), 96),
++                     MulDiv(20, GetDpiForWindow(hwnd), 96)};
++  POINT screen_point = client_point;
++  ClientToScreen(hwnd, &screen_point);
++  const auto screen_coords = MAKELPARAM(screen_point.x, screen_point.y);
++  SendMessage(hwnd, WM_NCMOUSEMOVE, HTMAXBUTTON, screen_coords);
++  EXPECT_EQ(CEF_BUTTON_STATE_HOVERED, button->GetState());
++  SendMessage(hwnd, WM_NCLBUTTONDOWN, HTMAXBUTTON, screen_coords);
++  SendMessage(hwnd, WM_LBUTTONUP, 0,
++              MAKELPARAM(client_point.x, client_point.y));
++  EXPECT_EQ(1, pressed->presses);
++  SendMessage(hwnd, WM_NCLBUTTONDOWN, HTMAXBUTTON, screen_coords);
++  const auto outside_coords =
++      MAKELPARAM(MulDiv(210, GetDpiForWindow(hwnd), 96), client_point.y);
++  SendMessage(hwnd, WM_MOUSEMOVE, MK_LBUTTON, outside_coords);
++  SendMessage(hwnd, WM_LBUTTONUP, 0, outside_coords);
++  EXPECT_EQ(1, pressed->presses);
++  SendMessage(hwnd, WM_NCMOUSEMOVE, HTMAXBUTTON, screen_coords);
++  EXPECT_EQ(CEF_BUTTON_STATE_HOVERED, button->GetState());
++  window->RemoveChildView(button);
++  EXPECT_TRUE(window->SetCaptionButtonRegions(CefRect(), CefRect(), CefRect()));
++  EXPECT_EQ(HTCAPTION, hit_test(90, 20));
++#else
++  EXPECT_FALSE(window->SetCaptionButtonRegions(minimize, maximize, close));
++#endif
++}
++
++void WindowCaptionButtonRegionsImpl(CefRefPtr<CefWaitableEvent> event) {
++  auto config = std::make_unique<TestWindowDelegate::Config>();
++  config->frameless = true;
++  config->on_window_created = base::BindOnce(RunWindowCaptionButtonRegions);
++  TestWindowDelegate::RunTest(event, std::move(config));
++}
++
++void WindowCaptionButtonRegionsFramedImpl(CefRefPtr<CefWaitableEvent> event) {
++  auto config = std::make_unique<TestWindowDelegate::Config>();
++  config->on_window_created = base::BindOnce([](CefRefPtr<CefWindow> window) {
++    EXPECT_FALSE(window->SetCaptionButtonRegions(CefRect(20, 10, 40, 30),
++                                                 CefRect(), CefRect()));
++  });
++  TestWindowDelegate::RunTest(event, std::move(config));
++}
++
+ void WindowCreateFramelessImpl(CefRefPtr<CefWaitableEvent> event) {
+   auto config = std::make_unique<TestWindowDelegate::Config>();
+   config->frameless = true;
+@@ -592,6 +682,8 @@ void WindowAcceleratorImpl(CefRefPtr<CefWaitableEvent> event) {
+ // we presume that Chromium is testing).
+ WINDOW_TEST_ASYNC(WindowCreate)
+ WINDOW_TEST_ASYNC(WindowCreateFrameless)
++WINDOW_TEST_ASYNC(WindowCaptionButtonRegions)
++WINDOW_TEST_ASYNC(WindowCaptionButtonRegionsFramed)
+ WINDOW_TEST_ASYNC(WindowCreateWithOrigin)
+ WINDOW_TEST_ASYNC(WindowCreateMinimized)
+ WINDOW_TEST_ASYNC(WindowCreateMaximized)

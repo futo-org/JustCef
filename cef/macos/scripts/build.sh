@@ -31,7 +31,9 @@ CEF_BRANCH=$(tr -d '\r\n' < "${REPO_ROOT}/cef.branch")
 WORK_ROOT="${WORK_ROOT:-$HOME/code}"
 DOWNLOAD_DIR="${DOWNLOAD_DIR:-${WORK_ROOT}/chromium_git}"
 DEPOT_TOOLS_DIR="${DEPOT_TOOLS_DIR:-${WORK_ROOT}/depot_tools}"
-CEF_CHECKOUT_RAW="${CEF_CHECKOUT:-}"
+CEF_OUTPUT_DIR="${CEF_OUTPUT_DIR:-${REPO_ROOT}/artifacts}"
+CEF_VERSION=$(tr -d '\r\n' < "${REPO_ROOT}/cef.version")
+CEF_CHECKOUT_RAW="${CEF_CHECKOUT:-${CEF_VERSION}}"
 CEF_CHECKOUT=""
 CHECKOUT_ARG=""
 PYTHON="$(resolve_python)"
@@ -109,10 +111,17 @@ run_build() {
     --minimal-distrib-only \
     --force-clean \
     --force-build \
+    --force-distrib \
     --with-pgo-profiles \
     --no-debug-build \
     ${CHECKOUT_ARG:+${CHECKOUT_ARG}} \
     "${arch_arg}"
+
+  "${PYTHON}" "${REPO_ROOT}/automate/copy_distrib.py" \
+    --download-dir="${DOWNLOAD_DIR}" \
+    --output-dir="${CEF_OUTPUT_DIR}" \
+    --platform=macos \
+    --arch="${arch}"
 }
 
 build_x64=0

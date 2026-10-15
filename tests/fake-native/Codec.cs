@@ -41,6 +41,8 @@ public sealed class ControllerRequest
     public ReadOnlyMemory<byte> Data;
     public readonly List<(string? Name, string? Pattern)> Filters = new();
     public WindowCreateArgs? Create;
+    public List<(int X, int Y, int Width, int Height, bool Draggable)>? DraggableRegions;
+    public List<(int X, int Y, int Width, int Height, byte Role)> CaptionButtonRegions = new();
 }
 
 public sealed class ControllerNotificationData
@@ -93,7 +95,7 @@ public static class Codec
 
     public static bool IsBrowserTargeted(ControllerOp op) => op switch
     {
-        ControllerOp.Ping or ControllerOp.Print or ControllerOp.Echo or ControllerOp.WindowCreate or ControllerOp.Debug => false,
+        ControllerOp.Ping or ControllerOp.Print or ControllerOp.Echo or ControllerOp.WindowCreate or ControllerOp.Debug or ControllerOp.GetRuntimeInfo => false,
         _ => true
     };
 
@@ -109,6 +111,7 @@ public static class Codec
         switch (op)
         {
             case ControllerOp.Ping:
+            case ControllerOp.GetRuntimeInfo:
                 break;
             case ControllerOp.Print:
             case ControllerOp.Echo:
@@ -146,6 +149,44 @@ public static class Codec
             case ControllerOp.WindowSetSize:
                 req.X = r.I32();
                 req.Y = r.I32();
+                break;
+            case ControllerOp.WindowSetCaptionButtonRegions:
+            {
+                var count = r.Count(17, "caption button region");
+                if (count > 3) throw new ProtocolException("too many caption button regions");
+                byte seen = 0;
+                for (var i = 0; i < count; i++)
+                {
+                    var x = r.I32(); var y = r.I32(); var w = r.I32(); var h = r.I32(); var role = r.U8();
+                    if (role < 1 || role > 3 || (seen & (1 << role)) != 0 || w <= 0 || h <= 0 || (long)x + w > int.MaxValue || (long)y + h > int.MaxValue)
+                        throw new ProtocolException("invalid caption button region");
+                    foreach (var other in req.CaptionButtonRegions)
+                        if (x < (long)other.X + other.Width && other.X < (long)x + w && y < (long)other.Y + other.Height && other.Y < (long)y + h)
+                            throw new ProtocolException("overlapping caption button regions");
+                    seen |= (byte)(1 << role);
+                    req.CaptionButtonRegions.Add((x, y, w, h, role));
+                }
+                break;
+            }
+            case ControllerOp.WindowSetDraggableRegions:
+                if (r.Bool())
+                {
+                    var count = r.Count(17, "draggable region");
+                    if (count > 4096)
+                        throw new ProtocolException("too many draggable regions");
+                    req.DraggableRegions = new();
+                    for (var i = 0; i < count; i++)
+                    {
+                        var x = r.I32();
+                        var y = r.I32();
+                        var width = r.I32();
+                        var height = r.I32();
+                        var draggable = r.Bool();
+                        if (width <= 0 || height <= 0 || (long)x + width > int.MaxValue || (long)y + height > int.MaxValue)
+                            throw new ProtocolException("invalid draggable region bounds");
+                        req.DraggableRegions.Add((x, y, width, height, draggable));
+                    }
+                }
                 break;
             case ControllerOp.WindowSetModifyRequests:
                 req.Flags = r.U8();

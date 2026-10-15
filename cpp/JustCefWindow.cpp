@@ -698,6 +698,16 @@ asio::awaitable<void> JustCefWindow::SetSizeAsync(int width, int height)
     return CallProcess(command_target_, &WindowCommandTarget::WindowSetSizeAsync, Identifier(), width, height);
 }
 
+asio::awaitable<void> JustCefWindow::SetDraggableRegionsAsync(std::optional<std::vector<DraggableRegion>> regions)
+{
+    return CallProcess(command_target_, &WindowCommandTarget::WindowSetDraggableRegionsAsync, Identifier(), std::move(regions));
+}
+
+asio::awaitable<void> JustCefWindow::SetCaptionButtonRegionsAsync(std::vector<CaptionButtonRegion> regions)
+{
+    return CallProcess(command_target_, &WindowCommandTarget::WindowSetCaptionButtonRegionsAsync, Identifier(), std::move(regions));
+}
+
 asio::awaitable<Size> JustCefWindow::GetSizeAsync()
 {
     return CallProcess(command_target_, &WindowCommandTarget::WindowGetSizeAsync, Identifier());

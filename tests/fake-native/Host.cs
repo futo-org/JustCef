@@ -17,6 +17,9 @@ public sealed class BrowserState
     public int Width = 800;
     public int Height = 600;
     public double Zoom;
+    public bool Frameless;
+    public JsonArray? DraggableRegions;
+    public JsonArray CaptionButtonRegions = new();
 }
 
 public sealed class Behavior
@@ -25,6 +28,7 @@ public sealed class Behavior
     public string? Message;
     public Status Status = Status.Error;
     public int? PayloadSize;
+    public byte[]? RuntimeInfo;
     public int DelayMs;
     public JsonArray? AfterReply;
     public JsonNode? Tag;
@@ -363,6 +367,12 @@ public sealed class Host
         {
             case ControllerOp.Ping:
                 return Result.Ok();
+            case ControllerOp.GetRuntimeInfo:
+            {
+                var data = _behaviors.TryGetValue((byte)ControllerOp.GetRuntimeInfo, out var configured)
+                    && configured.RuntimeInfo != null ? configured.RuntimeInfo : new byte[] { 3, 0 };
+                return Result.Ok(b => b.Raw(data), data.Length);
+            }
             case ControllerOp.Print:
             {
                 var text = Encoding.UTF8.GetString(req.Data.Span);
@@ -390,6 +400,7 @@ public sealed class Host
             {
                 var url = req.Text;
                 browser.Url = url;
+                browser.CaptionButtonRegions = new JsonArray();
                 var result = Result.Ok();
                 result.FollowUp = () => SendLoadSequence(id, url);
                 return result;
@@ -423,6 +434,18 @@ public sealed class Host
             case ControllerOp.WindowSetTitle:
                 window.Title = req.Text;
                 return Result.Ok();
+            case ControllerOp.WindowSetCaptionButtonRegions:
+                if (browser.ParentId != 0 || !browser.Frameless)
+                    return Result.Fail(Status.Unsupported, "Caption regions require a frameless Views window.");
+                browser.CaptionButtonRegions = new JsonArray(req.CaptionButtonRegions
+                    .Select(r => (JsonNode)new JsonArray(r.X, r.Y, r.Width, r.Height, (int)r.Role)).ToArray());
+                return Result.Ok();
+            case ControllerOp.WindowSetDraggableRegions:
+                if (browser.ParentId != 0 || !browser.Frameless)
+                    return Result.Fail(Status.Unsupported, "Draggable regions require a frameless Views window.");
+                browser.DraggableRegions = req.DraggableRegions == null ? null : new JsonArray(
+                    req.DraggableRegions.Select(r => (JsonNode)new JsonArray(r.X, r.Y, r.Width, r.Height, r.Draggable)).ToArray());
+                return Result.Ok();
             case ControllerOp.WindowClose:
             {
                 var result = Result.Ok();
@@ -454,7 +477,7 @@ public sealed class Host
         var id = _nextBrowserId++;
         while (_browsers.ContainsKey(id))
             id = _nextBrowserId++;
-        _browsers[id] = new BrowserState { Id = id, Url = args.Url, Title = args.Title };
+        _browsers[id] = new BrowserState { Id = id, Url = args.Url, Title = args.Title, Frameless = args.Frameless };
         var url = args.Url;
         var result = Result.Ok(b => b.I32(id), 4);
         result.NewBrowserId = id;
@@ -983,6 +1006,7 @@ public sealed class Host
             Kind = kind,
             Message = Json.Str(o, "message"),
             PayloadSize = o["payloadSize"] == null ? null : Json.Int(o, "payloadSize", 0),
+            RuntimeInfo = (o["runtimeInfo"] as JsonArray)?.Select(value => value!.GetValue<byte>()).ToArray(),
             DelayMs = Json.Int(o, "delayMs", 0),
             AfterReply = o["afterReply"]?.DeepClone() as JsonArray,
             Tag = tag?.DeepClone()
@@ -1258,6 +1282,8 @@ public sealed class Host
                 ["id"] = b.Id,
                 ["parentId"] = b.ParentId,
                 ["url"] = b.Url,
+                ["draggableRegions"] = b.DraggableRegions?.DeepClone(),
+                ["captionButtonRegions"] = b.CaptionButtonRegions.DeepClone(),
                 ["closed"] = b.Closed
             });
         }

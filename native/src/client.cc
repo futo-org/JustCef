@@ -486,6 +486,8 @@ void Client::OnLoadEnd(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame,
 
 void Client::OnLoadStart(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, TransitionType transition_type)
 {
+    if (frame && frame->IsMain())
+        ClearCssDraggableRegions(browser);
     IPC::Singleton.NotifyWindowFrameLoadStart(browser, frame);
 }
 
@@ -1585,6 +1587,7 @@ void Client::OnRenderProcessTerminated(CefRefPtr<CefBrowser> browser, Terminatio
 
     if (IsPrimaryBrowser(browser))
     {
+        ClearCssDraggableRegions(browser);
         FailAllBridgeRpcCalls("Bridge RPC failed because the render process terminated.");
         CancelHostCalls();
     }
@@ -1624,7 +1627,102 @@ void Client::OnFrameDetached(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> 
 void Client::OnMainFrameChanged(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> old_frame, CefRefPtr<CefFrame> new_frame)
 {
     if (old_frame)
+    {
+        ClearCssDraggableRegions(browser);
         justcef_view::OnHostFrameGone(browser, old_frame);
+    }
+}
+
+void Client::OnDraggableRegionsChanged(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, const std::vector<CefDraggableRegion>& regions)
+{
+    CEF_REQUIRE_UI_THREAD();
+    if (!_manageNativeWindow || !IsPrimaryBrowser(browser) || !settings.frameless || !frame || !frame->IsMain())
+        return;
+
+    _cssDraggableRegions = regions;
+    ApplyDraggableRegions(browser);
+}
+
+ipc::StatusCode Client::SetDraggableRegions(CefRefPtr<CefBrowser> browser, const std::optional<std::vector<CefDraggableRegion>>& regions)
+{
+    CEF_REQUIRE_UI_THREAD();
+    auto browser_view = CefBrowserView::GetForBrowser(browser);
+    if (!_manageNativeWindow || !IsPrimaryBrowser(browser) || !settings.frameless || !browser_view || !browser_view->GetWindow())
+        return ipc::StatusCode::Unsupported;
+
+    _draggableRegionsOverride = regions;
+    ApplyDraggableRegions(browser);
+    return ipc::StatusCode::Ok;
+}
+
+ipc::StatusCode Client::SetCaptionButtonRegions(CefRefPtr<CefBrowser> browser, const std::array<CefRect, 3>& regions)
+{
+    CEF_REQUIRE_UI_THREAD();
+    const auto browser_view = CefBrowserView::GetForBrowser(browser);
+    const auto window = browser_view ? browser_view->GetWindow() : nullptr;
+    if (!_manageNativeWindow || !IsPrimaryBrowser(browser) || !settings.frameless || !window)
+        return ipc::StatusCode::Unsupported;
+#if defined(OS_WIN)
+    return window->SetCaptionButtonRegions(regions[0], regions[1], regions[2]) ? ipc::StatusCode::Ok : ipc::StatusCode::Unsupported;
+#else
+    return ipc::StatusCode::Unsupported;
+#endif
+}
+
+void Client::ClearCssDraggableRegions(CefRefPtr<CefBrowser> browser)
+{
+    CEF_REQUIRE_UI_THREAD();
+    if (!IsPrimaryBrowser(browser))
+        return;
+    _cssDraggableRegions.clear();
+#if defined(OS_WIN)
+    if (_manageNativeWindow && settings.frameless)
+    {
+        auto browser_view = CefBrowserView::GetForBrowser(browser);
+        auto window = browser_view ? browser_view->GetWindow() : nullptr;
+        if (window)
+            window->SetCaptionButtonRegions(CefRect(), CefRect(), CefRect());
+    }
+#endif
+    ApplyDraggableRegions(browser);
+}
+
+void Client::ApplyDraggableRegions(CefRefPtr<CefBrowser> browser)
+{
+    CEF_REQUIRE_UI_THREAD();
+    if (!_manageNativeWindow || !IsPrimaryBrowser(browser) || !settings.frameless)
+        return;
+    auto browser_view = CefBrowserView::GetForBrowser(browser);
+    auto window = browser_view ? browser_view->GetWindow() : nullptr;
+    if (!window)
+        return;
+
+    window->SetDraggableRegions(GetWindowDraggableRegions(browser));
+}
+
+std::vector<CefDraggableRegion> Client::GetWindowDraggableRegions(CefRefPtr<CefBrowser> browser)
+{
+    CEF_REQUIRE_UI_THREAD();
+    if (!_manageNativeWindow || !IsPrimaryBrowser(browser) || !settings.frameless)
+        return {};
+    auto browser_view = CefBrowserView::GetForBrowser(browser);
+    auto window = browser_view ? browser_view->GetWindow() : nullptr;
+    if (!window || window->IsFullscreen())
+        return {};
+
+    auto regions = _draggableRegionsOverride.value_or(_cssDraggableRegions);
+    if (!_draggableRegionsOverride)
+    {
+        for (auto& region : regions)
+        {
+            CefPoint origin(region.bounds.x, region.bounds.y);
+            if (!browser_view->ConvertPointToView(window, origin))
+                return {};
+            region.bounds.x = origin.x;
+            region.bounds.y = origin.y;
+        }
+    }
+    return regions;
 }
 
 // TODO: Implement Minimized, Maximized, Restored, KeyboardEvent, Resized, Moved
