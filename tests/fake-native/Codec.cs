@@ -34,6 +34,7 @@ public sealed class ControllerRequest
     public int? BrowserId;
     public bool Flag;
     public string? Text;
+    public List<string> DragFiles = new();
     public int X;
     public int Y;
     public double Level;
@@ -150,6 +151,20 @@ public static class Codec
                 req.X = r.I32();
                 req.Y = r.I32();
                 break;
+            case ControllerOp.WindowSetNextDragFiles:
+            {
+                var count = r.Count(4, "drag file");
+                if (count > 128) throw new ProtocolException("too many drag files");
+                for (var i = 0; i < count; i++)
+                {
+                    var path = r.Str();
+                    if (string.IsNullOrEmpty(path) || path.Contains('\0') || !Path.IsPathFullyQualified(path) ||
+                        path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).Contains("..") || System.Text.Encoding.UTF8.GetByteCount(path) > 32768)
+                        throw new ProtocolException("invalid drag file");
+                    req.DragFiles.Add(path);
+                }
+                break;
+            }
             case ControllerOp.WindowSetCaptionButtonRegions:
             {
                 var count = r.Count(17, "caption button region");

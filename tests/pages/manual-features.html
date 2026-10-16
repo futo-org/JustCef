@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>JustCef · Hands-on feature test</title>
+<style>
+  * { box-sizing: border-box; }
+  :root { color-scheme: dark; font: 14px system-ui, sans-serif; background: #131820; color: #e9eef5; }
+  body { margin: 0; }
+  header { height: 50px; padding: 0 16px; display: flex; align-items: center; gap: 12px; background: #222c3b;
+    -webkit-app-region: drag; user-select: none; }
+  header strong { flex: 1; }
+  header button { padding: 5px 12px; }
+  button, input { -webkit-app-region: no-drag; font: inherit; }
+  button { background: #31425a; color: inherit; border: 1px solid #4b617d; border-radius: 6px; padding: 8px 12px; cursor: pointer; }
+  button:hover { background: #405b7a; }
+  button:disabled { opacity: .45; cursor: default; }
+  main { max-width: 1040px; margin: auto; padding: 22px; }
+  h1 { font-size: 24px; margin: 0 0 7px; }
+  h2 { font-size: 17px; margin: 0 0 10px; }
+  p { margin: 8px 0 13px; line-height: 1.5; color: #b7c7dc; }
+  .badge { font-size: 12px; color: #8de4bd; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 20px 0 14px; }
+  section { background: #1c2532; border: 1px solid #344256; padding: 18px; border-radius: 10px; min-width: 0; }
+  .wide { grid-column: 1 / -1; }
+  .row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  #incoming { border: 1px dashed #7389a5; border-radius: 8px; padding: 18px 12px; margin-bottom: 12px; text-align: center; }
+  #incoming.over { border-color: #8de4bd; background: #203e3c; }
+  #drag { margin: 14px 0; border: 1px dashed #52637a; background: #17202c; color: #8293a9;
+    padding: 20px 12px; border-radius: 8px; text-align: center; user-select: none; }
+  #drag[draggable=true] { background: #19443d; border-color: #7ad9b2; color: #b0f4d8; cursor: grab; }
+  #paths { padding-left: 18px; font-size: 12px; overflow-wrap: anywhere; }
+  code { color: #c4dcff; overflow-wrap: anywhere; }
+  .result { font-size: 12px; line-height: 1.5; color: #8de4bd; white-space: pre-wrap; overflow-wrap: anywhere; min-height: 20px; }
+  #events { font: 12px ui-monospace, monospace; color: #b7c7dc; margin: 14px 0 0; max-height: 100px; overflow: auto; white-space: pre-wrap; }
+  @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } }
+</style>
+<header>
+  <strong>Drag this title bar to move the window</strong>
+  <span class="badge" id="style">Starting…</span>
+  <button data-command="minimize" title="Minimize">−</button>
+  <button data-command="fullscreen">Fullscreen / exit</button>
+  <button data-command="close" title="Close this test window">×</button>
+</header>
+<main>
+  <h1>CEF hands-on check</h1>
+  <p>Patched macOS ARM64 build. These checks use real files and native window behavior.</p>
+  <div class="grid">
+    <section>
+      <h2>1 · Read a real file’s path</h2>
+      <p>Drop a file from Finder below, or choose one. Its full path should appear.</p>
+      <div id="incoming">Drop files from Finder here</div>
+      <input type="file" id="picker" multiple aria-label="Choose local files">
+      <ul id="paths"></ul>
+      <div class="result" id="synthetic"></div>
+    </section>
+    <section>
+      <h2>2 · Drag real files into Finder</h2>
+      <p>Open the empty target folder, arm the two sample files, then drag the green tile into that folder.</p>
+      <div class="row">
+        <button id="folder">Open target folder</button>
+        <button id="arm">Arm sample files</button>
+      </div>
+      <div id="drag" draggable="false">Arm the files first</div>
+      <div class="row"><button id="check">Check copied files</button></div>
+      <div class="result" id="copies"></div>
+    </section>
+    <section class="wide">
+      <h2>3 · Window dragging and fullscreen</h2>
+      <p>Move the window by its title bar; buttons must stay clickable. Resize from an edge.
+        Try disabling title-bar dragging, then restore it. Fullscreen should enter and exit normally; Esc also exits.</p>
+      <div class="row">
+        <button id="disable">Disable title-bar dragging</button>
+        <button id="restore">Restore title-bar dragging</button>
+        <button id="taller">Change title-bar height</button>
+        <button id="other">Open Alloy-style test</button>
+      </div>
+      <div class="result" id="windowStatus"></div>
+    </section>
+  </div>
+  <div class="badge" id="runtime"></div>
+  <p style="font-size:12px">Windows caption-button integration and Linux Wayland behavior need their respective platforms.</p>
+  <div id="events" aria-live="polite"></div>
+</main>
+<script>
+  const $ = id => document.getElementById(id);
+  const log = message => { $('events').textContent = `${new Date().toLocaleTimeString()}  ${message}\n` + $('events').textContent; };
+  const call = (method, payload = {}) => bridge.rpc.call(method, payload);
+  const handle = async action => { try { return await action(); } catch (e) { log(`Error: ${e.message || e}`); throw e; } };
+  let armed = false;
+  function showFiles(files) {
+    $('paths').replaceChildren();
+    for (const file of files) {
+      const path = bridge.files.getPath(file);
+      const li = document.createElement('li');
+      const code = document.createElement('code');
+      code.textContent = path || '(no backing file path)';
+      li.append(code); $('paths').append(li);
+      log(`File: ${file.name} — ${path || 'null'}`);
+    }
+  }
+  $('picker').onchange = e => showFiles(e.target.files);
+  $('incoming').ondragover = e => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; $('incoming').classList.add('over'); };
+  $('incoming').ondragleave = () => $('incoming').classList.remove('over');
+  $('incoming').ondrop = e => { e.preventDefault(); $('incoming').classList.remove('over'); showFiles(e.dataTransfer.files); };
+  window.addEventListener('dragover', e => e.preventDefault());
+  window.addEventListener('drop', e => e.preventDefault());
+  $('folder').onclick = () => handle(() => call('open_target'));
+  $('arm').onclick = () => handle(async () => {
+    const result = await call('arm');
+    armed = true; $('drag').draggable = true;
+    $('drag').textContent = `Drag ${result.count} sample files into Finder →`;
+    $('copies').textContent = 'Armed for one drag. Click Arm again before each retry.';
+    log('Two real files armed for the next drag.');
+  });
+  $('drag').ondragstart = e => {
+    if (!armed) { e.preventDefault(); return; }
+    e.dataTransfer.effectAllowed = 'copy';
+    e.dataTransfer.setData('text/plain', 'JustCef native file drag');
+    log('Native file drag started.');
+  };
+  $('drag').ondragend = e => {
+    armed = false; $('drag').draggable = false; $('drag').textContent = 'Drag ended — arm again to retry';
+    log(`Drag ended (${e.dataTransfer.dropEffect}). Use Check copied files to verify Finder received them.`);
+  };
+  $('check').onclick = () => handle(async () => {
+    const result = await call('check_copies');
+    $('copies').textContent = result.ok ? 'PASS — both files arrived with the correct contents.' : `Found ${result.count}/2 correct files. Arm and drag the tile into the target folder.`;
+    log($('copies').textContent);
+  });
+  $('disable').onclick = () => handle(async () => { await call('drag_off'); $('windowStatus').textContent = 'Dragging disabled. The title bar should no longer move the window.'; });
+  $('restore').onclick = () => handle(async () => { await call('drag_css'); $('windowStatus').textContent = 'CSS title-bar dragging restored.'; });
+  $('taller').onclick = () => { const h = document.querySelector('header'); h.style.height = h.style.height === '76px' ? '50px' : '76px'; log('Title-bar height changed. Try dragging near its bottom edge.'); };
+  $('other').onclick = () => handle(() => call('other_style'));
+  for (const b of document.querySelectorAll('[data-command]')) b.onclick = () => handle(() => call(b.dataset.command));
+  window.addEventListener('keydown', e => { if (e.key === 'Escape') handle(() => call('exit_fullscreen')); });
+  (async () => {
+    try {
+      const info = await call('info');
+      $('style').textContent = info.style;
+      $('runtime').textContent = `CEF ${info.version} · macOS · Linux backend: not applicable`;
+      $('other').textContent = `Open ${info.style === 'Chrome' ? 'Alloy' : 'Chrome'}-style test`;
+      const synthetic = bridge.files.getPath(new File(['test'], 'synthetic.txt'));
+      $('synthetic').textContent = synthetic === null ? 'PASS — a script-created File has no native path.' : `Unexpected synthetic path: ${synthetic}`;
+      log('Ready. Start with section 1, then drag sample files into Finder.');
+      globalThis.manualReady = true;
+    } catch (e) { log(`Startup failed: ${e.message || e}`); }
+  })();
+</script>
+</html>

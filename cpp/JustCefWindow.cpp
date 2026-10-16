@@ -698,6 +698,11 @@ asio::awaitable<void> JustCefWindow::SetSizeAsync(int width, int height)
     return CallProcess(command_target_, &WindowCommandTarget::WindowSetSizeAsync, Identifier(), width, height);
 }
 
+asio::awaitable<void> JustCefWindow::SetNextDragFilesAsync(std::vector<std::string> paths)
+{
+    return CallProcess(command_target_, &WindowCommandTarget::WindowSetNextDragFilesAsync, Identifier(), std::move(paths));
+}
+
 asio::awaitable<void> JustCefWindow::SetDraggableRegionsAsync(std::optional<std::vector<DraggableRegion>> regions)
 {
     return CallProcess(command_target_, &WindowCommandTarget::WindowSetDraggableRegionsAsync, Identifier(), std::move(regions));

@@ -21,6 +21,7 @@
 #include "include/wrapper/cef_stream_resource_handler.h"
 
 #include <future>
+#include <filesystem>
 #include <include/cef_app.h>
 #include <iomanip>
 #include <iostream>
@@ -122,6 +123,7 @@ bool IsBrowserRequest(OpcodeController opcode)
     case OpcodeController::WindowBridgeRpc:
     case OpcodeController::WindowSetDraggableRegions:
     case OpcodeController::WindowSetCaptionButtonRegions:
+    case OpcodeController::WindowSetNextDragFiles:
         return true;
     default:
         return false;
@@ -511,6 +513,9 @@ bool IPC::HandleRequest(ipc::Reply& reply, OpcodeController opcode, PacketReader
         return true;
     case OpcodeController::WindowSetSize:
         status = HandleWindowSetSize(reader, writer);
+        return true;
+    case OpcodeController::WindowSetNextDragFiles:
+        status = HandleWindowSetNextDragFiles(reader, writer);
         return true;
     case OpcodeController::WindowSetCaptionButtonRegions:
         status = HandleWindowSetCaptionButtonRegions(reader, writer);
@@ -1273,7 +1278,10 @@ public:
     {
         auto browser = browser_view_ ? browser_view_->GetBrowser() : nullptr;
         if (browser)
-            static_cast<Client*>(browser->GetHost()->GetClient().get())->ApplyDraggableRegions(browser);
+        {
+            auto* client = static_cast<Client*>(browser->GetHost()->GetClient().get());
+            client->OnNativeFullscreenTransition(browser, is_completed);
+        }
     }
 
     void OnWindowDestroyed(CefRefPtr<CefWindow> window) override
@@ -2700,6 +2708,38 @@ ipc::StatusCode HandleWindowSetCaptionButtonRegions(PacketReader& reader, Packet
     return client->SetCaptionButtonRegions(browser, regions);
 }
 
+ipc::StatusCode HandleWindowSetNextDragFiles(PacketReader& reader, PacketWriter& writer)
+{
+    CEF_REQUIRE_UI_THREAD();
+    const auto identifier = reader.read<int32_t>();
+    const auto count = reader.read<uint32_t>();
+    if (!identifier || !count || *count > 128)
+        return ipc::StatusCode::InvalidRequest;
+    std::vector<CefString> paths;
+    for (uint32_t i = 0; i < *count; ++i)
+    {
+        auto path = ReadBytesAsString(reader);
+        if (!path || path->empty() || path->size() > 32768 || path->find('\0') != std::string::npos)
+            return ipc::StatusCode::InvalidRequest;
+        if (CefString(*path).ToString() != *path)
+            return ipc::StatusCode::InvalidRequest;
+        const auto file = std::filesystem::path(std::u8string(path->begin(), path->end()));
+        std::error_code error;
+        if (!file.is_absolute() || !std::filesystem::is_regular_file(file, error))
+            return ipc::StatusCode::InvalidRequest;
+        for (const auto& component : file)
+            if (component == "..")
+                return ipc::StatusCode::InvalidRequest;
+        paths.emplace_back(*path);
+    }
+    if (reader.remainingSize() != 0)
+        return ipc::StatusCode::InvalidRequest;
+    auto browser = ClientManager::GetInstance()->AcquirePointer(*identifier);
+    if (!browser)
+        return ipc::StatusCode::NotFound;
+    return static_cast<Client*>(browser->GetHost()->GetClient().get())->SetNextDragFiles(browser, std::move(paths));
+}
+
 ipc::StatusCode HandleWindowSetDraggableRegions(PacketReader& reader, PacketWriter& writer)
 {
     CEF_REQUIRE_UI_THREAD();
@@ -2905,10 +2945,47 @@ void IPC::HandleDebug(ipc::Reply reply, PacketReader& reader)
         return;
     }
 
-    if (*action == 3)
+    if (*action == 5)
+    {
+        const auto kind = reader.read<uint8_t>();
+        const auto x = reader.read<int32_t>();
+        const auto y = reader.read<int32_t>();
+        if (!kind || *kind > 3 || !x || !y || reader.remainingSize() != 0)
+        {
+            reply.Fail(ipc::StatusCode::InvalidRequest, "Malformed mouse debug request.");
+            return;
+        }
+        CefPostTask(TID_UI, base::BindOnce(
+            [](uint32_t identifier, uint8_t kind, int32_t x, int32_t y, ipc::Reply reply)
+            {
+                auto browser = ClientManager::GetInstance()->AcquirePointer(static_cast<int>(identifier));
+                if (!browser)
+                {
+                    reply.Fail(ipc::StatusCode::NotFound, "Browser not found.");
+                    return;
+                }
+                auto host = browser->GetHost();
+                CefMouseEvent event;
+                event.x = x;
+                event.y = y;
+                event.modifiers = (kind == 1 || kind == 2) ? EVENTFLAG_LEFT_MOUSE_BUTTON : 0;
+#if defined(OS_MAC)
+                if (kind == 3)
+                    shared::PlatformPostDebugMouseUp(browser, x, y);
+#endif
+                if (kind == 1 || kind == 3)
+                    host->SendMouseClickEvent(event, MBT_LEFT, kind == 3, 1);
+                else
+                    host->SendMouseMoveEvent(event, false);
+                reply.Ok();
+            }, *value, *kind, *x, *y, std::move(reply)));
+        return;
+    }
+
+    if (*action == 3 || *action == 4)
     {
         CefPostTask(TID_UI, base::BindOnce(
-                                [](uint32_t identifier, ipc::Reply reply)
+                                [](uint8_t action, uint32_t identifier, ipc::Reply reply)
                                 {
                                     auto browser = ClientManager::GetInstance()->AcquirePointer(static_cast<int>(identifier));
                                     if (!browser)
@@ -2917,6 +2994,19 @@ void IPC::HandleDebug(ipc::Reply reply, PacketReader& reader)
                                         return;
                                     }
                                     auto* client = static_cast<Client*>(browser->GetHost()->GetClient().get());
+                                    if (action == 4)
+                                    {
+                                        auto view = CefBrowserView::GetForBrowser(browser);
+                                        auto window = view ? view->GetWindow() : nullptr;
+                                        PacketWriter writer;
+                                        writer.write<bool>(window && window->IsFullscreen());
+                                        writer.write<bool>(shared::PlatformGetFullscreen(browser));
+                                        writer.write<bool>(client->IsFullscreenTransitioning());
+                                        writer.write<uint32_t>(client->FullscreenTransitions());
+                                        writer.write<uint32_t>(static_cast<uint32_t>(client->PendingDragFileCount()));
+                                        reply.Ok(writer.data(), writer.size());
+                                        return;
+                                    }
                                     const auto regions = client->GetWindowDraggableRegions(browser);
                                     PacketWriter writer;
                                     writer.write<uint32_t>(static_cast<uint32_t>(regions.size()));
@@ -2930,7 +3020,7 @@ void IPC::HandleDebug(ipc::Reply reply, PacketReader& reader)
                                     }
                                     reply.Ok(writer.data(), writer.size());
                                 },
-                                *value, std::move(reply)));
+                                *action, *value, std::move(reply)));
         return;
     }
 

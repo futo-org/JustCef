@@ -14,6 +14,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <limits>
 #include <map>
 #include <mutex>
@@ -1244,6 +1245,26 @@ public:
         writer.Write<std::int32_t>(width);
         writer.Write<std::int32_t>(height);
         co_await AsyncVoidCall(detail::OpcodeController::WindowSetSize, std::move(writer));
+    }
+
+    asio::awaitable<void> WindowSetNextDragFilesAsync(int identifier, std::vector<std::string> paths)
+    {
+        if (paths.size() > 128)
+            throw std::invalid_argument("At most 128 drag files are supported.");
+        detail::PacketWriter writer;
+        writer.Write<std::int32_t>(identifier);
+        writer.Write<std::uint32_t>(static_cast<std::uint32_t>(paths.size()));
+        for (const auto& path : paths)
+        {
+            auto file = std::filesystem::path(std::u8string(path.begin(), path.end()));
+            if (path.empty() || path.size() > 32768 || path.find('\0') != std::string::npos || !file.is_absolute())
+                throw std::invalid_argument("Drag files must be absolute paths without NUL characters.");
+            for (const auto& component : file)
+                if (component == "..")
+                    throw std::invalid_argument("Drag files must not contain parent traversal.");
+            writer.WriteSizePrefixedString(path);
+        }
+        co_await AsyncVoidCall(detail::OpcodeController::WindowSetNextDragFiles, std::move(writer));
     }
 
     asio::awaitable<void> WindowSetDraggableRegionsAsync(int identifier, std::optional<std::vector<DraggableRegion>> regions)

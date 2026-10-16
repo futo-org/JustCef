@@ -4,6 +4,9 @@ import sys
 import threading
 import time
 import traceback
+import tempfile
+import subprocess
+import unicodedata
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from jcipc import *
@@ -43,8 +46,8 @@ def devtools_eval(ctl, wid, expression):
     return result.get("result", {}).get("value")
 
 
-def open_app(**kw):
-    ctl = Ctl()
+def open_app(native_args=None, **kw):
+    ctl = Ctl(native_args)
     check(ctl.wait_note("Ready").u32() == 2, "protocol version")
     streams = {}
     counter = [100]
@@ -248,6 +251,23 @@ def wait_drag_regions(ctl, wid, predicate):
     raise AssertionError("unexpected drag regions: %r" % (regions,))
 
 
+def window_state(ctl, wid):
+    status, payload = ctl.result(ctl.call(C["Debug"], W().u8(4).u32(wid).b))
+    check(status == OK, "window state inspection")
+    r = Rd(payload)
+    return dict(fullscreen=r.b1(), native_fullscreen=r.b1(), transitioning=r.b1(), transitions=r.u32(), drag_files=r.u32())
+
+
+def wait_fullscreen(ctl, wid, target, previous):
+    deadline = time.time() + 15
+    while time.time() < deadline:
+        state = window_state(ctl, wid)
+        if state["fullscreen"] == target and not state["transitioning"] and state["transitions"] > previous:
+            return
+        time.sleep(0.05)
+    raise AssertionError("fullscreen transition did not complete: %r" % state)
+
+
 def test_runtime_info():
     ctl = Ctl()
     ctl.wait_note("Ready")
@@ -262,6 +282,128 @@ def test_runtime_info():
         check(payload[1] == {"unknown": 0, "x11": 1, "wayland": 2}[expected], "active Linux backend")
     check(ctl.result(ctl.call(C["GetRuntimeInfo"], b"\0"))[0] == 8, "runtime info rejects request payload")
     shutdown(ctl)
+
+
+def test_file_paths():
+
+    ctl, wid, _ = open_app()
+    try:
+        check(evaljs(ctl, wid, "[new File(['x'], 'synthetic.txt'), new Blob(['x']), {}, [], null, undefined, 'x', 1, true].map(v => bridge.files.getPath(v))") == [None] * 9,
+              "values without backing files return null")
+        check(evaljs(ctl, wid, "[[], [1, 2]].every(args => { try { bridge.files.getPath(...args); return false; } catch (e) { return e.message.includes('exactly one argument'); } })"),
+              "file path argument validation")
+        with tempfile.TemporaryDirectory(prefix="justcef-file-path-") as directory:
+            path = os.path.join(directory, "spaced café 文件.txt")
+            with open(path, "w", encoding="utf-8") as output:
+                output.write("backed file contents")
+            evaljs(ctl, wid, "document.body.innerHTML = '<input id=files type=file multiple>'")
+
+            def cdp(method, params):
+                status, payload = ctl.result(ctl.call(C["ExecuteDevTools"], W().i32(wid).s(method).b1(True).by(json.dumps(params).encode()).b))
+                reader = Rd(payload)
+                check(status == OK and reader.b1(), "CDP " + method)
+                return json.loads(reader.by())
+
+            root = cdp("DOM.getDocument", {})["root"]["nodeId"]
+            node = cdp("DOM.querySelector", {"nodeId": root, "selector": "#files"})["nodeId"]
+            cdp("DOM.setFileInputFiles", {"nodeId": node, "files": [path]})
+            check(evaljs(ctl, wid, "bridge.files.getPath(document.querySelector('#files').files[0])") == path,
+                  "backing file path survives browser/renderer IPC, including Unicode and spaces")
+            check(evaljs(ctl, wid, "document.querySelector('#files').files[0].text()") == "backed file contents",
+                  "selected file is readable")
+        shutdown(ctl)
+    finally:
+        ctl.close()
+
+
+def test_native_file_drag():
+    with tempfile.TemporaryDirectory(prefix="justcef-native-drag-") as directory:
+        paths = [os.path.join(directory, name) for name in ("spaced café 文件.txt", "second.txt")]
+        for path in paths:
+            with open(path, "w") as output:
+                output.write("native file drag")
+        pasteboard = None
+        if sys.platform == "darwin":
+            pasteboard = os.path.join(directory, "read-drag-pasteboard")
+            subprocess.run(["xcrun", "swiftc", os.path.join(os.path.dirname(__file__), "macos-drag-pasteboard.swift"), "-o", pasteboard], check=True, capture_output=True)
+        for style, embedded in (([], False), (["--use-alloy-style"], False), ([], True), (["--use-alloy-style"], True)):
+            ctl, wid, _ = open_app(native_args=style, views=embedded)
+            try:
+                def arm(files):
+                    body = W().i32(wid).u32(len(files))
+                    for path in files:
+                        body.s(path)
+                    return ctl.result(ctl.call(C["SetNextDragFiles"], body.b))[0]
+
+                check(arm(paths) == OK, "arm next native file drag")
+                invalid = [W().i32(wid).u32(129).b, W().i32(wid).u32(1).b,
+                           W().i32(wid).u32(0).u8(0).b, W().i32(wid).u32(1).u32(1).u8(255).b]
+                for path in ("", "relative.txt", paths[0] + "missing", directory, paths[0] + "\0", os.path.join(directory, "..", "file.txt")):
+                    invalid.append(W().i32(wid).u32(1).s(path).b)
+                for body in invalid:
+                    check(ctl.result(ctl.call(C["SetNextDragFiles"], body))[0] == 8, "invalid drag file request")
+                    check(window_state(ctl, wid)["drag_files"] == 2, "invalid requests preserve pending files")
+                check(ctl.result(ctl.call(C["SetNextDragFiles"], W().i32(2147483647).u32(0).b))[0] == NOTFOUND, "missing drag browser")
+                check(arm([]) == OK and window_state(ctl, wid)["drag_files"] == 0, "explicitly clear pending files")
+                check(arm(paths) == OK, "rearm")
+                ctl.result(ctl.call(C["LoadUrl"], W().i32(wid).s("http://app.test/next").b))
+                ctl.wait_note("LoadingState", lambda r: r.i32() == wid and not r.b1())
+                check(window_state(ctl, wid)["drag_files"] == 0, "navigation clears file authority")
+                if embedded:
+                    ctl.handlers[R["ViewCreated"]] = lambda r: (OK, W().b1(True).b)
+                    wid = devtools_eval(ctl, wid, """new Promise((resolve, reject) => {
+                      const v=document.createElement('justcef-view');
+                      v.style.cssText='display:block;width:400px;height:200px';
+                      v.addEventListener('viewcreated',()=>resolve(v.viewId),{once:true});
+                      setTimeout(()=>reject('embedded drag browser not created'),10000);
+                      v.setAttribute('src','about:blank'); document.body.append(v);
+                    })""")
+                    devtools_eval(ctl, wid, "new Promise(resolve => document.readyState === 'complete' ? resolve() : addEventListener('load',resolve,{once:true}))")
+                devtools_eval(ctl, wid, "document.body.innerHTML = '<div id=drag draggable=true style=\"width:300px;height:100px;background:red\">drag</div>'; document.querySelector('#drag').ondragstart = e => e.dataTransfer.setData('text/plain','fallback'); globalThis.dragEnds=0; document.querySelector('#drag').ondragend=()=>dragEnds++; true")
+                devtools_eval(ctl, wid, "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
+                check(arm(paths) == OK, "arm drag after page layout")
+
+                def mouse(kind, x, y):
+                    check(ctl.result(ctl.call(C["Debug"], W().u8(5).u32(wid).u8(kind).i32(x).i32(y).b))[0] == OK, "CEF mouse event")
+
+                mouse(0, 60, 40)
+                mouse(1, 60, 40)
+                mouse(2, 100, 60)
+                deadline = time.time() + 10
+                while window_state(ctl, wid)["drag_files"] and time.time() < deadline:
+                    time.sleep(0.05)
+                check(window_state(ctl, wid)["drag_files"] == 0, "CEF invoked and consumed the one-shot drag override")
+                if pasteboard:
+                    actual = json.loads(subprocess.check_output([pasteboard], text=True))
+                    normalize = lambda values: sorted(unicodedata.normalize("NFC", path) for path in values)
+                    check(normalize(actual) == normalize(paths), "native pasteboard file URLs: expected %r, got %r" % (paths, actual))
+                mouse(3, 100, 60)
+                devtools_eval(ctl, wid, "new Promise((resolve,reject) => { const until=Date.now()+10000; const t=setInterval(()=>{if(dragEnds){clearInterval(t);resolve(true)}else if(Date.now()>until){clearInterval(t);reject('native drag did not end')}},20) })")
+                mouse(0, 60, 40)
+                mouse(1, 60, 40)
+                mouse(2, 100, 60)
+                time.sleep(0.3)
+                if pasteboard:
+                    check(json.loads(subprocess.check_output([pasteboard], text=True)) == [], "one-shot override cannot leak into a later drag")
+                mouse(3, 100, 60)
+                devtools_eval(ctl, wid, "new Promise((resolve,reject) => { const until=Date.now()+10000; const t=setInterval(()=>{if(dragEnds>=2){clearInterval(t);resolve(true)}else if(Date.now()>until){clearInterval(t);reject('second native drag did not end')}},20) })")
+                shutdown(ctl)
+            finally:
+                ctl.close()
+
+
+def test_concurrent_startup():
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=4) as workers:
+        controllers = list(workers.map(lambda _: Ctl(), range(4)))
+    try:
+        for ctl in controllers:
+            ctl.wait_note("Ready", timeout=60)
+        for ctl in controllers:
+            shutdown(ctl)
+    finally:
+        for ctl in controllers:
+            ctl.close()
 
 
 def test_caption_button_regions():
@@ -310,9 +452,13 @@ def test_frameless_drag_regions():
             check(drag_regions(ctl, wid) == expected, "host rectangles and exclusions")
 
             if os.environ.get("JUSTCEF_TEST_WINDOW_MANAGER") == "1":
+                previous = window_state(ctl, wid)["transitions"]
                 check(ctl.result(ctl.call(31, W().i32(wid).b1(True).b))[0] == OK, "fullscreen")
+                wait_fullscreen(ctl, wid, True, previous)
                 wait_drag_regions(ctl, wid, lambda rs: not rs)
+                previous = window_state(ctl, wid)["transitions"]
                 check(ctl.result(ctl.call(31, W().i32(wid).b1(False).b))[0] == OK, "exit fullscreen")
+                wait_fullscreen(ctl, wid, False, previous)
                 wait_drag_regions(ctl, wid, lambda rs: rs == expected)
 
             malformed = [W().i32(wid).u8(2).b, W().i32(wid).b1(False).u8(0).b,
@@ -347,6 +493,7 @@ def test_frameless_drag_regions():
             devtools_eval(ctl, child, "new Promise(resolve => document.readyState === 'complete' ? resolve() : addEventListener('load', resolve, {once:true}))")
             check(not drag_regions(ctl, child) and not drag_regions(ctl, wid), "embedded CSS cannot replace the host drag regions")
             check(ctl.result(ctl.call(C["SetDraggableRegions"], W().i32(child).b1(False).b))[0] == 5, "embedded overrides unsupported")
+            check(ctl.result(ctl.call(C["SetNextDragFiles"], W().i32(child).u32(0).b))[0] == OK, "embedded file drag override")
 
             framed = ctl.create("about:blank", bridge=False)
             check(ctl.result(ctl.call(C["SetDraggableRegions"], W().i32(framed).b1(False).b))[0] == 5, "framed windows unsupported")
@@ -493,7 +640,7 @@ def test_views_lifecycle():
 
 
 TESTS = [test_protocol_vectors, test_ordering_and_basics, test_bridge_calls_that_call_native, test_large_bridge_payloads, test_async_modify, test_streams_and_cancel,
-         test_backpressure_and_threads, test_shutdown_with_pending_work, test_runtime_info, test_frameless_drag_regions, test_caption_button_regions, test_views_handshake, test_views_rounded_clipping, test_views_lifecycle]
+         test_backpressure_and_threads, test_shutdown_with_pending_work, test_runtime_info, test_file_paths, test_native_file_drag, test_concurrent_startup, test_frameless_drag_regions, test_caption_button_regions, test_views_handshake, test_views_rounded_clipping, test_views_lifecycle]
 
 if __name__ == "__main__":
     if not NATIVE or not os.path.exists(NATIVE):

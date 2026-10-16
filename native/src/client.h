@@ -91,6 +91,8 @@ public:
     // CefFrameHandler methods:
     void OnFrameDetached(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame) override;
     void OnMainFrameChanged(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> old_frame, CefRefPtr<CefFrame> new_frame) override;
+    bool OnBeforeFileDrag(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, std::vector<CefString>& filePaths) override;
+    ipc::StatusCode SetNextDragFiles(CefRefPtr<CefBrowser> browser, std::vector<CefString> paths);
     void OnDraggableRegionsChanged(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, const std::vector<CefDraggableRegion>& regions) override;
     // CefDevToolsMessageObserver methods:
     void OnDevToolsMethodResult(CefRefPtr<CefBrowser> browser, int message_id, bool success, const void* result, size_t result_size) override;
@@ -121,6 +123,11 @@ public:
     void ApplyDraggableRegions(CefRefPtr<CefBrowser> browser);
     std::vector<CefDraggableRegion> GetWindowDraggableRegions(CefRefPtr<CefBrowser> browser);
 
+    void OnNativeFullscreenTransition(CefRefPtr<CefBrowser> browser, bool completed);
+    bool IsFullscreenTransitioning() const { return _fullscreenTransitioning; }
+    uint32_t FullscreenTransitions() const { return _fullscreenTransitions; }
+    size_t PendingDragFileCount() const { return _nextDragFiles.size(); }
+
     IPCWindowCreate settings;
     bool _manageNativeWindow;
 
@@ -136,6 +143,9 @@ private:
     void CancelPendingModifies();
     void ClearCssDraggableRegions(CefRefPtr<CefBrowser> browser);
 
+    bool _fullscreenTransitioning = false;
+    uint32_t _fullscreenTransitions = 0;
+    std::vector<CefString> _nextDragFiles;
     std::vector<CefDraggableRegion> _cssDraggableRegions;
     std::optional<std::vector<CefDraggableRegion>> _draggableRegionsOverride;
 

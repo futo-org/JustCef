@@ -257,6 +257,36 @@ TEST_CASE("runtime info reports native OS and Linux backend without a window")
     CHECK(harness.fake.ViolationCount() == 0);
 }
 
+TEST_CASE("native drag files serialize and clear on navigation")
+{
+    Watchdog watchdog(60s, "native drag files");
+    asio::io_context io;
+    Harness harness;
+    harness.Start(io.get_executor());
+    const bool done = RunUntilIdle(io, [&]() -> asio::awaitable<void>
+    {
+        co_await harness.process->WaitForReadyAsync();
+        auto window = co_await harness.process->CreateWindowAsync(WindowCreateOptions{});
+        std::vector<std::string> paths{(std::filesystem::temp_directory_path() / "drag file.txt").string()};
+        co_await window->SetNextDragFilesAsync(paths);
+        CHECK(harness.fake.State()["windows"][0]["dragFiles"] == Json(paths));
+        co_await window->SetNextDragFilesAsync(std::vector<std::string>{});
+        CHECK(harness.fake.State()["windows"][0]["dragFiles"].empty());
+        co_await window->SetNextDragFilesAsync(paths);
+        co_await window->NavigateAsync("https://app/next");
+        CHECK(harness.fake.State()["windows"][0]["dragFiles"].empty());
+        for (const auto& invalid : std::vector<std::string>{"", "relative.txt", std::string("bad\0path", 8), (std::filesystem::temp_directory_path() / ".." / "file.txt").string()})
+        {
+            paths = {invalid};
+            CHECK_THROWS_AS(co_await window->SetNextDragFilesAsync(paths), std::invalid_argument);
+        }
+        paths.resize(129);
+        CHECK_THROWS_AS(co_await window->SetNextDragFilesAsync(paths), std::invalid_argument);
+    }());
+    CHECK(done);
+    CHECK(harness.fake.ViolationCount() == 0);
+}
+
 TEST_CASE("caption regions serialize roles, reject ambiguous bounds and clear on navigation")
 {
     Watchdog watchdog(60s, "caption button regions");

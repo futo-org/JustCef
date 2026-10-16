@@ -397,6 +397,9 @@ namespace JustCef
         public async Task SetPositionAsync(int x, int y, CancellationToken cancellationToken = default) => await _process.WindowSetPositionAsync(Identifier, x, y, cancellationToken).ConfigureAwait(false);
         public async Task<(int X, int Y)> GetPositionAsync(CancellationToken cancellationToken = default) => await _process.WindowGetPositionAsync(Identifier, cancellationToken).ConfigureAwait(false);
         public async Task SetSizeAsync(int width, int height, CancellationToken cancellationToken = default) => await _process.WindowSetSizeAsync(Identifier, width, height, cancellationToken).ConfigureAwait(false);
+        public Task SetNextDragFilesAsync(IReadOnlyList<string> paths, CancellationToken cancellationToken = default)
+            => _process.WindowSetNextDragFilesAsync(Identifier, paths, cancellationToken);
+
         public Task SetDraggableRegionsAsync(IReadOnlyList<DraggableRegion>? regions = null, CancellationToken cancellationToken = default)
             => _process.WindowSetDraggableRegionsAsync(Identifier, regions, cancellationToken);
         public Task SetCaptionButtonRegionsAsync(IReadOnlyList<CaptionButtonRegion>? regions = null, CancellationToken cancellationToken = default)

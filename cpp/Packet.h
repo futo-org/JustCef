@@ -82,7 +82,8 @@ enum class OpcodeController : uint8_t
     WindowBridgeRpc = 57,
     WindowSetDraggableRegions = 58,
     WindowSetCaptionButtonRegions = 59,
-    GetRuntimeInfo = 60
+    GetRuntimeInfo = 60,
+    WindowSetNextDragFiles = 61
 };
 
 // Notifications from controller

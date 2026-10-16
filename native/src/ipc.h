@@ -90,6 +90,7 @@ enum class OpcodeController : uint8_t
     WindowSetDraggableRegions = 58,
     WindowSetCaptionButtonRegions = 59,
     GetRuntimeInfo = 60,
+    WindowSetNextDragFiles = 61,
     Debug = 250
 };
 
@@ -316,6 +317,7 @@ ipc::StatusCode HandleRemoveUrlToModify(PacketReader& reader, PacketWriter& writ
 ipc::StatusCode HandleWindowGetSize(PacketReader& reader, PacketWriter& writer);
 ipc::StatusCode HandleWindowSetSize(PacketReader& reader, PacketWriter& writer);
 ipc::StatusCode HandleWindowSetCaptionButtonRegions(PacketReader& reader, PacketWriter& writer);
+ipc::StatusCode HandleWindowSetNextDragFiles(PacketReader& reader, PacketWriter& writer);
 ipc::StatusCode HandleWindowSetDraggableRegions(PacketReader& reader, PacketWriter& writer);
 ipc::StatusCode HandleAddDevToolsEventMethod(PacketReader& reader, PacketWriter& writer);
 ipc::StatusCode HandleRemoveDevToolsEventMethod(PacketReader& reader, PacketWriter& writer);

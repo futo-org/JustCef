@@ -1337,7 +1337,12 @@ std::size_t OpenDescriptorCount()
 {
     std::error_code error;
     std::size_t count = 0;
-    for (const auto& entry : std::filesystem::directory_iterator("/proc/self/fd", error))
+#if defined(__APPLE__)
+    const char* directory = "/dev/fd";
+#else
+    const char* directory = "/proc/self/fd";
+#endif
+    for (const auto& entry : std::filesystem::directory_iterator(directory, error))
     {
         (void)entry;
         ++count;

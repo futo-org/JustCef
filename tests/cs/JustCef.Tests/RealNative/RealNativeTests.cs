@@ -12,6 +12,26 @@ namespace JustCef.Tests.RealNative;
 public class RealNativeTests
 {
     [RealNativeFact]
+    public Task NativeFileDragUsesRealNativeFileValidation() => TestUtil.RunScenario(async () =>
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"justcef-drag-{Guid.NewGuid()}-café.txt");
+        try
+        {
+            await File.WriteAllTextAsync(path, "native drag file");
+            await using var harness = await StartAsync();
+            var window = await harness.OpenPageAsync();
+            await window.SetNextDragFilesAsync(new[] { path });
+            var error = await Assert.ThrowsAsync<JustCefRemoteException>(() => window.SetNextDragFilesAsync(new[] { path + ".missing" }));
+            Assert.Equal(JustCefStatus.InvalidRequest, error.Status);
+            await window.SetNextDragFilesAsync(Array.Empty<string>());
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }, TimeSpan.FromSeconds(120));
+
+    [RealNativeFact]
     public Task N0_StartCreateAndBridge() => TestUtil.RunScenario(async () =>
     {
         await using var harness = await StartAsync();

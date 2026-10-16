@@ -98,6 +98,7 @@ namespace JustCef
             WindowSetDraggableRegions = 58,
             WindowSetCaptionButtonRegions = 59,
             GetRuntimeInfo = 60,
+            WindowSetNextDragFiles = 61,
         }
 
         public enum OpcodeControllerNotification : byte
@@ -1813,6 +1814,22 @@ namespace JustCef
             var x = reader.Read<int>();
             var y = reader.Read<int>();
             return (x, y);
+        }
+
+        public async Task WindowSetNextDragFilesAsync(int identifier, IReadOnlyList<string> paths, CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(paths);
+            if (paths.Count > 128)
+                throw new ArgumentOutOfRangeException(nameof(paths));
+            using var writer = new PacketWriter().Write(identifier).Write((uint)paths.Count);
+            foreach (var path in paths)
+            {
+                if (string.IsNullOrEmpty(path) || path.Contains('\0') || !Path.IsPathFullyQualified(path) ||
+                    path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).Contains("..") || Encoding.UTF8.GetByteCount(path) > 32768)
+                    throw new ArgumentException("Drag files must be absolute paths without parent traversal or NUL characters.", nameof(paths));
+                writer.WriteSizePrefixedString(path);
+            }
+            await CallAsync(OpcodeController.WindowSetNextDragFiles, writer, cancellationToken).ConfigureAwait(false);
         }
 
         public async Task WindowSetDraggableRegionsAsync(int identifier, IReadOnlyList<DraggableRegion>? regions = null, CancellationToken cancellationToken = default)

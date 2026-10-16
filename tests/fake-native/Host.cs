@@ -18,6 +18,7 @@ public sealed class BrowserState
     public int Height = 600;
     public double Zoom;
     public bool Frameless;
+    public JsonArray DragFiles = new();
     public JsonArray? DraggableRegions;
     public JsonArray CaptionButtonRegions = new();
 }
@@ -401,6 +402,7 @@ public sealed class Host
                 var url = req.Text;
                 browser.Url = url;
                 browser.CaptionButtonRegions = new JsonArray();
+                browser.DragFiles = new JsonArray();
                 var result = Result.Ok();
                 result.FollowUp = () => SendLoadSequence(id, url);
                 return result;
@@ -433,6 +435,9 @@ public sealed class Host
                 return Result.Ok();
             case ControllerOp.WindowSetTitle:
                 window.Title = req.Text;
+                return Result.Ok();
+            case ControllerOp.WindowSetNextDragFiles:
+                browser.DragFiles = new JsonArray(req.DragFiles.Select(p => (JsonNode?)JsonValue.Create(p)).ToArray());
                 return Result.Ok();
             case ControllerOp.WindowSetCaptionButtonRegions:
                 if (browser.ParentId != 0 || !browser.Frameless)
@@ -1282,6 +1287,7 @@ public sealed class Host
                 ["id"] = b.Id,
                 ["parentId"] = b.ParentId,
                 ["url"] = b.Url,
+                ["dragFiles"] = b.DragFiles.DeepClone(),
                 ["draggableRegions"] = b.DraggableRegions?.DeepClone(),
                 ["captionButtonRegions"] = b.CaptionButtonRegions.DeepClone(),
                 ["closed"] = b.Closed

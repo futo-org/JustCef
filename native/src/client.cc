@@ -1633,6 +1633,34 @@ void Client::OnMainFrameChanged(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFram
     }
 }
 
+void Client::OnNativeFullscreenTransition(CefRefPtr<CefBrowser> browser, bool completed)
+{
+    CEF_REQUIRE_UI_THREAD();
+    _fullscreenTransitioning = !completed;
+    if (completed)
+        ++_fullscreenTransitions;
+    ApplyDraggableRegions(browser);
+}
+
+ipc::StatusCode Client::SetNextDragFiles(CefRefPtr<CefBrowser> browser, std::vector<CefString> paths)
+{
+    CEF_REQUIRE_UI_THREAD();
+    if (!IsPrimaryBrowser(browser) || browser->GetHost()->IsWindowRenderingDisabled())
+        return ipc::StatusCode::Unsupported;
+    _nextDragFiles = std::move(paths);
+    return ipc::StatusCode::Ok;
+}
+
+bool Client::OnBeforeFileDrag(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, std::vector<CefString>& filePaths)
+{
+    CEF_REQUIRE_UI_THREAD();
+    if (!IsPrimaryBrowser(browser) || !frame || !frame->IsMain() || _nextDragFiles.empty())
+        return false;
+    filePaths = std::move(_nextDragFiles);
+    _nextDragFiles.clear();
+    return true;
+}
+
 void Client::OnDraggableRegionsChanged(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, const std::vector<CefDraggableRegion>& regions)
 {
     CEF_REQUIRE_UI_THREAD();
@@ -1675,6 +1703,7 @@ void Client::ClearCssDraggableRegions(CefRefPtr<CefBrowser> browser)
     if (!IsPrimaryBrowser(browser))
         return;
     _cssDraggableRegions.clear();
+    _nextDragFiles.clear();
 #if defined(OS_WIN)
     if (_manageNativeWindow && settings.frameless)
     {

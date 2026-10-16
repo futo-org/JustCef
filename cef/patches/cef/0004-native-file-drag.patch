@@ -92,10 +92,10 @@ index 92cd766431d645a085d133741c2cb871eace230d..14ab5d9860f17157c02f53c4716c5496
      'name': 'gritsettings',
 diff --git a/patch/patches/justcef_native_file_drag.patch b/patch/patches/justcef_native_file_drag.patch
 new file mode 100644
-index 0000000000000000000000000000000000000000..cd9ee1418d219fb164b7f668d4e60c1cb4e4de8e
+index 0000000000000000000000000000000000000000..9a56ae8cf3ba10f297e933d2cae27bfda45aa708
 --- /dev/null
 +++ b/patch/patches/justcef_native_file_drag.patch
-@@ -0,0 +1,302 @@
+@@ -0,0 +1,400 @@
 +diff --git content/browser/renderer_host/render_widget_host_impl.cc content/browser/renderer_host/render_widget_host_impl.cc
 +index 5d7ac29023337fa551f106c4d41b190d7bc6bf48..2535d07745736073e55bb2c5fe5f98146bd99815 100644
 +--- content/browser/renderer_host/render_widget_host_impl.cc
@@ -398,3 +398,101 @@ index 0000000000000000000000000000000000000000..cd9ee1418d219fb164b7f668d4e60c1c
 +   // Records the detailed reason for ShouldUseSpareRenderProcessHost returning
 +   // .
 +   //
++diff --git content/app_shim_remote_cocoa/web_contents_view_cocoa.mm content/app_shim_remote_cocoa/web_contents_view_cocoa.mm
++--- content/app_shim_remote_cocoa/web_contents_view_cocoa.mm
+++++ content/app_shim_remote_cocoa/web_contents_view_cocoa.mm
++@@ -6,6 +6,7 @@
++
++ #include <AppKit/AppKit.h>
++
+++#include "base/apple/foundation_util.h"
++ #include "base/files/file_util.h"
++ #include "base/files/scoped_temp_dir.h"
++ #import "base/mac/mac_util.h"
++@@ -304,6 +305,14 @@
++     [draggingItems addObject:urlItem];
++   }
++
+++  for (size_t i = 1; i < dropData.filenames.size(); ++i) {
+++    NSURL* fileURL = base::apple::FilePathToNSURL(dropData.filenames[i].path);
+++    NSDraggingItem* fileItem =
+++        [[NSDraggingItem alloc] initWithPasteboardWriter:fileURL];
+++    [fileItem setDraggingFrame:imageRect contents:image];
+++    [draggingItems addObject:fileItem];
+++  }
+++
++   _dragOperation = operationMask;
++
++   // Start the drag session. This hands control to AppKit, which queries each
++diff --git content/app_shim_remote_cocoa/web_drag_source_mac.mm content/app_shim_remote_cocoa/web_drag_source_mac.mm
++--- content/app_shim_remote_cocoa/web_drag_source_mac.mm
+++++ content/app_shim_remote_cocoa/web_drag_source_mac.mm
++@@ -105,6 +105,10 @@
++     [writableTypes addObject:ui::kUTTypeChromiumPrivilegedInitiatedDrag];
++   }
++
+++  if (!_dropData.filenames.empty()) {
+++    [writableTypes addObject:NSPasteboardTypeFileURL];
+++  }
+++
++   // URL (and title).
++   if (!_dropData.url_infos.empty()) {
++     [writableTypes addObject:NSPasteboardTypeURL];
++@@ -205,6 +209,14 @@
++ }
++
++ - (id)pasteboardPropertyListForType:(NSPasteboardType)type {
+++  if ([type isEqualToString:NSPasteboardTypeFileURL]) {
+++    if (_dropData.filenames.empty()) {
+++      return nil;
+++    }
+++    return base::apple::FilePathToNSURL(_dropData.filenames.front().path)
+++        .absoluteString;
+++  }
+++
++   // HTML.
++   if ([type isEqualToString:NSPasteboardTypeHTML] ||
++       [type isEqualToString:ui::kUTTypeChromiumImageAndHtml]) {
++diff --git content/browser/web_contents/web_drag_source_mac_unittest.mm content/browser/web_contents/web_drag_source_mac_unittest.mm
++--- content/browser/web_contents/web_drag_source_mac_unittest.mm
+++++ content/browser/web_contents/web_drag_source_mac_unittest.mm
++@@ -71,4 +71,39 @@
++   EXPECT_NSEQ((@[ @"Chromium", @"Mozilla", @"WebKit" ]), array[1]);
++ }
++
+++TEST_F(WebDragSourceMacTest, NativeFileURLPreservesUnicodeAndSpaces) {
+++  DropData drop_data;
+++  drop_data.filenames.emplace_back(
+++      base::FilePath("/tmp/spaced café 文件.txt"), base::FilePath());
+++  drop_data.filenames.emplace_back(base::FilePath("/tmp/second.txt"),
+++                                   base::FilePath());
+++  WebDragSource* source =
+++      [[WebDragSource alloc] initWithHost:nullptr
+++                          renderProcessId:content::ChildProcessId()
+++                            documentToken:blink::DocumentToken()
+++                             sourceOrigin:url::Origin()
+++                                 dropData:drop_data
+++                             isPrivileged:NO];
+++  EXPECT_TRUE([[source writableTypesForPasteboard:nil]
+++      containsObject:NSPasteboardTypeFileURL]);
+++  NSString* value =
+++      [source pasteboardPropertyListForType:NSPasteboardTypeFileURL];
+++  NSURL* url = [NSURL URLWithString:value];
+++  EXPECT_TRUE(url.isFileURL);
+++  EXPECT_NSEQ(@"/tmp/spaced café 文件.txt", url.path);
+++}
+++
+++TEST_F(WebDragSourceMacTest, NoNativeFilesDoesNotAdvertiseFileURL) {
+++  WebDragSource* source =
+++      [[WebDragSource alloc] initWithHost:nullptr
+++                          renderProcessId:content::ChildProcessId()
+++                            documentToken:blink::DocumentToken()
+++                             sourceOrigin:url::Origin()
+++                                 dropData:DropData()
+++                             isPrivileged:NO];
+++  EXPECT_FALSE([[source writableTypesForPasteboard:nil]
+++      containsObject:NSPasteboardTypeFileURL]);
+++  EXPECT_NSEQ(nil, [source pasteboardPropertyListForType:NSPasteboardTypeFileURL]);
+++}
+++
++ }  // namespace content

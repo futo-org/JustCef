@@ -19,6 +19,25 @@ static inline NSWindow* BrowserNSWindow(CefRefPtr<CefBrowser> browser) {
 }
 
 namespace shared {
+    void PlatformPostDebugMouseUp(CefRefPtr<CefBrowser> browser, int x, int y)
+    {
+        NSView* view = BrowserNSView(browser);
+        NSWindow* window = view.window;
+        if (!window) return;
+        NSPoint point = NSMakePoint(x, view.isFlipped ? y : view.bounds.size.height - y);
+        point = [view convertPoint:point toView:nil];
+        NSEvent* event = [NSEvent mouseEventWithType:NSEventTypeLeftMouseUp
+                                          location:point
+                                     modifierFlags:0
+                                         timestamp:NSProcessInfo.processInfo.systemUptime
+                                      windowNumber:window.windowNumber
+                                           context:nil
+                                       eventNumber:0
+                                        clickCount:1
+                                          pressure:0];
+        [NSApp postEvent:event atStart:NO];
+    }
+
     void PlatformTitleChange(CefRefPtr<CefBrowser> browser, const std::string& title) 
     {
         NSView* view = BrowserNSView(browser);

@@ -8,6 +8,8 @@
 
 #if defined(OS_WIN)
 #include <windows.h>
+#else
+#include <unistd.h>
 #endif
 
 namespace shared
@@ -43,7 +45,12 @@ std::filesystem::path MakeTemporaryCachePath()
 {
     const auto now = std::chrono::system_clock::now();
     const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
-    return std::filesystem::temp_directory_path() / ("justcef_" + std::to_string(ms));
+#if defined(OS_WIN)
+    const auto pid = GetCurrentProcessId();
+#else
+    const auto pid = getpid();
+#endif
+    return std::filesystem::temp_directory_path() / ("justcef_" + std::to_string(pid) + "_" + std::to_string(ms));
 }
 
 } // namespace

@@ -135,6 +135,7 @@ public:
     asio::awaitable<void> SetPositionAsync(int x, int y);
     asio::awaitable<Position> GetPositionAsync();
     asio::awaitable<void> SetSizeAsync(int width, int height);
+    asio::awaitable<void> SetNextDragFilesAsync(std::vector<std::string> paths);
     asio::awaitable<void> SetDraggableRegionsAsync(std::optional<std::vector<DraggableRegion>> regions = std::nullopt);
     asio::awaitable<void> SetCaptionButtonRegionsAsync(std::vector<CaptionButtonRegion> regions = {});
     asio::awaitable<Size> GetSizeAsync();

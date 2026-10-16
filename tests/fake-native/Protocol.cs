@@ -71,6 +71,7 @@ public enum ControllerOp : byte
     WindowSetDraggableRegions = 58,
     WindowSetCaptionButtonRegions = 59,
     GetRuntimeInfo = 60,
+    WindowSetNextDragFiles = 61,
     Debug = 250
 }
 

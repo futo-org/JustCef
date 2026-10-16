@@ -41,7 +41,7 @@ def packet(typ, op, rid, body=b""):
     return struct.pack("<IIBB", 10 + len(body) - 4, rid, typ, op) + bytes(body)
 
 
-C = dict(Ping=0, Print=1, Echo=2, WindowCreate=3, LoadUrl=6, GetSize=50, GetZoom=56, Close=22, ExecuteDevTools=42, BridgeRpc=57, SetDraggableRegions=58, SetCaptionButtonRegions=59, GetRuntimeInfo=60,
+C = dict(Ping=0, Print=1, Echo=2, WindowCreate=3, LoadUrl=6, GetSize=50, GetZoom=56, Close=22, ExecuteDevTools=42, BridgeRpc=57, SetDraggableRegions=58, SetCaptionButtonRegions=59, GetRuntimeInfo=60, SetNextDragFiles=61,
          SetModify=34, AddUrlToModify=48, Debug=250)
 CN = dict(Exit=0, StreamData=1, StreamEnd=2, StreamError=3)
 N = {0: "Ready", 1: "Exit", 2: "WindowOpened", 3: "WindowClosed", 5: "WindowFocused", 6: "WindowUnfocused", 12: "Fullscreen", 13: "FrameLoadStart",
@@ -203,7 +203,9 @@ class Ctl:
         except Exception as e:
             self.send(RESP, op, rid, bytes([ERROR]) + W().s(repr(e)).b)
 
-    def wait_note(self, name, pred=lambda b: True, timeout=20):
+    def wait_note(self, name, pred=lambda b: True, timeout=None):
+        if timeout is None:
+            timeout = 60 if name == "Ready" else 20
         end = time.time() + timeout
         seen = []
         while time.time() < end:
