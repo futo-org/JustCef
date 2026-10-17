@@ -53,7 +53,7 @@ index 83dfcb119af05dba5215b0646c777fde8e287447..0f623ea0ea5becf083046daeb36b435b
        const std::vector<CefDraggableRegion>& regions) override;
    CefWindowHandle GetWindowHandle() override;
 diff --git a/libcef/browser/views/window_view.cc b/libcef/browser/views/window_view.cc
-index 5ed5048355f5f2cc08c301892f904c5773a788cd..e8665134431ae87a26535b30f3eba68ef30f31a2 100644
+index 5ed5048355f5f2cc08c301892f904c5773a788cd..ad9da3a3a5f78e7fafe3f65cfcf7cb38c80d336d 100644
 --- a/libcef/browser/views/window_view.cc
 +++ b/libcef/browser/views/window_view.cc
 @@ -4,6 +4,7 @@
@@ -89,7 +89,7 @@ index 5ed5048355f5f2cc08c301892f904c5773a788cd..e8665134431ae87a26535b30f3eba68e
      // Test for mouse clicks that fall within the draggable region.
      SkRegion* draggable_region = view_->draggable_region();
      if (draggable_region && draggable_region->contains(point.x(), point.y())) {
-@@ -391,6 +402,79 @@ bool ComputeAlloyStyle(CefWindowDelegate* cef_delegate) {
+@@ -391,6 +402,80 @@ bool ComputeAlloyStyle(CefWindowDelegate* cef_delegate) {
 
  }  // namespace
 
@@ -151,8 +151,9 @@ index 5ed5048355f5f2cc08c301892f904c5773a788cd..e8665134431ae87a26535b30f3eba68e
 +    const auto weak_view = view_->weak_ptr_factory_.GetWeakPtr();
 +    const auto weak_window = window_->GetWeakPtrAsWindow();
 +    event->StopPropagation();
-+    sink->OnEventFromSource(&client_event);
-+    if (native_hover && weak_view && weak_window &&
++    const auto details = sink->OnEventFromSource(&client_event);
++    if (native_hover && !details.dispatcher_destroyed &&
++        !details.target_destroyed && weak_view && weak_window &&
 +        views::HWNDForNativeWindow(weak_window.get()) == native_event.hwnd &&
 +        ::IsWindow(native_event.hwnd)) {
 +      ::DefWindowProc(native_event.hwnd, native_event.message,
@@ -169,7 +170,7 @@ index 5ed5048355f5f2cc08c301892f904c5773a788cd..e8665134431ae87a26535b30f3eba68e
  // Manages the views-based root window. This object will be deleted when the
  // associated root window is destroyed.
  class CefWindowWidgetDelegate : public views::WidgetDelegate {
-@@ -681,6 +765,12 @@ void CefWindowView::CreateWidget(gfx::AcceleratedWidget parent_widget) {
+@@ -681,6 +766,12 @@ void CefWindowView::CreateWidget(gfx::AcceleratedWidget parent_widget) {
    }
 
    cef_widget->Initialized();
@@ -182,7 +183,7 @@ index 5ed5048355f5f2cc08c301892f904c5773a788cd..e8665134431ae87a26535b30f3eba68e
 
  #if BUILDFLAG(IS_LINUX)
  #if BUILDFLAG(SUPPORTS_OZONE_X11)
-@@ -828,6 +918,10 @@ bool CefWindowView::ShouldDescendIntoChildForEventHandling(
+@@ -828,6 +919,10 @@ bool CefWindowView::ShouldDescendIntoChildForEventHandling(
        if (IsWindowBorderHit(result)) {
          return false;
        }
@@ -193,7 +194,7 @@ index 5ed5048355f5f2cc08c301892f904c5773a788cd..e8665134431ae87a26535b30f3eba68e
      }
    }
 
-@@ -985,6 +1079,57 @@ void CefWindowView::InvalidateExclusionRegions() {
+@@ -985,6 +1080,57 @@ void CefWindowView::InvalidateExclusionRegions() {
    }
  }
 
