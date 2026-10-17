@@ -1,0 +1,116 @@
+Chromium surface embedding
+
+SurfaceEmbed is the only justcef-view backend. There is no backend selector or
+origin launch flag. Views-enabled windows can host compositor plugins; ordinary
+windows, child websites and popups cannot. Native authorization also scopes the
+browser-side interface to the exact current host document.
+
+The embedded page is an independent WebContents, with its own navigation,
+permissions and popup policy. Chromium owns compositing, clipping, transforms,
+hit testing, keyboard input and scrolling. No guest script, pixel IPC, canvas
+transport, geometry polling, overlap snapshots or synthetic scroll forwarding
+is installed. Closed shadow roots hold the compositor plugin and the slot for
+nested host DOM content.
+
+A hidden CefBrowserView owner still bootstraps CEF browser creation and lifetime.
+It does not present content, track element geometry or route input.
+
+Building
+
+Use the CEF revision in cef/cef.version and apply the complete patch stack:
+  python3 cef/patches/apply_cef_patches.py --cef-dir /PATH/TO/chromium/src/cef
+  /PATH/TO/depot_tools/autoninja -C /PATH/TO/chromium/src/out/Release_GN_arm64 -j 6 cef_framework
+
+Build against the matching SDK:
+  cmake -S native -B build/cef-guest-prototype -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_TOOLCHAIN_FILE="$PWD/native/toolchains/macos-arm64.cmake" \
+    -DCEF_ROOT="$PWD/native/third_party/cef/cef_binary_154.0.34+g14c5a08+chromium-154.0.8037.98_macosarm64_minimal" \
+    -DUSE_SANDBOX=OFF
+  cmake --build build/cef-guest-prototype -j 6
+
+For local engine development, install the rebuilt framework executable and sign:
+  cp '/PATH/TO/chromium/src/out/Release_GN_arm64/Chromium Embedded Framework.framework/Chromium Embedded Framework' \
+    'build/cef-guest-prototype/Release/justcefnative.app/Contents/Frameworks/Chromium Embedded Framework.framework/Chromium Embedded Framework'
+  codesign --force --deep --sign - build/cef-guest-prototype/Release/justcefnative.app
+
+Stop the app before replacing its framework. CMake's app packaging copies the
+SDK framework, so repeat the installation after a native rebuild. Release SDKs
+must include the patched engine; a stock CEF SDK cannot create views and reports
+guest-extension-unavailable rather than falling back to native overlays.
+The private symbol loader supports macOS, Windows and Linux; runtime validation
+has currently been performed on macOS arm64 only.
+
+Host HTML
+
+Use ordinary CSS to size and position justcef-view, including nesting, transforms,
+overflow, rounded corners, menus and dialogs. The old anchor, transition and
+occlusion attributes are obsolete and ignored. suspend()/resume() hide/restore
+the live surface without destroying the browser. Removal allows a one-second
+DOM-move grace period before closing the browser.
+
+If the host sets Content-Security-Policy, allow object-src 'self' for the native
+compositor plugin. No data: image permission is required. This is a host policy
+requirement; guest CSP and framing headers are not removed or rewritten.
+
+Screenshot export uses Page.captureScreenshot directly, with Chromium's own
+PNG/JPEG/WebP encoding. Full-page capture measures document dimensions and uses
+Chromium's capture viewport. No recursive child captures or image composition
+are used. The screenshot API serializes requests per browser because Chromium's
+viewport emulation is shared state; canceling a caller does not release that
+state before the outstanding CDP operation replies. Direct DevTools callers
+must likewise avoid overlapping Page.captureScreenshot operations on one browser.
+The surface patch makes full-document plugin recording respect the
+same capture clipping setting as the rest of the document. Offscreen child
+capture requests a fresh surface from the embedding renderer and copies it
+without waiting for on-screen presentation. Capture-specific raster size and
+throttling changes are restored when capture ends. The old hidden native view
+capture patch is removed.
+
+Run and test
+
+  python3 tests/native/guest_prototype.py
+  python3 tests/native/guest_prototype.py --smoke
+  python3 tests/native/guest_prototype.py --youtube-smoke
+  node --test tests/native/view-renderer.test.cjs
+  JUSTCEF_NATIVE=/ABS/PATH/TO/justcefnative python3 tests/native/run.py
+
+The demo server uses localhost:8768; run it through JustCef, not a regular browser.
+Profile, local video and screenshots: build/guest-prototype-demo.
+The smoke test uses native Chromium input routing and a local 1280x720 video.
+Its YouTube option rejects optional cookies in its own test profile when prompted.
+
+Check manually before releasing on each supported OS:
+- Real OS IME composition, selection, copy/paste and keyboard traversal.
+- Native select popups, context menus and file dialogs, including placement after
+  scrolling, zoom, window movement and CSS transforms.
+- VoiceOver/platform accessibility, external file drag/drop and fullscreen.
+- Camera/microphone permission flows on real hardware and OS permission prompts.
+- CSS zoom and different browser zoom/DPR settings, including native popup placement.
+- Sustained high-resolution video, power usage and memory over repeated navigation.
+
+Chromium SurfaceEmbed is an internal API and still has upstream TODOs. Maintain
+this integration against the pinned CEF revision and validate engine upgrades.
+Common guest identity checks establish no obvious embedding marker; they are not
+a guarantee of JavaScript indistinguishability or broad website compatibility.
+The short video smoke is not proof of hardware decoding or a 4K benchmark.
+
+Automated validation on macOS arm64 (2026-10-17)
+
+- All 31 native integration tests pass, including offscreen full-page capture,
+  nested/closed-shadow capture alignment, input after capture, media permission
+  records, certificates, downloads, PDF/printing, popup policy and view lifecycle.
+- The macOS native file-drag/pasteboard test passes after waiting for initial
+  view navigation and injecting embedded input through the host. The frameless
+  test also waits for the view load event before inspecting guest state.
+- 12 renderer lifecycle/authorization-decision tests pass, including stale
+  fullscreen promises and view replacement during permission dispatch.
+- The expanded smoke passes controller-driven focus, Chromium IME composition,
+  host/guest focus transfer, suspension/resume, nested scroll chaining, rotated
+  hit testing, three DOM view levels, live overlays and full-screen entry/exit.
+- Real YouTube watch-page video continues playing beneath the HTML dropdown.
+- A deliberately crashed guest renderer reloads and accepts input again; the
+  host remains usable and the process exits cleanly.
+- All six CEF patches pass clean application, reapplication and reversal against
+  the pinned CEF revision. The nested Chromium patch matches the built source.
+
+These checks do not replace the per-platform manual release checks above.

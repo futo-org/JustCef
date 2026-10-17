@@ -13,6 +13,44 @@
 namespace justcef
 {
 
+// Browser requests: permission, certificate, download, or newWindow.
+// Media details include origin, topLevelOrigin, CEF permission flags, and canRemember.
+// Certificate details include URL, error, certificate status, subject and issuer.
+// Returning nullopt delegates to the authorized host; decisions expire after 60 seconds.
+struct BrowserFeatureRequest
+{
+    std::string kind;
+    std::string detail_json;
+    int browser_identifier = 0;
+};
+struct BrowserDecision
+{
+    bool allow = false;
+    bool remember = false;
+    std::string path;
+    bool show_dialog = false;
+    std::string ToJson() const;
+};
+using BrowserRequestHandler = std::function<asio::awaitable<std::optional<BrowserDecision>>(BrowserFeatureRequest)>;
+struct ScreenshotOptions
+{
+    bool full_page = false;
+    std::string format = "png";
+    int quality = 90;
+};
+// Dimensions and margins are in inches.
+struct PdfOptions
+{
+    bool landscape = false, print_background = true, prefer_css_page_size = false;
+    double paper_width = 8.5, paper_height = 11, margin_top = 0.4, margin_bottom = 0.4, margin_left = 0.4, margin_right = 0.4, scale = 1;
+    std::string page_ranges;
+};
+struct MediaPermissionSettings
+{
+    int microphone = 0;
+    int camera = 0;
+};
+
 class JustCefProcessImpl;
 class WindowCommandTarget;
 struct WindowShared;
@@ -63,6 +101,7 @@ class JustCefBrowser
 {
 public:
     Event<> OnClose;
+    Event<std::shared_ptr<JustCefWindow>> OnPopupCreated;
     Event<> OnFocused;
     Event<> OnUnfocused;
     Event<bool> OnFullscreenChanged;
@@ -73,6 +112,7 @@ public:
     Event<LoadingStateChangedInfo> OnLoadingStateChanged;
 
     Event<std::optional<std::string>, std::vector<std::uint8_t>> OnDevToolsEvent;
+    Event<std::string> OnDownloadUpdated; // JSON download status, delivered on the event executor.
 
     virtual ~JustCefBrowser();
 
@@ -89,6 +129,17 @@ public:
     asio::awaitable<void> RequestFocusAsync();
     asio::awaitable<void> SetDevelopmentToolsEnabledAsync(bool development_tools_enabled);
     asio::awaitable<void> SetDevelopmentToolsVisibleAsync(bool development_tools_visible);
+    void SetBrowserRequestHandler(BrowserRequestHandler handler);
+    asio::awaitable<void> SetNewWindowsAllowedAsync(bool allow, bool intercept_requests = false);
+    // Opens native print UI; completion acknowledges the request, not physical printing.
+    asio::awaitable<void> PrintAsync();
+    asio::awaitable<std::vector<std::uint8_t>> CaptureScreenshotAsync(ScreenshotOptions options = {});
+    asio::awaitable<std::vector<std::uint8_t>> PrintToPdfAsync(PdfOptions options = {});
+    asio::awaitable<void> StartDownloadAsync(std::string url);
+    asio::awaitable<void> ControlDownloadAsync(std::uint32_t id, std::string action);
+    asio::awaitable<MediaPermissionSettings> GetMediaPermissionsAsync(std::string origin, std::optional<std::string> top_level_origin = std::nullopt);
+    // permissions: microphone=1, camera=2, both=3; value: default=0, allow=1, block=2, ask=3.
+    asio::awaitable<void> SetMediaPermissionsAsync(std::string origin, int permissions, int value, std::optional<std::string> top_level_origin = std::nullopt);
     asio::awaitable<DevToolsMethodResult> ExecuteDevToolsMethodAsync(std::string method_name, std::optional<std::string> json = std::nullopt);
     asio::awaitable<BrowserResponse> ExecuteBrowserRequestAsync(BrowserRequest request);
     asio::awaitable<void> AddUrlToProxyAsync(std::string url);

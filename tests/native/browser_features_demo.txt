@@ -1,0 +1,173 @@
+JustCef feature laboratory
+=========================
+
+Run from the repository root:
+
+    python3 tests/native/browser_features_demo.py
+
+The launcher discovers the local macOS ARM64 build first. To select another build:
+
+    python3 tests/native/browser_features_demo.py --native /absolute/path/to/justcefnative
+
+Requires Python 3 and an already-built native runtime. OpenSSL enables the local
+self-signed certificate test; the HTTPS button is disabled if it is unavailable.
+No external website or account is required. The launcher uses Alloy style so CEF
+exposes certificate decisions and does not require --use-native.
+
+For simulated devices instead of your microphone/camera:
+
+    python3 tests/native/browser_features_demo.py --fake-media
+
+The default output directory is build/browser-features-demo. It contains PNG/PDF
+captures, downloads, a localhost test certificate, and a reusable Chromium profile.
+Keep port 8765 and that profile directory for the permission persistence test.
+Use --output /another/directory for a clean profile; --port changes the origin.
+Only run one instance per profile. Close the native window or press Ctrl+C to exit.
+The UI runs inside the native host; opening its URL in a normal browser will not
+provide justcef-view. Print and captures target the selected host/view browser.
+
+Manual checklist (expected results)
+-----------------------------------
+
+1. Custom schemes
+   Choose Custom app:// test page. The view should load app://demo/content.
+   Click Fetch app:// JSON inside the view: the page should report scheme=app and
+   servedBy=application proxy. Repeat Fetch on the Local HTTP test page to check
+   cross-origin fetch/CORS. Host navigation should remain on localhost.
+
+2. Website boundary
+   Read the capabilities entry in the embedded page log. bridge and viewElement
+   should both be "undefined". The page uses ordinary browser APIs; it has no
+   host control API. Custom schemes and permission outcomes are observable browser
+   behavior, so this is not a promise of being completely unfingerprintable.
+
+3. New windows / context-menu links
+   With Allow normal popups, test window.open, the target-blank link, middle-click,
+   and right-click > Open link in new window/tab. A new native window should load
+   the test page; neither host nor source view should navigate. The popup's
+   capabilities log should show no bridge or justcef-view. A normal window.open
+   should return a window and retain an opener.
+   Test both localhost and app:// source pages. Close the extra windows afterward.
+
+4. Popup policy / interception
+   Choose Block: new-window attempts should not open windows. Then choose Ask
+   before opening an independent window. Deny and allow separate attempts. Deny
+   opens nothing; allow opens the URL independently. window.open returns null in
+   interception mode, and the approved independent window has no opener.
+   Chrome may independently block unsolicited popup attempts; use actual clicks.
+
+5. Request routing / application-first decisions
+   Use Local HTTP test page. Keep Application decisions = Ask the host UI. Click
+   Microphone or Camera inside the view. The host dialog should identify the view
+   browser ID, not the host browser ID; compare the event log.
+   Deny: the content reports NotAllowedError. Allow: the stream starts; Camera
+   shows a preview. Stop devices releases streams.
+   Reset media records between scenarios. With Application denies first, a new
+   request should be rejected without a host decision dialog. Application allows
+   first should grant without that dialog. Return to Ask the host UI afterward.
+   Physical devices can also require macOS privacy approval; fake-media separates
+   Chromium routing from physical hardware/OS access. Automatic application allows
+   in this demo are temporary and do not remember grants.
+
+6. Chromium records / persistence
+   Select Embedded view, Reset media records, and click Microphone. Allow with
+   Remember checked. Read media records should show microphone=1 (Allow).
+   Stop devices and request again: the JustCef dialog should not reappear.
+   Close/restart the launcher using the same port/output directory and retry.
+   Repeat with Camera and Both. Remembered denial should show value=2 (Block).
+   Reset should restore prompting. Set allowed/blocked controls directly exercise
+   Chromium's content-setting API. Values: 0 Default, 1 Allow, 2 Block, 3 Ask.
+   Custom app:// grants cannot be persisted in Chromium; Remember is disabled
+   there. The record controls deliberately inspect the localhost HTTP origin.
+
+7. Other permissions
+   Test Notification permission and Geolocation permission. Verify the host receives
+   the requesting view's event and can deny it. Allowing geolocation can still fail
+   to obtain a location if no location service is available; receiving coordinates
+   is not required to validate request routing. Chromium may remember notification
+   choices independently; a fresh --output directory resets those choices.
+
+8. Frame/navigation cancellation
+   Reset media records and start a media request. In its host decision dialog,
+   click Load unrelated iframe while pending, then Allow. The original request
+   should still succeed. Stop devices/reset and request again; this time choose
+   Navigate away while pending. The old document should go away, and a new request
+   on the replacement page must work without being blocked by the old one.
+   These dialog controls are for requests delegated to the host element.
+
+9. Certificate errors
+   Choose Self-signed HTTPS test page. A certificate decision dialog should show
+   the request URL/error/subject/issuer for the view. Deny should produce a load
+   error; navigate to the local HTTP page and retry, allowing this time. The HTTPS
+   test content should load. Chromium can cache acceptance during a session; restart
+   the demo to test denial again. This does not install or trust a certificate in
+   the operating system. OpenSSL is required for this test.
+
+10. Downloads
+    On the HTTP page, click Download file, or Start slow download in host controls.
+    Deny once: no completed file. Allow another attempt: progress/byte counts should
+    advance and finish with complete=true; inspect the saved file in the output
+    directory. The transfer lasts roughly ten seconds so you can select its ID and
+    test Pause, Resume, then Cancel on another attempt. A canceled download must
+    not later report completion. Select the latest ID when testing another download.
+
+11. Screenshots
+    Select Embedded view and save viewport and full-page images with PNG selected.
+    Open each generated result to inspect its labeled image preview, then close
+    the preview and open a different result. Reopening older results should show
+    their own image. Download this image saves the displayed result. You can also
+    inspect files in the output directory. Close previews and scroll back to the
+    live embedded page: it must render, its clock must advance, and buttons must
+    still respond. Full-page capture should include
+    the bottom "End of capture test page" marker. Also test viewport followed by
+    full-page capture before ever scrolling down to the view; neither capture
+    should scroll the host or reveal the view. Resize while hidden and capture
+    again, then scroll down and verify clicks and animation still work.
+    Select Host window and repeat:
+    the capture should show host UI instead of just the embedded document.
+    Host captures should include the embedded website at its element's position,
+    with content clipped to the element and its containers. Check viewport and
+    full-page output at normal zoom and 120% zoom. Repeat with
+    JPEG/WebP and vary Quality to check the other capture formats.
+
+12. PDF / printing
+    Select Embedded view, Save PDF, and inspect the PDF for readable text, background
+    colors, multiple pages, and the bottom marker. Repeat for Host window. Open
+    print preview for each target and cancel or print as desired. On macOS,
+    JustCef enables Chromium print preview to avoid the Alloy system-dialog stall.
+    Close the preview and verify the page still responds. The print command
+    completing means the dialog was requested, not that a physical print finished.
+
+13. Live popup overlap
+    Open Cover view with a popup. The clock and video should continue updating
+    beneath the modal, without image placeholders. Resize while covered, suspend
+    while covered, and hide while covered. Resume/show afterward with the host
+    controls. The host CSP permits object-src 'self'; no data: image access is
+    needed. Closing the popup should immediately restore interaction.
+
+14. Ordinary movement / resizing
+    With no popup open, scroll the host across the view and adjust View height.
+    The clock should stay live and the view should move/resize normally. There
+    should be no scrolling/movement screenshot placeholders. Also test ordinary
+    scrolling inside the embedded page and its full-page content.
+
+15. Default native path / close
+    The launcher never passes --use-native. All windows above should work anyway.
+    Close popups, then the main window; the launcher should exit. Relaunch to check
+    the saved profile and media grant persistence.
+
+Additional automated checks
+----------------------------
+
+    python3 tests/native/browser_features_demo.py --fake-media --smoke
+
+This checks real native startup, navigation, host controls, custom-scheme fetch,
+PDF, screenshot, and popup/suspend controls without leaving the demo open.
+
+For capture-loss recovery and timing-sensitive cases, the renderer regressions
+are more reliable than trying to lose a capture manually:
+
+    node --test tests/native/view-renderer.test.cjs
+
+The existing macOS native file-drag pasteboard failure is separate from these new
+features. This laboratory does not claim to fix or validate dragging into Finder.

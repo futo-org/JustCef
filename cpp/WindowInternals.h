@@ -23,6 +23,7 @@ class WindowCommandTarget
 public:
     virtual ~WindowCommandTarget() = default;
 
+    virtual asio::awaitable<std::string> WindowBrowserCommandAsync(int identifier, std::string command, std::string options) = 0;
     virtual asio::awaitable<void> WindowMaximizeAsync(int identifier) = 0;
     virtual asio::awaitable<void> WindowMinimizeAsync(int identifier) = 0;
     virtual asio::awaitable<void> WindowRestoreAsync(int identifier) = 0;
@@ -99,6 +100,7 @@ struct WindowShared
     std::mutex request_mutex;
     BoundRequestModifier request_modifier;
     BoundRequestProxy request_proxy;
+    BrowserRequestHandler browser_request_handler;
     BridgeRpcHandler bridge_rpc_handler;
     ViewCreatedHandler view_created_handler;
     detail::AsyncSignal close_signal;

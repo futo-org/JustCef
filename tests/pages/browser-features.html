@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JustCef feature laboratory</title>
+<style>
+  :root { color-scheme: dark; font: 15px/1.5 system-ui; background:#111722; color:#e7eef8; }
+  body { margin:24px; max-width:1400px; } h1 { margin-bottom:4px; } h2 { font-size:18px; }
+  section, details { background:#1b2636; padding:16px; border-radius:10px; margin:16px 0; }
+  button,input,select { font:inherit; padding:7px 10px; margin:4px; } button { cursor:pointer; }
+  input[type=url] { width:min(650px,70%); } label { display:inline-block; margin-right:12px; }
+  justcef-view { display:block; width:100%; height:460px; background:white; border:2px solid #5474a0; }
+  pre { white-space:pre-wrap; overflow-wrap:anywhere; max-height:320px; overflow:auto; background:#101721; padding:12px; }
+  dialog { max-width:650px; border:1px solid #7e9dbb; border-radius:10px; background:#22334b; color:#fff; }
+  dialog::backdrop { background:#0006; } .hint { color:#b9cadf; } a { color:#85caff; }
+  #notice { position:sticky; top:0; background:#263e5e; padding:8px; z-index:3; }
+  #capturePreview { max-width:90vw; }
+  #captureImage { display:block; max-width:85vw; max-height:70vh; object-fit:contain; }
+  #captureImage[hidden] { display:none; }
+  #files { max-height:240px; overflow:auto; overflow-wrap:anywhere; }
+  .spacer { height:180px; background:linear-gradient(#1b2636,#111722); }
+</style>
+<h1>JustCef feature laboratory</h1>
+<p class="hint">Host controls are outside the embedded website. Use the buttons inside the white view to exercise ordinary browser APIs.</p>
+<p><a href="#view">Jump to embedded test page</a> · <a href="#target">Jump to capture controls</a> · <a href="#log">Jump to log</a></p>
+<div id="notice" role="status">Connecting to the local demo launcher…</div>
+<section>
+  <h2>1. Navigation and custom schemes</h2>
+  <form id="navigation"><input id="url" type="url" required><button>Navigate view</button></form>
+  <button id="local">Local HTTP test page</button><button id="custom">Custom app:// test page</button><button id="certificate">Self-signed HTTPS test page</button>
+  <p class="hint">HTTP localhost supports remembered media grants. app:// exercises scheme handling; Chromium does not persist media grants for this custom scheme.</p>
+</section>
+<section>
+  <h2>2. Application and popup policy</h2>
+  <label>Application decisions <select id="mode"><option value="delegate">Ask the host UI</option><option value="allow">Application allows first</option><option value="deny">Application denies first</option></select></label>
+  <label>New windows <select id="policy"><option value="native">Allow normal popups</option><option value="intercept">Ask before opening an independent window</option><option value="block">Block</option></select></label>
+  <p class="hint">Changes apply to the current view. Normal popups retain window.opener; interception makes window.open return null. Popups have no JustCef bridge or view element.</p>
+</section>
+<section>
+  <h2>3. Capture, printing, downloads and Chromium permission records</h2>
+  <label>Target <select id="target"><option value="view">Embedded view</option><option value="host">Host window</option></select></label>
+  <label>Image <select id="format"><option>png</option><option>jpeg</option><option>webp</option></select></label><label>Quality <input id="quality" type="number" min="0" max="100" value="90" style="width:60px"></label>
+  <button data-action="screenshot">Save viewport image</button><button data-action="screenshot" data-full="true">Save full-page image</button>
+  <button data-action="pdf">Save PDF</button><button data-action="print">Open print dialog</button><button data-action="download">Start slow download</button>
+  <p id="printStatus" class="hint"></p>
+  <p><button data-action="permissions">Read media records</button><button data-action="resetPermissions">Reset media records</button><button data-action="allowPermissions">Set mic + camera allowed</button><button data-action="blockPermissions">Set mic + camera blocked</button></p>
+  <p class="hint">Records shown here belong to the local HTTP test origin. Captures and downloads are saved under <span id="output"></span>.</p>
+  <div id="files"></div><pre id="downloads">No downloads yet.</pre>
+  <label>Download ID <input id="downloadId" type="number" min="1" size="5"></label>
+  <button data-control="pause">Pause</button><button data-control="resume">Resume</button><button data-control="cancel">Cancel</button>
+</section>
+<section>
+  <h2>4. Live overlays and lifecycle</h2>
+  <button id="overlay">Cover view with a popup</button><button id="suspend">Suspend view</button><button id="hide">Hide view</button>
+  <label>View height <input id="height" type="range" min="240" max="700" value="460"></label>
+  <p class="hint">The clock inside the view should keep updating beneath menus and dialogs. Scrolling and resizing should stay live.</p>
+</section>
+<div class="spacer">Scroll through this area to test ordinary view movement.</div>
+<justcef-view id="view" src="about:blank"></justcef-view>
+<div class="spacer"></div>
+<details open><summary>Event and result log</summary><button id="clear">Clear displayed log</button><pre id="log"></pre></details>
+<dialog id="capturePreview"><h2>Saved capture preview</h2><p id="captureTitle"></p><p><button id="closeCapture">Close preview</button><a id="captureFile" download>Download this image</a></p><img id="captureImage" hidden alt="Saved capture"></dialog>
+<dialog id="overlayDialog"><h2>Popup over the embedded view</h2><p>The embedded page stays live behind this popup. Its clock and video should continue updating.</p><button id="resizeCovered">Resize covered view</button><button id="suspendCovered">Suspend covered view</button><button id="hideCovered">Hide covered view</button><button id="closeOverlay">Close popup</button></dialog>
+<dialog id="decision"><h2 id="requestTitle">Browser request</h2><pre id="detail"></pre><label><input id="remember" type="checkbox">Remember media decision in Chromium</label><p><button id="allow">Allow</button><button id="deny">Deny</button></p><p><button id="pendingFrame">Load unrelated iframe while pending</button><button id="pendingNavigate">Navigate away while pending</button></p><p class="hint">Escape denies. Downloads save to the demo output directory. Requests expire after 55–60 seconds.</p></dialog>
+<script src="/browser-features.js"></script>
+</html>

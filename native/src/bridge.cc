@@ -708,8 +708,6 @@ CefRefPtr<CefDictionaryValue> CreateBridgeExtraInfo(bool bridge_enabled, CefRefP
     else
         extra_info->Remove(kViewsEnabledExtraInfoKey);
 
-    extra_info->Remove(kViewContentExtraInfoKey);
-
     if (extra_info->GetSize() == 0)
     {
         return nullptr;

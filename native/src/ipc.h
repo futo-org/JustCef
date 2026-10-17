@@ -91,6 +91,7 @@ enum class OpcodeController : uint8_t
     WindowSetCaptionButtonRegions = 59,
     GetRuntimeInfo = 60,
     WindowSetNextDragFiles = 61,
+    WindowBrowserCommand = 62,
     Debug = 250
 };
 
@@ -112,7 +113,8 @@ enum class OpcodeClient : uint8_t
     WindowProxyRequest = 3,
     WindowModifyRequest = 4,
     WindowBridgeRpc = 9,
-    WindowViewCreated = 11
+    WindowViewCreated = 11,
+    WindowBrowserDecision = 12
 };
 
 // Notifications from client
@@ -139,6 +141,8 @@ enum class OpcodeClientNotification : uint8_t
     StreamCredit = 18,
     StreamCancel = 19,
     WidevineStatus = 20,
+    WindowDownloadUpdated = 22,
+    WindowPopupCreated = 21,
     Debug = 250
 };
 
@@ -197,6 +201,7 @@ typedef struct _IPCWindowCreate
 class IPC
 {
 public:
+    ipc::CallHandle BrowserDecision(int identifier, const std::string& kind, CefRefPtr<CefDictionaryValue> detail, std::function<void(CefRefPtr<CefDictionaryValue>)> callback);
     static IPC Singleton;
 
     IPC();
@@ -232,6 +237,8 @@ public:
     }
 
     void NotifyWindowOpened(CefRefPtr<CefBrowser> browser);
+    void NotifyPopupCreated(int parentId, int browserId);
+    void NotifyDownloadUpdated(int browserId, CefRefPtr<CefDictionaryValue> detail);
     void NotifyWindowClosed(CefRefPtr<CefBrowser> browser);
     void NotifyWindowFocused(CefRefPtr<CefBrowser> browser);
     void NotifyWindowUnfocused(CefRefPtr<CefBrowser> browser);
@@ -324,7 +331,7 @@ ipc::StatusCode HandleRemoveDevToolsEventMethod(PacketReader& reader, PacketWrit
 ipc::StatusCode HandleWindowSetZoom(PacketReader& reader, PacketWriter& writer);
 ipc::StatusCode HandleWindowGetZoom(PacketReader& reader, PacketWriter& writer);
 bool HandleWindowBridgeRpc(uint32_t requestId, PacketReader& reader, PacketWriter& writer);
-CefRefPtr<Client> CreateBrowserWindow(const IPCWindowCreate& windowCreate);
+CefRefPtr<Client> CreateBrowserWindow(const IPCWindowCreate& windowCreate, int popupParentId = 0, bool interceptNewWindows = false, CefRefPtr<Client> routingSource = nullptr);
 void CreateTopLevelPopupWindow(CefRefPtr<CefBrowserView> popup_browser_view, bool is_devtools, const IPCWindowCreate& settings);
 
 #endif // IPC_H

@@ -1,6 +1,7 @@
 #include "ipc.h"
 
 #include "bridge.h"
+#include "browser_features.h"
 #include "client.h"
 #include "client_manager.h"
 #include "client_util.h"
@@ -124,6 +125,7 @@ bool IsBrowserRequest(OpcodeController opcode)
     case OpcodeController::WindowSetDraggableRegions:
     case OpcodeController::WindowSetCaptionButtonRegions:
     case OpcodeController::WindowSetNextDragFiles:
+    case OpcodeController::WindowBrowserCommand:
         return true;
     default:
         return false;
@@ -480,6 +482,9 @@ bool IPC::HandleRequest(ipc::Reply& reply, OpcodeController opcode, PacketReader
         return false;
     case OpcodeController::SaveFile:
         HandleWindowSaveFilePicker(reader, std::move(reply));
+        return false;
+    case OpcodeController::WindowBrowserCommand:
+        HandleBrowserCommand(reader, std::move(reply));
         return false;
     case OpcodeController::WindowExecuteDevToolsMethod:
         HandleWindowExecuteDevToolsMethodRequest(std::move(reply), reader);
@@ -1296,7 +1301,6 @@ public:
         CefRefPtr<CefWindow> window = panel ? panel->AsWindow() : nullptr;
         if (window)
         {
-            justcef_view::OnHostWindowLayoutChanged(window);
             auto browser = browser_view_ ? browser_view_->GetBrowser() : nullptr;
             if (browser)
                 static_cast<Client*>(browser->GetHost()->GetClient().get())->ApplyDraggableRegions(browser);
@@ -1433,7 +1437,7 @@ void CreateTopLevelPopupWindow(CefRefPtr<CefBrowserView> popup_browser_view, boo
     CefWindow::CreateTopLevelWindow(new WindowDelegate(popup_browser_view, GetConfiguredRuntimeStyle(), showState, settings));
 }
 
-CefRefPtr<Client> CreateBrowserWindow(const IPCWindowCreate& windowCreate)
+CefRefPtr<Client> CreateBrowserWindow(const IPCWindowCreate& windowCreate, int popupParentId, bool interceptNewWindows, CefRefPtr<Client> routingSource)
 {
     CEF_REQUIRE_UI_THREAD();
 
@@ -1444,6 +1448,10 @@ CefRefPtr<Client> CreateBrowserWindow(const IPCWindowCreate& windowCreate)
     const cef_runtime_style_t runtime_style = GetConfiguredRuntimeStyle();
 
     CefRefPtr<Client> client = new Client(windowCreate);
+    if (routingSource)
+        routingSource->CopyPopupRouting(*client);
+    client->popupParentId = popupParentId;
+    client->interceptNewWindows = interceptNewWindows;
     CefBrowserSettings settings;
     CefRefPtr<CefDictionaryValue> extra_info = CreateBridgeExtraInfo(windowCreate.bridgeEnabled, nullptr, windowCreate.viewsEnabled);
 
@@ -1458,62 +1466,11 @@ CefRefPtr<Client> CreateBrowserWindow(const IPCWindowCreate& windowCreate)
         return client;
     }
 
-    const bool use_views = !command_line->HasSwitch("use-native");
-    LOG(INFO) << "Use views = " << (use_views ? "true" : "false");
-
     cef_show_state_t showState = windowCreate.shown ? (windowCreate.fullscreen ? CEF_SHOW_STATE_FULLSCREEN : CEF_SHOW_STATE_NORMAL) : CEF_SHOW_STATE_HIDDEN;
 
-    if (use_views)
-    {
-        CefRefPtr<CefBrowserView> browser_view =
-            CefBrowserView::CreateBrowserView(client, windowCreate.url, settings, extra_info, nullptr, new BrowserViewDelegate(windowCreate, runtime_style));
-        CefWindow::CreateTopLevelWindow(new WindowDelegate(browser_view, runtime_style, showState, windowCreate));
-    }
-    else
-    {
-        CefWindowInfo window_info;
-        window_info.bounds.width = windowCreate.preferredWidth;
-        window_info.bounds.height = windowCreate.preferredHeight;
-        window_info.runtime_style = runtime_style;
-
-#if defined(OS_WIN)
-        DWORD style = WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
-        if (windowCreate.shown)
-        {
-            style |= WS_VISIBLE;
-        }
-        window_info.style = style;
-        window_info.parent_window = nullptr;
-        window_info.bounds.x = CW_USEDEFAULT;
-        window_info.bounds.y = CW_USEDEFAULT;
-
-        HMODULE shcore = LoadLibraryW(L"Shcore.dll");
-        if (shcore)
-        {
-            typedef HRESULT(WINAPI * GetDpiForMonitorPtr)(HMONITOR, int, UINT*, UINT*);
-            GetDpiForMonitorPtr GetDpiForMonitor = reinterpret_cast<GetDpiForMonitorPtr>(GetProcAddress(shcore, "GetDpiForMonitor"));
-            if (GetDpiForMonitor)
-            {
-                POINT placementPoint = {(window_info.bounds.x == CW_USEDEFAULT) ? 0 : window_info.bounds.x, (window_info.bounds.y == CW_USEDEFAULT) ? 0 : window_info.bounds.y};
-
-                HMONITOR monitor = MonitorFromPoint(placementPoint, MONITOR_DEFAULTTONEAREST);
-
-                UINT dpiX = 96, dpiY = 96; // Default DPI (96 DPI = 100% scaling)
-                if (SUCCEEDED(GetDpiForMonitor(monitor, 0 /* MDT_EFFECTIVE_DPI */, &dpiX, &dpiY)))
-                {
-                    float scaleFactor = dpiX / 96.0f;
-                    window_info.bounds.width = scaleFactor * window_info.bounds.width;
-                    window_info.bounds.height = scaleFactor * window_info.bounds.height;
-                }
-            }
-        }
-#endif
-
-        // TODO: Copy over window name
-        // cef_string_copy(windowName.c_str(), windowName.length(), &window_name);
-
-        CefBrowserHost::CreateBrowserSync(window_info, client, windowCreate.url, settings, extra_info, nullptr);
-    }
+    CefRefPtr<CefBrowserView> browser_view =
+        CefBrowserView::CreateBrowserView(client, windowCreate.url, settings, extra_info, nullptr, new BrowserViewDelegate(windowCreate, runtime_style));
+    CefWindow::CreateTopLevelWindow(new WindowDelegate(browser_view, runtime_style, showState, windowCreate));
 
     return client;
 }
@@ -2157,6 +2114,8 @@ ipc::StatusCode HandleWindowRequestFocus(PacketReader& reader, PacketWriter& wri
         LOG(ERROR) << "HandleWindowRequestFocus called while CefBrowser is already closed. Ignored.";
         return ipc::StatusCode::NotFound;
     }
+    if (justcef_view::FocusView(browser))
+        return ipc::StatusCode::Ok;
     CefRefPtr<CefBrowserView> browser_view = CefBrowserView::GetForBrowser(browser);
     if (browser_view)
     {
@@ -2391,18 +2350,29 @@ void IPC::HandleWindowExecuteDevToolsMethodRequest(ipc::Reply reply, PacketReade
     }
 
     auto sharedReply = std::make_shared<ipc::Reply>(std::move(reply));
-    const bool started = pClient->ExecuteDevToolsMethodAsync(browser, *method, params,
-                                                              [sharedReply](bool success, std::string result)
-                                                              {
-                                                                  PacketWriter writer;
-                                                                  if (!writer.write(success) || !WriteBytes(writer, reinterpret_cast<const uint8_t*>(result.data()), result.size()))
-                                                                  {
-                                                                      sharedReply->Fail(ipc::StatusCode::TooLarge, "The DevTools result is too large.");
-                                                                      return;
-                                                                  }
+    int methodId = 0;
+    const bool started = pClient->ExecuteDevToolsMethodAsync(
+        browser, *method, params,
+        [sharedReply](bool success, std::string result)
+        {
+            PacketWriter writer;
+            if (!writer.write(success) || !WriteBytes(writer, reinterpret_cast<const uint8_t*>(result.data()), result.size()))
+            {
+                sharedReply->Fail(ipc::StatusCode::TooLarge, "The DevTools result is too large.");
+                return;
+            }
 
-                                                                  sharedReply->Ok(writer.data(), writer.size());
-                                                              });
+            sharedReply->Ok(writer.data(), writer.size());
+        },
+        &methodId);
+    if (started)
+    {
+        sharedReply->OnCanceled(
+            [client = CefRefPtr<Client>(pClient), methodId]
+            {
+                CefPostTask(TID_UI, base::BindOnce(&Client::CancelDevToolsMethod, client, methodId));
+            });
+    }
     if (!started)
     {
         PacketWriter writer;
@@ -2964,6 +2934,11 @@ void IPC::HandleDebug(ipc::Reply reply, PacketReader& reader)
                     reply.Fail(ipc::StatusCode::NotFound, "Browser not found.");
                     return;
                 }
+                if (justcef_view::IsEmbeddedBrowser(browser))
+                {
+                    reply.Fail(ipc::StatusCode::Unsupported, "Inject input through the host browser; Chromium routes it into embedded surfaces.");
+                    return;
+                }
                 auto host = browser->GetHost();
                 CefMouseEvent event;
                 event.x = x;
@@ -3025,4 +3000,51 @@ void IPC::HandleDebug(ipc::Reply reply, PacketReader& reader)
     }
 
     reply.Fail(ipc::StatusCode::InvalidRequest, "Unknown debug action.");
+}
+
+ipc::CallHandle IPC::BrowserDecision(int identifier, const std::string& kind, CefRefPtr<CefDictionaryValue> detail, std::function<void(CefRefPtr<CefDictionaryValue>)> callback)
+{
+    PacketWriter writer;
+    writer.write<int32_t>(identifier);
+    writer.writeSizePrefixedString(kind);
+    auto value = CefValue::Create();
+    value->SetDictionary(detail);
+    writer.writeSizePrefixedString(CefWriteJSON(value, JSON_WRITER_DEFAULT));
+    return CallAsync(OpcodeClient::WindowBrowserDecision, ToVector(writer), std::chrono::seconds(60),
+                     [callback = std::move(callback)](ipc::Response response)
+                     {
+                         CefRefPtr<CefDictionaryValue> answer = CefDictionaryValue::Create();
+                         if (response.status == ipc::StatusCode::Ok)
+                         {
+                             PacketReader reader(response.payload.data(), response.payload.size());
+                             auto json = reader.readSizePrefixedString();
+                             auto value = json ? CefParseJSON(*json, JSON_PARSER_RFC) : nullptr;
+                             if (value && value->GetType() == VTYPE_DICTIONARY)
+                                 answer = value->GetDictionary();
+                         }
+                         CefPostTask(TID_UI, base::BindOnce(
+                                                 [](std::function<void(CefRefPtr<CefDictionaryValue>)> fn, CefRefPtr<CefDictionaryValue> value)
+                                                 {
+                                                     fn(value);
+                                                 },
+                                                 std::move(callback), answer));
+                     });
+}
+
+void IPC::NotifyPopupCreated(int parentId, int browserId)
+{
+    PacketWriter writer;
+    writer.write<int32_t>(parentId);
+    writer.write<int32_t>(browserId);
+    Notify(OpcodeClientNotification::WindowPopupCreated, writer);
+}
+
+void IPC::NotifyDownloadUpdated(int browserId, CefRefPtr<CefDictionaryValue> detail)
+{
+    auto value = CefValue::Create();
+    value->SetDictionary(detail);
+    PacketWriter writer;
+    writer.write<int32_t>(browserId);
+    writer.writeSizePrefixedString(CefWriteJSON(value, JSON_WRITER_DEFAULT));
+    Notify(OpcodeClientNotification::WindowDownloadUpdated, writer);
 }

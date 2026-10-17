@@ -768,6 +768,87 @@ asio::awaitable<void> JustCefBrowser::SetDevelopmentToolsVisibleAsync(bool devel
     return CallProcess(command_target_, &WindowCommandTarget::WindowSetDevelopmentToolsVisibleAsync, Identifier(), development_tools_visible);
 }
 
+std::string BrowserDecision::ToJson() const
+{
+    return nlohmann::json{{"allow", allow}, {"remember", remember}, {"path", path}, {"showDialog", show_dialog}}.dump();
+}
+
+void JustCefBrowser::SetBrowserRequestHandler(BrowserRequestHandler handler)
+{
+    std::lock_guard<std::mutex> lock(shared_->request_mutex);
+    shared_->browser_request_handler = std::move(handler);
+}
+
+asio::awaitable<void> JustCefBrowser::SetNewWindowsAllowedAsync(bool allow, bool intercept_requests)
+{
+    const auto options = nlohmann::json{{"allow", allow}, {"intercept", intercept_requests}}.dump();
+    co_await CallProcess(command_target_, &WindowCommandTarget::WindowBrowserCommandAsync, Identifier(), std::string("windowOpenPolicy"), options);
+}
+
+asio::awaitable<void> JustCefBrowser::PrintAsync()
+{
+    co_await CallProcess(command_target_, &WindowCommandTarget::WindowBrowserCommandAsync, Identifier(), std::string("print"), std::string("{}"));
+}
+
+asio::awaitable<void> JustCefBrowser::StartDownloadAsync(std::string url)
+{
+    const auto options = nlohmann::json{{"url", url}}.dump();
+    co_await CallProcess(command_target_, &WindowCommandTarget::WindowBrowserCommandAsync, Identifier(), std::string("download"), options);
+}
+
+asio::awaitable<void> JustCefBrowser::ControlDownloadAsync(std::uint32_t id, std::string action)
+{
+    if (action != "cancel" && action != "pause" && action != "resume")
+        throw std::invalid_argument("Expected cancel, pause, or resume.");
+    const auto options = nlohmann::json{{"id", id}, {"action", action}}.dump();
+    co_await CallProcess(command_target_, &WindowCommandTarget::WindowBrowserCommandAsync, Identifier(), std::string("downloadControl"), options);
+}
+
+asio::awaitable<MediaPermissionSettings> JustCefBrowser::GetMediaPermissionsAsync(std::string origin, std::optional<std::string> top_level_origin)
+{
+    const auto options = nlohmann::json{{"origin", origin}, {"topLevelOrigin", top_level_origin.value_or(origin)}}.dump();
+    const auto json = co_await CallProcess(command_target_, &WindowCommandTarget::WindowBrowserCommandAsync, Identifier(), std::string("permission"), options);
+    const auto value = nlohmann::json::parse(json);
+    co_return MediaPermissionSettings{value.at("microphone").get<int>(), value.at("camera").get<int>()};
+}
+
+asio::awaitable<void> JustCefBrowser::SetMediaPermissionsAsync(std::string origin, int permissions, int value, std::optional<std::string> top_level_origin)
+{
+    const auto options = nlohmann::json{{"origin", origin}, {"topLevelOrigin", top_level_origin.value_or(origin)}, {"permissions", permissions}, {"value", value}}.dump();
+    co_await CallProcess(command_target_, &WindowCommandTarget::WindowBrowserCommandAsync, Identifier(), std::string("permission"), options);
+}
+
+asio::awaitable<std::vector<std::uint8_t>> JustCefBrowser::CaptureScreenshotAsync(ScreenshotOptions options)
+{
+    if (options.format != "png" && options.format != "jpeg" && options.format != "webp")
+        throw std::invalid_argument("Unsupported screenshot format.");
+    if (options.quality < 0 || options.quality > 100)
+        throw std::invalid_argument("Screenshot quality must be 0..100.");
+    const nlohmann::json params{{"format", options.format}, {"fullPage", options.full_page}, {"quality", options.quality}};
+    const auto result = co_await CallProcess(command_target_, &WindowCommandTarget::WindowBrowserCommandAsync,
+                                           Identifier(), std::string("captureScreenshot"), params.dump());
+    co_return DecodeBase64(nlohmann::json::parse(result).at("data").get<std::string>());
+}
+
+asio::awaitable<std::vector<std::uint8_t>> JustCefBrowser::PrintToPdfAsync(PdfOptions options)
+{
+    const nlohmann::json params{{"landscape", options.landscape},
+                                {"printBackground", options.print_background},
+                                {"paperWidth", options.paper_width},
+                                {"paperHeight", options.paper_height},
+                                {"marginTop", options.margin_top},
+                                {"marginBottom", options.margin_bottom},
+                                {"marginLeft", options.margin_left},
+                                {"marginRight", options.margin_right},
+                                {"scale", options.scale},
+                                {"pageRanges", options.page_ranges},
+                                {"preferCSSPageSize", options.prefer_css_page_size}};
+    const auto result = co_await ExecuteDevToolsMethodAsync("Page.printToPDF", params.dump());
+    if (!result.success)
+        throw std::runtime_error("PDF export failed.");
+    co_return DecodeBase64(nlohmann::json::parse(result.data).at("data").get<std::string>());
+}
+
 asio::awaitable<DevToolsMethodResult> JustCefBrowser::ExecuteDevToolsMethodAsync(std::string method_name, std::optional<std::string> json)
 {
     return CallProcess(command_target_, &WindowCommandTarget::WindowExecuteDevToolsMethodAsync, Identifier(), std::move(method_name), std::move(json));

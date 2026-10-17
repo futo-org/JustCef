@@ -72,6 +72,7 @@ public enum ControllerOp : byte
     WindowSetCaptionButtonRegions = 59,
     GetRuntimeInfo = 60,
     WindowSetNextDragFiles = 61,
+    WindowBrowserCommand = 62,
     Debug = 250
 }
 
@@ -91,6 +92,7 @@ public enum ClientOp : byte
     WindowProxyRequest = 3,
     WindowModifyRequest = 4,
     WindowBridgeRpc = 9,
+    WindowBrowserDecision = 12,
     WindowViewCreated = 11
 }
 
@@ -111,6 +113,7 @@ public enum ClientNotification : byte
     StreamCredit = 18,
     StreamCancel = 19,
     WidevineStatus = 20,
+    WindowDownloadUpdated = 22,
     Debug = 250
 }
 

@@ -90,8 +90,15 @@ void ClientManager::OnBeforeClose(CefRefPtr<CefBrowser> browser)
 
     if (browser_list_.empty())
     {
-        // All browser windows have closed. Quit the application message loop.
-        CefQuitMessageLoop();
+        // Let native window close callbacks unwind before leaving the UI loop.
+        // Print preview can still be releasing a child modal window here.
+        CefPostTask(TID_UI, base::BindOnce(
+                                []()
+                                {
+                                    auto manager = ClientManager::GetInstance();
+                                    if (manager && manager->GetBrowserCount() == 0)
+                                        CefQuitMessageLoop();
+                                }));
     }
 
     LOG(INFO) << "ClientManager::OnBeforeClose called identifier = " << browser->GetIdentifier() << ".";

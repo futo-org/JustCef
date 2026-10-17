@@ -1,11 +1,18 @@
 namespace JustCef
 {
-    public class JustCefBrowser
+    public partial class JustCefBrowser
     {
         private protected readonly JustCefProcess _process;
         public readonly int Identifier;
 
         public event Action? OnClose;
+        public event Action<JustCefWindow>? OnPopupCreated;
+        internal void InvokePopupCreated(JustCefWindow popup) => _process.PostEvent(() => OnPopupCreated?.Invoke(popup));
+        internal void InheritBrowserHandlers(JustCefBrowser parent)
+        {
+            _requestProxy = parent._requestProxy;
+            _browserRequestHandler = parent._browserRequestHandler;
+        }
         public event Action? OnFocused;
         public event Action? OnUnfocused;
         public event Action<bool>? OnFullscreenChanged;

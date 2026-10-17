@@ -9,40 +9,38 @@
 #include "include/views/cef_window.h"
 
 #include <string>
+#include <vector>
 
 class Client;
 
 namespace justcef_view
 {
 
+
 void ConfigureHostWindowLayout(CefRefPtr<CefWindow> window, CefRefPtr<CefBrowserView> browserView);
 bool HandleHostProcessMessage(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefRefPtr<CefProcessMessage> message);
-void OnHostWindowLayoutChanged(CefRefPtr<CefWindow> window);
 void OnHostWindowClosing(CefRefPtr<CefWindow> window);
 void OnHostFrameGone(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame);
 void OnHostBrowserGone(CefRefPtr<CefBrowser> browser);
-void OnHostDialogStateChanged(CefRefPtr<CefBrowser> browser, bool open);
 void OnHostGotFocus(CefRefPtr<CefBrowser> browser);
 bool IsFocusInView(CefRefPtr<CefBrowser> hostBrowser);
+bool FocusView(CefRefPtr<CefBrowser> browser);
+bool IsEmbeddedBrowser(CefRefPtr<CefBrowser> browser);
 void PropagateHostZoom(CefRefPtr<CefBrowser> browser, double zoomLevel);
 
 void OnViewAfterCreated(Client* client, CefRefPtr<CefBrowser> browser);
 bool OnViewDoClose(CefRefPtr<CefBrowser> browser);
 void OnViewBeforeClose(CefRefPtr<CefBrowser> browser);
-void OnViewLoadStart(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame);
 void OnViewLoadEnd(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int httpStatusCode);
 void OnViewLoadError(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int errorCode, const std::string& errorText, const std::string& failedUrl);
 void OnViewTitleChange(CefRefPtr<CefBrowser> browser, const std::string& title);
 void OnViewFocusChanged(CefRefPtr<CefBrowser> browser, bool focused);
-void OnViewTakeFocus(CefRefPtr<CefBrowser> browser, bool next);
-bool OnViewKeyEvent(CefRefPtr<CefBrowser> browser, const CefKeyEvent& event);
 void OnViewFullscreenModeChange(CefRefPtr<CefBrowser> browser, bool fullscreen);
-void OnViewPermissionRequest(CefRefPtr<CefBrowser> browser, const std::string& origin, const std::string& permissions);
+bool OnViewBrowserRequest(CefRefPtr<CefBrowser> browser, const std::string& kind, CefRefPtr<CefDictionaryValue> detail);
 void OnViewRenderProcessTerminated(CefRefPtr<CefBrowser> browser);
-void OnViewWheel(CefRefPtr<CefBrowser> browser, double deltaX, double deltaY, double clientX, double clientY, int phase);
-void OnViewKeyScroll(CefRefPtr<CefBrowser> browser, const std::string& kind);
-bool TranslateViewOskRect(CefRefPtr<CefBrowser> browser, int& x, int& y);
 
-} // namespace justcef_view
+bool TranslateViewOskRect(CefRefPtr<CefBrowser> browser, int& x, int& y, int& width, int& height);
+
+}
 
 #endif // JUSTCEF_VIEW_HOST_H_

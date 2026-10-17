@@ -1,6 +1,7 @@
 #include "app_factory.h"
 #include "client.h"
 #include "client_manager.h"
+#include "custom_schemes.h"
 #include "ipc.h"
 #include "main_util.h"
 #include "simple_handler.h"
@@ -111,7 +112,14 @@ private:
 class BrowserApp : public CefApp, public CefBrowserProcessHandler
 {
 public:
+    void OnRegisterCustomSchemes(CefRawPtr<CefSchemeRegistrar> registrar) override { RegisterCustomSchemes(registrar); }
     BrowserApp() {}
+    void OnBeforeChildProcessLaunch(CefRefPtr<CefCommandLine> command) override
+    {
+        auto current = CefCommandLine::GetGlobalCommandLine();
+        if (current->HasSwitch("custom-schemes"))
+            command->AppendSwitchWithValue("custom-schemes", current->GetSwitchValue("custom-schemes"));
+    }
 
     // CefApp methods:
     CefRefPtr<CefBrowserProcessHandler> GetBrowserProcessHandler() override { return this; }
@@ -122,9 +130,19 @@ public:
         // |process_type| is empty for the browser process.
         if (process_type.empty())
         {
+            auto features = command_line->GetSwitchValue("enable-features").ToString();
+            if (!features.empty()) features += ",";
+            features += "SurfaceEmbed";
+            command_line->AppendSwitchWithValue("enable-features", features);
+
 #if defined(OS_MACOSX)
             // Disable the macOS keychain prompt. Cookies will not be encrypted.
             command_line->AppendSwitch("use-mock-keychain");
+            // Alloy's direct macOS print path can leave the renderer waiting for
+            // a system dialog that never appears. Views supports Chromium's
+            // print preview, which keeps the page responsive and owns the dialog.
+            if (!command_line->HasSwitch("disable-print-preview"))
+                command_line->AppendSwitch("enable-print-preview");
 #endif
 #if defined(OS_LINUX)
             if (ShouldEnableWaylandIme(command_line))

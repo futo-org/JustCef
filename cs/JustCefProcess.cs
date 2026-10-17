@@ -99,6 +99,7 @@ namespace JustCef
             WindowSetCaptionButtonRegions = 59,
             GetRuntimeInfo = 60,
             WindowSetNextDragFiles = 61,
+            WindowBrowserCommand = 62,
         }
 
         public enum OpcodeControllerNotification : byte
@@ -122,7 +123,8 @@ namespace JustCef
             //StreamCancel = 8,
             WindowBridgeRpc = 9,
             //StreamEnd = 10,
-            WindowViewCreated = 11
+            WindowViewCreated = 11,
+            WindowBrowserDecision = 12
         }
 
         public enum OpcodeClientNotification : byte
@@ -147,7 +149,9 @@ namespace JustCef
             WindowLoadingStateChanged = 17,
             StreamCredit = 18,
             StreamCancel = 19,
-            WidevineStatus = 20
+            WidevineStatus = 20,
+            WindowDownloadUpdated = 22,
+    WindowPopupCreated = 21
         }
 
         public enum ModifyTimeoutPolicy : byte
@@ -310,6 +314,7 @@ namespace JustCef
         private static readonly TimeSpan ShutdownGracePeriod = TimeSpan.FromSeconds(5);
         private readonly AnonymousPipeServerStream _writer;
         private readonly AnonymousPipeServerStream _reader;
+        private readonly ConcurrentDictionary<uint, CancellationTokenSource> _browserDecisionCancellations = new();
         private readonly Dictionary<uint, PendingRequest> _pendingRequests = new Dictionary<uint, PendingRequest>();
         private readonly HashSet<uint> _inflightRequests = new HashSet<uint>();
         private Process? _childProcess;
@@ -494,11 +499,21 @@ namespace JustCef
             _ = Task.Run(DispatchEventsAsync);
         }
 
+        /// <summary>Content schemes registered before CEF startup. Serve requests through the browser request proxy.
+        /// Schemes are standard, secure, CORS- and Fetch-enabled, without CSP bypass or service-worker privileges.</summary>
+        public IReadOnlyList<string> CustomSchemes { get; set; } = Array.Empty<string>();
+
         public void Start(string? args = null)
         {
             if (_started)
                 throw new Exception("Already started.");
 
+            if (CustomSchemes.Count > 0)
+            {
+                foreach (var scheme in CustomSchemes) BrowserScheme.Validate(scheme);
+                if (args?.Contains("--custom-schemes") == true) throw new ArgumentException("Configure schemes through CustomSchemes or arguments, not both.", nameof(args));
+                args = (args ?? "") + " --custom-schemes=" + string.Join(',', CustomSchemes.Distinct());
+            }
             _started = true;
             
 #if !HARDCODED_PATHS
@@ -647,6 +662,11 @@ namespace JustCef
                             }
                         }
 
+                        // Resolve the source before scheduling: a following close notification may remove it.
+                        JustCefBrowser? requestBrowser = null;
+                        if (packetType == PacketType.Request && opcode == (byte)OpcodeClient.WindowProxyRequest && bodySize >= sizeof(int))
+                            requestBrowser = GetBrowser(BinaryPrimitives.ReadInt32LittleEndian(rentedBodyBuffer!.Buffer.AsSpan(0, sizeof(int))));
+                        CancellationTokenSource? decisionCancellation = null;
                         async Task RunPacket()
                         {
                             try
@@ -682,7 +702,12 @@ namespace JustCef
                                     string? message = null;
                                     try
                                     {
-                                        status = await HandleRequestAsync((OpcodeClient)opcode, packetReader, packetWriter, deferredOutgoingStreams).ConfigureAwait(false);
+                                        status = await HandleRequestAsync((OpcodeClient)opcode, packetReader, packetWriter, deferredOutgoingStreams, decisionCancellation?.Token ?? CancellationToken.None, requestBrowser).ConfigureAwait(false);
+                                    }
+                                    catch (OperationCanceledException) when (decisionCancellation?.IsCancellationRequested == true)
+                                    {
+                                        deferredOutgoingStreams.CleanupAll();
+                                        status = JustCefStatus.Canceled;
                                     }
                                     catch (Exception e)
                                     {
@@ -726,6 +751,9 @@ namespace JustCef
                                 }
                                 else if (packetType == PacketType.Cancel)
                                 {
+                                    if (_browserDecisionCancellations.TryGetValue(requestId, out var cancellation)) {
+                                        try { _ = cancellation.CancelAsync(); } catch (ObjectDisposedException) { }
+                                    }
                                     if (CompleteInflightRequest(requestId))
                                     {
                                         using var packetWriter = new PacketWriter().WriteSizePrefixedString(null);
@@ -739,6 +767,10 @@ namespace JustCef
                             }
                             finally
                             {
+                                if (decisionCancellation != null) {
+                                    _browserDecisionCancellations.TryRemove(requestId, out _);
+                                    decisionCancellation.Dispose();
+                                }
                                 rentedBodyBuffer?.Dispose();
                             }
                         }
@@ -752,10 +784,18 @@ namespace JustCef
                             if (!accepted)
                             {
                                 Logger.Error<JustCefProcess>($"Received a duplicate request id {requestId} from native.");
+                                rentedBodyBuffer?.Dispose();
                                 SendResponse(requestId, opcode, JustCefStatus.InvalidRequest, new PacketWriter());
                             }
                             else
+                            {
+                                if (opcode == (byte)OpcodeClient.WindowBrowserDecision)
+                                {
+                                    decisionCancellation = new CancellationTokenSource();
+                                    _browserDecisionCancellations.TryAdd(requestId, decisionCancellation);
+                                }
                                 _ = Task.Run(RunPacket);
+                            }
                         }
                         else
                             RunPacket().GetAwaiter().GetResult();
@@ -782,7 +822,7 @@ namespace JustCef
             _writerThread.Start();
         }
 
-        private async Task<JustCefStatus> HandleRequestAsync(OpcodeClient opcode, PacketReader reader, PacketWriter writer, DeferredOutgoingStreams deferredOutgoingStreams)
+        private async Task<JustCefStatus> HandleRequestAsync(OpcodeClient opcode, PacketReader reader, PacketWriter writer, DeferredOutgoingStreams deferredOutgoingStreams, CancellationToken cancellationToken, JustCefBrowser? requestBrowser)
         {
             switch (opcode)
             {
@@ -795,11 +835,20 @@ namespace JustCef
                     writer.WriteBytes(reader.ReadBytes(reader.RemainingSize));
                     break;
                 case OpcodeClient.WindowProxyRequest:
-                    return await HandleWindowProxyRequestAsync(reader, writer, deferredOutgoingStreams).ConfigureAwait(false);
+                    return await HandleWindowProxyRequestAsync(reader, writer, deferredOutgoingStreams, requestBrowser).ConfigureAwait(false);
                 case OpcodeClient.WindowModifyRequest:
                     return HandleWindowModifyRequest(reader, writer);
                 case OpcodeClient.WindowBridgeRpc:
                     return await HandleWindowBridgeRpcAsync(reader, writer).ConfigureAwait(false);
+                case OpcodeClient.WindowBrowserDecision:
+                {
+                    var browser = GetBrowser(reader.Read<int>());
+                    var kind = reader.ReadSizePrefixedString()!;
+                    var detail = reader.ReadSizePrefixedString()!;
+                    if (browser == null) return JustCefStatus.NotFound;
+                    writer.WriteSizePrefixedString(await browser.HandleBrowserRequestAsync(kind, detail, cancellationToken).ConfigureAwait(false));
+                    return JustCefStatus.Ok;
+                }
                 case OpcodeClient.WindowViewCreated:
                     return await HandleWindowViewCreatedAsync(reader, writer).ConfigureAwait(false);
                 default:
@@ -834,10 +883,9 @@ namespace JustCef
             }
         }
 
-        private async Task<JustCefStatus> HandleWindowProxyRequestAsync(PacketReader reader, PacketWriter writer, DeferredOutgoingStreams deferredOutgoingStreams)
+        private async Task<JustCefStatus> HandleWindowProxyRequestAsync(PacketReader reader, PacketWriter writer, DeferredOutgoingStreams deferredOutgoingStreams, JustCefBrowser? window)
         {
             int identifier = reader.Read<int>();
-            var window = GetBrowser(identifier);
             if (window == null)
                 return JustCefStatus.NotFound;
 
@@ -1272,6 +1320,22 @@ namespace JustCef
                     _widevineStatusTaskCompletionSource.TrySetResult(new WidevineStatus(state, reason,
                         string.IsNullOrEmpty(detail) ? null : detail,
                         string.IsNullOrEmpty(version) ? null : version));
+                    break;
+                }
+                case OpcodeClientNotification.WindowDownloadUpdated:
+                {
+                    var browser = GetBrowser(reader.Read<int>());
+                    browser?.InvokeDownloadUpdated(reader.ReadSizePrefixedString()!);
+                    break;
+                }
+                case OpcodeClientNotification.WindowPopupCreated:
+                {
+                    var parent = GetBrowser(reader.Read<int>());
+                    int identifier = reader.Read<int>();
+                    if (parent == null) break;
+                    var popup = new JustCefWindow(this, identifier, null, null, null, true);
+                    popup.InheritBrowserHandlers(parent);
+                    if (RegisterBrowser(popup)) parent.InvokePopupCreated(popup);
                     break;
                 }
                 case OpcodeClientNotification.WindowOpened:
@@ -1736,6 +1800,13 @@ namespace JustCef
         public async Task WindowMinimizeAsync(int identifier, CancellationToken cancellationToken = default) 
             => await CallAsync(OpcodeController.WindowMinimize, new PacketWriter().Write(identifier), cancellationToken).ConfigureAwait(false);
 
+        internal async Task<string> BrowserCommandAsync(int identifier, string command, string options, CancellationToken cancellationToken)
+        {
+            using var request = new PacketWriter().Write(identifier).WriteSizePrefixedString(command).WriteSizePrefixedString(options);
+            var response = await CallAsync(OpcodeController.WindowBrowserCommand, request, cancellationToken).ConfigureAwait(false);
+            return response.ReadSizePrefixedString()!;
+        }
+
         public async Task WindowRestoreAsync(int identifier, CancellationToken cancellationToken = default) 
             => await CallAsync(OpcodeController.WindowRestore, new PacketWriter().Write(identifier), cancellationToken).ConfigureAwait(false);
 
@@ -2140,6 +2211,12 @@ namespace JustCef
                 foreach (var pendingRequest in _pendingRequests)
                     pendingRequest.Value.Completion.TrySetCanceled();
                 _pendingRequests.Clear();
+            }
+
+            foreach (var cancellation in _browserDecisionCancellations.Values)
+            {
+                try { _ = cancellation.CancelAsync(); }
+                catch (ObjectDisposedException) { }
             }
 
             foreach (var window in browsers)

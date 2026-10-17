@@ -1968,3 +1968,79 @@ TEST_CASE("fake Widevine status resolves once native publishes it")
     CHECK_FALSE(status.version.has_value());
     harness.process->Dispose();
 }
+
+TEST_CASE("fake browser feature decisions can call native and serialize remembered grants")
+{
+    Watchdog watchdog(60s, "browser feature decisions");
+    asio::io_context io;
+    Harness harness;
+    harness.Start(io.get_executor());
+    const bool done = RunFor(
+        io,
+        [&]() -> asio::awaitable<void>
+        {
+            co_await harness.process->WaitForReadyAsync();
+            auto window = co_await harness.process->CreateWindowAsync(WindowCreateOptions{});
+            window->SetBrowserRequestHandler(
+                [window](BrowserFeatureRequest request) -> asio::awaitable<std::optional<BrowserDecision>>
+                {
+                    CHECK(request.kind == "permission");
+                    CHECK(Json::parse(request.detail_json).at("origin") == "https://camera.test");
+                    co_await window->GetSizeAsync();
+                    co_return BrowserDecision{.allow = true, .remember = true};
+                });
+            const auto tag =
+                harness.fake.Send(Json{{"cmd", "browserDecision"}, {"browserId", window->Identifier()}, {"kind", "permission"}, {"json", "{\"origin\":\"https://camera.test\"}"}});
+            const auto result = co_await harness.fake.WaitAsync(FakeNativeControl::Tagged("browserDecisionResponse", tag), 10s);
+            REQUIRE(result.has_value());
+            CHECK((*result)["status"] == 0);
+            CHECK((*result)["answer"]["allow"] == true);
+            CHECK((*result)["answer"]["remember"] == true);
+            co_await window->PrintAsync();
+            co_await window->SetNewWindowsAllowedAsync(true, true);
+            // Clear the callback's owning capture before teardown.
+            window->SetBrowserRequestHandler({});
+            CHECK(harness.fake.ViolationCount() == 0);
+        }(),
+        30s);
+    CHECK(done);
+}
+
+TEST_CASE("fake download updates retain wire order across a multi-threaded executor")
+{
+    Watchdog watchdog(30s, "ordered downloads");
+    asio::thread_pool pool(4);
+    Harness harness;
+    harness.Start(pool.get_executor());
+    Await(pool.get_executor(), harness.process->WaitForReadyAsync());
+    auto window = Await(pool.get_executor(), harness.process->CreateWindowAsync(WindowCreateOptions{}));
+    std::mutex mutex;
+    std::condition_variable changed;
+    std::vector<int> received;
+    window->OnDownloadUpdated.Connect(
+        [&](std::string json)
+        {
+            const int value = Json::parse(json).at("receivedBytes").get<int>();
+            {
+                std::lock_guard<std::mutex> lock(mutex);
+                received.push_back(value);
+            }
+            changed.notify_all();
+        });
+    for (int i = 0; i < 200; ++i)
+        harness.fake.Send(Json{{"cmd", "downloadUpdate"}, {"browserId", window->Identifier()}, {"json", Json{{"id", 1}, {"receivedBytes", i}, {"complete", i == 199}}.dump()}});
+    {
+        std::unique_lock<std::mutex> lock(mutex);
+        REQUIRE(changed.wait_for(lock, 10s,
+                                 [&]
+                                 {
+                                     return received.size() == 200;
+                                 }));
+        for (int i = 0; i < 200; ++i)
+            CHECK(received[i] == i);
+    }
+    window->OnDownloadUpdated.Clear();
+    CHECK(harness.fake.ViolationCount() == 0);
+    harness.process->Dispose();
+    pool.join();
+}

@@ -1,0 +1,572 @@
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -539,6 +539,7 @@
+     "libcef/browser/browser_guest_util.cc",
+     "libcef/browser/browser_guest_util.h",
+     "libcef/browser/browser_host_base.cc",
++    "libcef/browser/justcef_guest_embed.cc",
+     "libcef/browser/browser_host_base.h",
+     "libcef/browser/browser_host_create.cc",
+     "libcef/browser/browser_info.cc",
+@@ -966,6 +967,9 @@
+     "//components/content_settings/core/common",
+     "//components/crx_file",
+     "//components/google/core/common",
++    "//components/guest_contents/browser",
++    "//components/surface_embed/browser",
++    "//components/surface_embed/renderer",
+     "//components/keyed_service/content:content",
+     "//components/keyed_service/core:core",
+     "//components/media_router/common/mojom:media_router",
+--- a/libcef/browser/chrome/chrome_content_browser_client_cef.h
++++ b/libcef/browser/chrome/chrome_content_browser_client_cef.h
+@@ -141,6 +141,9 @@
+       service_manager::BinderRegistry* registry,
+       blink::AssociatedInterfaceRegistry* associated_registry,
+       content::RenderProcessHost* render_process_host) override;
++  void RegisterAssociatedInterfaceBindersForRenderFrameHost(
++      content::RenderFrameHost& render_frame_host,
++      blink::AssociatedInterfaceRegistry& associated_registry) override;
+   void RegisterBrowserInterfaceBindersForFrame(
+       content::RenderFrameHost* render_frame_host,
+       mojo::BinderMapWithContext<content::RenderFrameHost*>* map) override;
+--- a/libcef/browser/chrome/chrome_content_browser_client_cef.cc
++++ b/libcef/browser/chrome/chrome_content_browser_client_cef.cc
+@@ -715,6 +715,13 @@
+                                                 host);
+ }
+ 
++void JustCefRegisterSurfaceInterfaces(content::RenderFrameHost*, blink::AssociatedInterfaceRegistry&);
++void ChromeContentBrowserClientCef::RegisterAssociatedInterfaceBindersForRenderFrameHost(
++    content::RenderFrameHost& frame, blink::AssociatedInterfaceRegistry& registry) {
++  ChromeContentBrowserClient::RegisterAssociatedInterfaceBindersForRenderFrameHost(frame,registry);
++  JustCefRegisterSurfaceInterfaces(&frame,registry);
++}
++
+ void ChromeContentBrowserClientCef::RegisterBrowserInterfaceBindersForFrame(
+     content::RenderFrameHost* render_frame_host,
+     mojo::BinderMapWithContext<content::RenderFrameHost*>* map) {
+--- a/libcef/renderer/chrome/chrome_content_renderer_client_cef.h
++++ b/libcef/renderer/chrome/chrome_content_renderer_client_cef.h
+@@ -40,6 +40,8 @@
+   scoped_refptr<base::SingleThreadTaskRunner> GetCurrentTaskRunner();
+ 
+   // ChromeContentRendererClient overrides.
++  bool OverrideCreatePlugin(content::RenderFrame* render_frame,
++      const blink::WebPluginParams& params, blink::WebPlugin** plugin) override;
+   void RenderThreadStarted() override;
+   void RenderThreadConnected() override;
+   void RenderFrameCreated(content::RenderFrame* render_frame) override;
+--- a/libcef/renderer/chrome/chrome_content_renderer_client_cef.cc
++++ b/libcef/renderer/chrome/chrome_content_renderer_client_cef.cc
+@@ -6,6 +6,12 @@
+ #include "cef/libcef/renderer/chrome/chrome_content_renderer_client_cef.h"
+ 
+ #include "cef/libcef/renderer/blink_glue.h"
++#include "cef/libcef/renderer/browser_impl.h"
++#include "components/surface_embed/renderer/create_plugin.h"
++#include "third_party/blink/public/web/web_document.h"
++#include "third_party/blink/public/web/web_local_frame.h"
++#include "url/origin.h"
++#include "third_party/blink/public/web/web_plugin_params.h"
+ #include "cef/libcef/renderer/render_frame_observer.h"
+ #include "cef/libcef/renderer/render_manager.h"
+ #include "cef/libcef/renderer/thread_util.h"
+@@ -124,3 +130,14 @@
+   web_view->SetAllowPictureInPictureWithoutUserActivation(
+       config.allow_pip_without_user_activation);
+ }
++
++bool ChromeContentRendererClientCef::OverrideCreatePlugin(
++    content::RenderFrame* frame, const blink::WebPluginParams& params,
++    blink::WebPlugin** plugin) {
++  auto browser = CefBrowserImpl::GetBrowserForMainFrame(frame->GetWebFrame());
++  if (frame->IsMainFrame() && browser && browser->surface_embed_enabled() &&
++      surface_embed::MaybeCreatePlugin(frame, params, plugin)) {
++    return true;
++  }
++  return ChromeContentRendererClient::OverrideCreatePlugin(frame, params, plugin);
++}
+--- a/libcef/renderer/browser_impl.h
++++ b/libcef/renderer/browser_impl.h
+@@ -78,6 +78,9 @@
+   CefRefPtr<CefFrameImpl> GetWebFrameImpl(blink::WebLocalFrame* frame);
+   CefRefPtr<CefFrameImpl> GetWebFrameImpl(const std::string& identifier);
+ 
++  bool surface_embed_enabled() const { return surface_embed_enabled_; }
++  void set_surface_embed_enabled(bool enabled) { surface_embed_enabled_ = enabled; }
++
+   int browser_id() const { return browser_id_; }
+   bool is_popup() const { return is_popup_; }
+   const cef::BrowserConfig& config() const { return config_; }
+@@ -93,6 +96,7 @@
+   // ID of the browser that this RenderView is associated with. During loading
+   // of cross-origin requests multiple RenderViews may be associated with the
+   // same browser ID.
++  bool surface_embed_enabled_ = false;
+   const int browser_id_;
+   const bool is_popup_;
+   const cef::BrowserConfig config_;
+--- a/libcef/renderer/render_manager.cc
++++ b/libcef/renderer/render_manager.cc
+@@ -322,6 +322,8 @@
+   CHECK(params->config);
+   CefRefPtr<CefBrowserImpl> browser = new CefBrowserImpl(
+       web_view, params->browser_id, params->config->is_popup, *config);
++  browser->set_surface_embed_enabled(params->extra_info &&
++      params->extra_info->FindBool("viewsEnabled").value_or(false));
+   browsers_.insert(std::make_pair(web_view, browser));
+ 
+   // Notify the render process handler.
+--- a/patch/patch.cfg
++++ b/patch/patch.cfg
+@@ -910,5 +910,8 @@
+   {
+     # Guard background extensions dependency on enable_background_mode.
+     'name': 'chrome_browser_extensions_background',
++  },
++  {
++    'name': 'justcef_surface_embed',
+   }
+ ]
+--- a/libcef_dll/libcef.lst
++++ b/libcef_dll/libcef.lst
+@@ -4,6 +4,12 @@
+ 
+ {
+   /* Only export necessary symbols from libcef.so. */
+-  global: cef_*;
++  global:
++    cef_*;
++    justcef_guest_surface_id;
++    justcef_guest_is_attached;
++    justcef_guest_detach;
++    justcef_guest_focus;
++    justcef_guest_transform_rect;
+   local: *;
+ };
+--- /dev/null
++++ b/libcef/browser/justcef_guest_embed.cc
+@@ -0,0 +1,141 @@
++#include <cstring>
++#include <algorithm>
++#include <cmath>
++#include <vector>
++
++#include "base/functional/bind.h"
++#include "base/no_destructor.h"
++#include "cef/include/internal/cef_export.h"
++#include "cef/libcef/browser/browser_host_base.h"
++#include "cef/libcef/browser/thread_util.h"
++#include "components/guest_contents/browser/guest_contents_handle.h"
++#include "components/surface_embed/browser/surface_embed_host.h"
++#include "content/public/browser/render_frame_host.h"
++#include "content/public/browser/render_widget_host_view.h"
++#include "ui/gfx/geometry/point_f.h"
++#include "content/public/browser/surface_embed_connector.h"
++#include "content/public/browser/weak_document_ptr.h"
++#include "content/public/browser/web_contents.h"
++#include "third_party/blink/public/common/associated_interfaces/associated_interface_registry.h"
++
++namespace {
++std::vector<content::WeakDocumentPtr>& AuthorizedDocuments() {
++  static base::NoDestructor<std::vector<content::WeakDocumentPtr>> documents;
++  return *documents;
++}
++bool Authorized(content::RenderFrameHost* frame) {
++  auto& documents = AuthorizedDocuments();
++  std::erase_if(documents, [](const auto& document) {
++    return !document.AsRenderFrameHostIfValid();
++  });
++  for (const auto& document : documents) {
++    if (document.AsRenderFrameHostIfValid() == frame) {
++      return true;
++    }
++  }
++  return false;
++}
++}
++
++void JustCefRegisterSurfaceInterfaces(
++    content::RenderFrameHost* frame,
++    blink::AssociatedInterfaceRegistry& registry) {
++  registry.RemoveInterface(surface_embed::mojom::SurfaceEmbedHost::Name_);
++  registry.AddInterface<surface_embed::mojom::SurfaceEmbedHost>(
++      base::BindRepeating(
++          [](content::GlobalRenderFrameHostId id,
++             mojo::PendingAssociatedReceiver<
++                 surface_embed::mojom::SurfaceEmbedHost> receiver) {
++            auto* frame = content::RenderFrameHost::FromID(id);
++            if (frame && Authorized(frame)) {
++              surface_embed::SurfaceEmbedHost::Create(frame,
++                                                      std::move(receiver));
++            }
++          },
++          frame->GetGlobalId()));
++}
++
++extern "C" CEF_EXPORT int justcef_guest_surface_id(int guest_id,
++                                                   int host_id,
++                                                   char* output,
++                                                   size_t capacity) {
++  CEF_REQUIRE_UIT_RETURN(0);
++  if (guest_id <= 0 || host_id <= 0 || guest_id == host_id || !output) {
++    return 0;
++  }
++  auto guest = CefBrowserHostBase::GetBrowserForBrowserId(guest_id);
++  auto host = CefBrowserHostBase::GetBrowserForBrowserId(host_id);
++  if (!guest || !host || !guest->GetWebContents() || !host->GetWebContents()) {
++    return 0;
++  }
++  auto* document = host->GetWebContents()->GetPrimaryMainFrame();
++  const auto id = guest_contents::GuestContentsHandle::CreateForWebContents(
++                      guest->GetWebContents())
++                      ->id()
++                      .ToString();
++  if (capacity <= id.size()) {
++    return 0;
++  }
++  if (!Authorized(document)) {
++    AuthorizedDocuments().push_back(document->GetWeakDocumentPtr());
++  }
++  std::memcpy(output, id.c_str(), id.size() + 1);
++  return 1;
++}
++extern "C" CEF_EXPORT int justcef_guest_is_attached(int guest_id) {
++  CEF_REQUIRE_UIT_RETURN(0);
++  if (guest_id <= 0) {
++    return 0;
++  }
++  auto guest = CefBrowserHostBase::GetBrowserForBrowserId(guest_id);
++  return guest && guest->GetWebContents() &&
++         guest->GetWebContents()->GetSurfaceEmbedConnector();
++}
++extern "C" CEF_EXPORT void justcef_guest_detach(int guest_id) {
++  CEF_REQUIRE_UIT();
++  if (guest_id <= 0) {
++    return;
++  }
++  auto guest = CefBrowserHostBase::GetBrowserForBrowserId(guest_id);
++  if (guest && guest->GetWebContents() &&
++      guest->GetWebContents()->GetSurfaceEmbedConnector()) {
++    guest->GetWebContents()
++        ->GetSurfaceEmbedConnector()
++        ->GetDelegate()
++        ->DetachedByHost();
++  }
++}
++extern "C" CEF_EXPORT void justcef_guest_focus(int guest_id) {
++  CEF_REQUIRE_UIT();
++  if (guest_id <= 0) {
++    return;
++  }
++  auto guest = CefBrowserHostBase::GetBrowserForBrowserId(guest_id);
++  if (guest && guest->GetWebContents()) {
++    guest->GetWebContents()->Focus();
++  }
++}
++extern "C" CEF_EXPORT int justcef_guest_transform_rect(
++    int guest_id, int* x, int* y, int* width, int* height) {
++  CEF_REQUIRE_UIT_RETURN(0);
++  auto guest = CefBrowserHostBase::GetBrowserForBrowserId(guest_id);
++  if (!guest || !guest->GetWebContents() || !x || !y || !width || !height ||
++      !guest->GetWebContents()->GetSurfaceEmbedConnector()) return 0;
++  auto* view = guest->GetWebContents()->GetRenderWidgetHostView();
++  if (!view) return 0;
++  const float zoom = std::pow(1.2, guest->GetZoomLevel());
++  gfx::PointF corners[] = {
++      gfx::PointF(*x * zoom, *y * zoom),
++      gfx::PointF((*x + *width) * zoom, *y * zoom),
++      gfx::PointF(*x * zoom, (*y + *height) * zoom),
++      gfx::PointF((*x + *width) * zoom, (*y + *height) * zoom)};
++  float left = INFINITY, top = INFINITY, right = -INFINITY, bottom = -INFINITY;
++  for (const auto& corner : corners) {
++    auto point = view->TransformPointToRootCoordSpaceF(corner);
++    left = std::min(left, point.x()); top = std::min(top, point.y());
++    right = std::max(right, point.x()); bottom = std::max(bottom, point.y());
++  }
++  *x = std::floor(left); *y = std::floor(top);
++  *width = std::ceil(right) - *x; *height = std::ceil(bottom) - *y;
++  return 1;
++}
+--- /dev/null
++++ b/patch/patches/justcef_surface_embed.patch
+@@ -0,0 +1,278 @@
++--- third_party/blink/renderer/core/exported/web_plugin_container_impl.cc
+++++ third_party/blink/renderer/core/exported/web_plugin_container_impl.cc
++@@ -30,6 +30,7 @@
++  */
++ 
++ #include "third_party/blink/renderer/core/exported/web_plugin_container_impl.h"
+++#include "third_party/blink/renderer/core/frame/settings.h"
++ 
++ #include "build/build_config.h"
++ #include "third_party/blink/public/common/input/web_coalesced_input_event.h"
++@@ -1193,8 +1194,10 @@
++   window_rect = ToPixelSnappedRect(layout_window_rect);
++ 
++   PhysicalRect clipped_root_frame_rect = unclipped_root_frame_rect;
++-  clipped_root_frame_rect.Intersect(PhysicalRect(
++-      PhysicalOffset(), PhysicalSize(root_view->GetFrameView()->Size())));
+++  if (root_view->GetDocument().GetSettings()->GetMainFrameClipsContent()) {
+++    clipped_root_frame_rect.Intersect(PhysicalRect(
+++        PhysicalOffset(), PhysicalSize(root_view->GetFrameView()->Size())));
+++  }
++ 
++   unclipped_int_local_rect = ToEnclosingRect(box->AbsoluteToLocalRect(
++       unclipped_root_frame_rect,
++--- components/surface_embed/browser/surface_embed_host.cc
+++++ components/surface_embed/browser/surface_embed_host.cc
++@@ -117,10 +117,16 @@
++   // bound.
++   CHECK(surface_embed_);
++ 
++-  CHECK(!content_id.is_empty());
+++  if (content_id.is_empty()) {
+++    surface_embed_->ChildProcessGone();
+++    return;
+++  }
++   guest_contents::GuestContentsHandle* guest_handle =
++       guest_contents::GuestContentsHandle::FromID(content_id);
++-  CHECK(guest_handle);
+++  if (!guest_handle) {
+++    surface_embed_->ChildProcessGone();
+++    return;
+++  }
++ 
++   content::WebContents* web_contents_to_attach = guest_handle->web_contents();
++   CHECK(web_contents_to_attach);
++--- content/browser/surface_embed/surface_embed_connector_impl.h
+++++ content/browser/surface_embed/surface_embed_connector_impl.h
++@@ -7,6 +7,8 @@
++ 
++ #include <memory>
++ #include <optional>
+++#include <vector>
+++#include "base/functional/callback.h"
++ 
++ #include "base/memory/raw_ptr.h"
++ #include "base/memory/weak_ptr.h"
++@@ -91,6 +93,7 @@
++   ui::AXTreeID GetParentAXTreeID() const override;
++ 
++   // FrameConnector:
+++  bool RequestRepaintForSnapshot(base::OnceCallback<void(bool)> ready) override;
++   void SetKeepSurfaceAlive(bool keep_alive) override;
++   bool IsKeepingAlive() const override;
++   void SetView(RenderWidgetHostViewChildFrame* view,
++@@ -180,6 +183,10 @@
++   RenderWidgetHostImpl* GetPointerLockWidget() const;
++ 
++  private:
+++  std::optional<blink::FrameVisualProperties> last_visual_properties_;
+++  bool capture_viewport_active_ = false;
+++  std::vector<std::pair<viz::LocalSurfaceId, base::OnceCallback<void(bool)>>> pending_snapshot_surfaces_;
+++
++   class WCObserver;
++   class ParentWCObserver;
++ 
++--- content/browser/surface_embed/surface_embed_connector_impl.cc
+++++ content/browser/surface_embed/surface_embed_connector_impl.cc
++@@ -165,6 +165,8 @@
++ }
++ 
++ SurfaceEmbedConnectorImpl::~SurfaceEmbedConnectorImpl() {
+++  auto pending = std::move(pending_snapshot_surfaces_);
+++  for (auto& request : pending) std::move(request.second).Run(false);
++   SetView(nullptr, /*allow_paint_holding=*/false);
++ }
++ 
++@@ -242,6 +244,16 @@
++     return;
++   }
++   SynchronizeVisualProperties(visual_properties, true);
+++  auto pending = std::move(pending_snapshot_surfaces_);
+++  for (auto& request : pending) {
+++    const bool same_group = request.first.embed_token() == local_surface_id_.embed_token();
+++    if (same_group && local_surface_id_.parent_sequence_number() <= request.first.parent_sequence_number()) {
+++      pending_snapshot_surfaces_.push_back(std::move(request));
+++    } else {
+++      if (same_group && view_) view_->host()->SynchronizeVisualPropertiesIgnoringPendingAck();
+++      std::move(request.second).Run(same_group && view_);
+++    }
+++  }
++ }
++ 
++ void SurfaceEmbedConnectorImpl::UpdateRenderThrottlingStatus(
++@@ -463,6 +475,7 @@
++ void SurfaceEmbedConnectorImpl::SynchronizeVisualProperties(
++     const blink::FrameVisualProperties& visual_properties,
++     bool propagate) {
+++  last_visual_properties_ = visual_properties;
++   last_received_zoom_level_ = visual_properties.zoom_level;
++   last_received_css_zoom_factor_ = visual_properties.css_zoom_factor;
++   last_received_local_frame_size_ = visual_properties.local_frame_size;
++@@ -489,8 +502,10 @@
++       visual_properties.page_scale_factor,
++       visual_properties.compositing_scale_factor,
++       visual_properties.is_pinch_gesture_active,
++-      visual_properties.visible_viewport_size,
++-      visual_properties.compositor_viewport,
+++      child_web_contents()->IsBeingCaptured() ? visual_properties.local_frame_size
+++                                             : visual_properties.visible_viewport_size,
+++      child_web_contents()->IsBeingCaptured() ? gfx::Rect(visual_properties.local_frame_size)
+++                                             : visual_properties.compositor_viewport,
++       visual_properties.root_widget_viewport_segments);
++ 
++   render_widget_host->UpdateVisualProperties(propagate);
++@@ -628,15 +643,15 @@
++ }
++ 
++ bool SurfaceEmbedConnectorImpl::IsThrottled() {
++-  return is_throttled_;
+++  return !child_web_contents()->IsBeingCaptured() && is_throttled_;
++ }
++ 
++ bool SurfaceEmbedConnectorImpl::IsSubtreeThrottled() {
++-  return subtree_throttled_;
+++  return !child_web_contents()->IsBeingCaptured() && subtree_throttled_;
++ }
++ 
++ bool SurfaceEmbedConnectorImpl::IsDisplayLocked() {
++-  return display_locked_;
+++  return !child_web_contents()->IsBeingCaptured() && display_locked_;
++ }
++ 
++ void SurfaceEmbedConnectorImpl::DidUpdateVisualProperties(
++@@ -653,8 +668,23 @@
++   }
++ }
++ 
+++bool SurfaceEmbedConnectorImpl::RequestRepaintForSnapshot(
+++    base::OnceCallback<void(bool)> ready) {
+++  if (!view_ || !local_surface_id_.is_valid() || !frame_sink_id_.is_valid()) return false;
+++  pending_snapshot_surfaces_.emplace_back(local_surface_id_, std::move(ready));
+++  delegate_->SetFrameSinkId(frame_sink_id_, false);
+++  return true;
+++}
+++
++ void SurfaceEmbedConnectorImpl::SetKeepSurfaceAlive(bool keep_alive) {
++   should_keep_alive_ = keep_alive;
+++  const bool capturing = child_web_contents()->IsBeingCaptured();
+++  if (last_visual_properties_ && capturing != capture_viewport_active_) {
+++    capture_viewport_active_ = capturing;
+++    if (!capturing && view_) view_->SetSize(GetLocalFrameSizeInDip());
+++    SynchronizeVisualProperties(*last_visual_properties_, true);
+++    if (view_) view_->UpdateRenderThrottlingStatus();
+++  }
++   // We may be force-shown by WebContents to enable tab capture, even if we're
++   // in background. To enable that, we want to create a reference to the
++   // surface, to help the compositor notice its capture; this won't be created
++--- content/browser/renderer_host/render_widget_host_view_child_frame.h
+++++ content/browser/renderer_host/render_widget_host_view_child_frame.h
++@@ -85,6 +85,8 @@
++   // RenderWidgetHostView implementation.
++   void InitAsChild(gfx::NativeView parent_view) override;
++   void SetSize(const gfx::Size& size) override;
+++  bool RequestRepaintForSnapshot(base::OnceCallback<void(bool)> ready);
+++  bool HasCaptureSize() const { return capture_size_.has_value(); }
++   void SetBounds(const gfx::Rect& rect) override;
++   void Focus() override;
++   bool HasFocus() override;
++@@ -323,6 +325,8 @@
++   ~RenderWidgetHostViewChildFrame() override;
++ 
++  private:
+++  std::optional<gfx::Size> capture_size_;
+++
++   FRIEND_TEST_ALL_PREFIXES(SitePerProcessBrowserTest,
++                            HiddenOOPIFWillNotGenerateCompositorFrames);
++   FRIEND_TEST_ALL_PREFIXES(
++--- content/browser/renderer_host/render_widget_host_view_child_frame.cc
+++++ content/browser/renderer_host/render_widget_host_view_child_frame.cc
++@@ -234,8 +234,17 @@
++   NOTREACHED();
++ }
++ 
+++bool RenderWidgetHostViewChildFrame::RequestRepaintForSnapshot(
+++    base::OnceCallback<void(bool)> ready) {
+++  return frame_connector_ && frame_connector_->RequestRepaintForSnapshot(std::move(ready));
+++}
+++
++ void RenderWidgetHostViewChildFrame::SetSize(const gfx::Size& size) {
++-  // Resizing happens in FrameConnector for child frames.
+++  if (host()->owner_delegate() && frame_connector_) {
+++    capture_size_ = size == frame_connector_->GetLocalFrameSizeInDip()
+++                        ? std::nullopt : std::make_optional(size);
+++    host()->UpdateVisualProperties(true);
+++  }
++ }
++ 
++ void RenderWidgetHostViewChildFrame::SetBounds(const gfx::Rect& rect) {
++@@ -341,7 +350,7 @@
++     // on. We want the location of the frame in screen coordinates to place
++     // popups but we want the size in local coordinates to produce the right-
++     // sized CompositorFrames. https://crbug.com/928825.
++-    screen_space_rect.set_size(frame_connector_->GetLocalFrameSizeInDip());
+++    screen_space_rect.set_size(capture_size_.value_or(frame_connector_->GetLocalFrameSizeInDip()));
++   }
++   return screen_space_rect;
++ }
++@@ -459,6 +468,7 @@
++ }
++ 
++ gfx::Size RenderWidgetHostViewChildFrame::GetCompositorViewportPixelSize() {
+++  if (capture_size_) return gfx::ScaleToCeiledSize(*capture_size_, GetDeviceScaleFactor());
++   if (frame_connector_)
++     return frame_connector_->GetLocalFrameSizeInPixels();
++   return gfx::Size();
++--- content/browser/renderer_host/render_widget_host_impl.cc
+++++ content/browser/renderer_host/render_widget_host_impl.cc
++@@ -1164,6 +1164,11 @@
++   } else {
++     visual_properties.compositor_viewport_pixel_rect =
++         properties_from_parent_local_root_.compositor_viewport;
+++    if (owner_delegate_ &&
+++        static_cast<RenderWidgetHostViewChildFrame*>(view_.get())->HasCaptureSize()) {
+++      visual_properties.compositor_viewport_pixel_rect =
+++          gfx::Rect(view_->GetCompositorViewportPixelSize());
+++    }
++     visual_properties.window_show_state = ui::mojom::WindowShowState::kDefault;
++ 
++     // These properties come from the top-level main frame's renderer. The
++@@ -2283,6 +2288,20 @@
++   if (from_surface) {
++     pending_surface_browser_snapshots_.insert(
++         std::make_pair(snapshot_id, std::move(callback)));
+++    if (view_->IsRenderWidgetHostViewChildFrame() &&
+++        static_cast<RenderWidgetHostViewChildFrame*>(view_.get())->RequestRepaintForSnapshot(base::BindOnce(
+++            [](base::WeakPtr<RenderWidgetHostImpl> self, int id, bool ready) {
+++              if (!self) return;
+++              if (!ready || !self->view_) {
+++                self->OnSnapshotFromSurfaceReceived(id, 5,
+++                    base::unexpected(CopyFromSurfaceError::kNotImplemented));
+++                return;
+++              }
+++              self->blink_widget_->ForceRedraw(base::DoNothing());
+++              self->view_->CopyFromSurface(gfx::Rect(), gfx::Size(), base::TimeDelta(),
+++                  base::BindOnce(&RenderWidgetHostImpl::OnSnapshotFromSurfaceReceived,
+++                                 self, id, 0));
+++            }, weak_factory_.GetWeakPtr(), snapshot_id))) return;
++     if (base::FeatureList::IsEnabled(features::kCDPScreenshotNewSurface)) {
++       // 1. Force content redraw in the renderer.
++       blink_widget_->ForceRedraw(base::DoNothing());
++--- content/browser/renderer_host/frame_connector.h
+++++ content/browser/renderer_host/frame_connector.h
++@@ -7,6 +7,7 @@
++ 
++ #include <stdint.h>
++ 
+++#include "base/functional/callback_forward.h"
++ #include "cc/input/touch_action.h"
++ #include "components/input/child_frame_input_helper.h"
++ #include "components/viz/common/surfaces/local_surface_id.h"
++@@ -67,6 +68,8 @@
++ class FrameConnector : public input::ChildFrameInputHelper::Delegate {
++  public:
++   ~FrameConnector() override = default;
+++
+++  virtual bool RequestRepaintForSnapshot(base::OnceCallback<void(bool)> ready) { return false; }
++ 
++   // These values are written to logs. Do not renumber or delete existing items;
++   // add new entries to the end of the list.

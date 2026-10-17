@@ -462,6 +462,9 @@ public sealed class Host
             case ControllerOp.PickDirectory:
             case ControllerOp.SaveFile:
                 return Result.Ok(b => b.Str(""));
+            case ControllerOp.WindowBrowserCommand:
+                Emit(new JsonObject { ["event"] = "browserCommand", ["browserId"] = browser.Id, ["name"] = req.Text, ["options"] = JsonNode.Parse(req.Options ?? "{}") });
+                return Result.Ok(b => b.Str("{}"));
             case ControllerOp.WindowExecuteDevToolsMethod:
             {
                 var json = payloadSize is int n ? JsonStringBytes(n) : "{}"u8.ToArray();
@@ -939,6 +942,10 @@ public sealed class Host
                 Configure(o, tag);
                 Ack(name, tag);
                 break;
+            case "downloadUpdate":
+                Send(Encode.Notification(ClientNotification.WindowDownloadUpdated, b => b.I32(Json.Int(o, "browserId", 1, newId)).Str(Json.Str(o, "json") ?? "{}")));
+                Ack(name, tag);
+                break;
             case "notify":
                 Notify(o, newId);
                 Ack(name, tag);
@@ -952,6 +959,18 @@ public sealed class Host
             case "modifyRequest":
                 ModifyRequestCommand(o, tag, newId);
                 break;
+            case "browserDecision":
+            {
+                var browserId = Json.Int(o, "browserId", 1, newId);
+                StartCall(ClientOp.WindowBrowserDecision, "browserDecisionResponse", tag,
+                    rid => Encode.BrowserDecision(rid, browserId, Json.Str(o, "kind") ?? "permission", Json.Str(o, "json") ?? "{}"),
+                    (call, head) => {
+                        var evt = ResponseEvent(call, head);
+                        if (head.Status == Status.Ok) evt["answer"] = JsonNode.Parse(head.Payload.Str() ?? "{}");
+                        Emit(evt, call.Tag);
+                    });
+                break;
+            }
             case "bridgeRpc":
                 BridgeRpcCommand(o, tag, newId);
                 break;

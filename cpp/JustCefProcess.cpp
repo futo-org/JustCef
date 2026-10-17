@@ -676,6 +676,32 @@ public:
             const auto native_path = JustCefProcess::ResolveNativeExecutablePath(options.native_executable_path);
             const auto working_directory = options.working_directory ? std::filesystem::absolute(*options.working_directory) : native_path.parent_path();
             auto additional_arguments = SplitArguments(options.arguments);
+            if (!options.custom_schemes.empty())
+            {
+                if (std::any_of(additional_arguments.begin(), additional_arguments.end(),
+                                [](const std::string& arg)
+                                {
+                                    return arg.rfind("--custom-schemes", 0) == 0;
+                                }))
+                    throw std::invalid_argument("Configure custom schemes through StartOptions or arguments, not both.");
+                std::string schemes;
+                const std::set<std::string> reserved{"ftp",   "ws",   "wss",   "blob", "filesystem", "chrome-extension", "chrome-untrusted", "view-source", "http",
+                                                     "https", "file", "about", "data", "javascript", "chrome",           "devtools",         "justcef"};
+                for (const auto& scheme : options.custom_schemes)
+                {
+                    if (scheme.empty() || scheme[0] < 'a' || scheme[0] > 'z' || reserved.count(scheme) ||
+                        !std::all_of(scheme.begin(), scheme.end(),
+                                     [](char c)
+                                     {
+                                         return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '+' || c == '-' || c == '.';
+                                     }))
+                        throw std::invalid_argument("Invalid or reserved custom scheme name.");
+                    if (!schemes.empty())
+                        schemes += ',';
+                    schemes += scheme;
+                }
+                additional_arguments.push_back("--custom-schemes=" + schemes);
+            }
             const bool has_log_severity = std::any_of(additional_arguments.begin(), additional_arguments.end(),
                                                       [](const std::string& argument) { return argument.rfind("--log-severity", 0) == 0; });
             if (!has_log_severity)
@@ -1479,6 +1505,22 @@ public:
         co_return co_await WindowSaveFileAsync(windows.front()->Identifier(), std::move(default_name), std::move(filters));
     }
 
+    asio::awaitable<std::string> WindowBrowserCommandAsync(int identifier, std::string command, std::string options) override
+    {
+        detail::PacketWriter writer;
+        writer.Write<std::int32_t>(identifier);
+        writer.WriteSizePrefixedString(command);
+        writer.WriteSizePrefixedString(options);
+        co_return co_await AsyncParsedCall<std::string>(detail::OpcodeController::WindowBrowserCommand, std::move(writer),
+                                                        [](detail::PacketReader& reader)
+                                                        {
+                                                            auto value = reader.ReadSizePrefixedString();
+                                                            if (!value)
+                                                                throw detail::ProtocolError("Missing command result.");
+                                                            return *value;
+                                                        });
+    }
+
     asio::awaitable<DevToolsMethodResult> WindowExecuteDevToolsMethodAsync(int identifier, std::string method_name, std::optional<std::string> json)
     {
         detail::PacketWriter writer;
@@ -2065,6 +2107,30 @@ private:
             case detail::OpcodeClient::WindowBridgeRpc:
                 co_await HandleWindowBridgeRpc(reader, writer, reply);
                 break;
+            case detail::OpcodeClient::WindowBrowserDecision:
+            {
+                const int identifier = ReadRequired<std::int32_t>(reader, "identifier");
+                const auto kind = reader.ReadSizePrefixedString();
+                const auto detail = reader.ReadSizePrefixedString();
+                if (!kind || !detail)
+                    throw detail::ProtocolError("Invalid browser request.");
+                const auto record = GetWindowRecord(identifier);
+                if (!record || !record->browser)
+                {
+                    reply.status = Status::NotFound;
+                    break;
+                }
+                BrowserRequestHandler handler;
+                {
+                    std::lock_guard<std::mutex> lock(record->shared->request_mutex);
+                    handler = record->shared->browser_request_handler;
+                }
+                std::optional<BrowserDecision> answer;
+                if (handler)
+                    answer = co_await handler(BrowserFeatureRequest{*kind, *detail, identifier});
+                writer.WriteSizePrefixedString(answer ? answer->ToJson() : "{}");
+                break;
+            }
             case detail::OpcodeClient::WindowViewCreated:
                 co_await HandleWindowViewCreated(reader, writer, reply);
                 break;
@@ -2323,6 +2389,36 @@ private:
             widevine_signal_.SignalSuccess();
             break;
         }
+        case detail::OpcodeClientNotification::WindowDownloadUpdated:
+        {
+            const int identifier = ReadRequired<std::int32_t>(reader, "identifier");
+            const auto json = reader.ReadSizePrefixedString();
+            if (!json)
+                throw detail::ProtocolError("Missing download status.");
+            if (auto browser = GetBrowser(identifier))
+                PostEvent(browser, &JustCefBrowser::OnDownloadUpdated, *json);
+            break;
+        }
+        case detail::OpcodeClientNotification::WindowPopupCreated:
+        {
+            const int parentId = ReadRequired<std::int32_t>(reader, "parentId");
+            const int identifier = ReadRequired<std::int32_t>(reader, "identifier");
+            auto parent = GetWindowRecord(parentId);
+            if (!parent || !parent->browser)
+                break;
+            auto shared = std::make_shared<WindowShared>();
+            shared->executor = executor_;
+            {
+                std::lock_guard<std::mutex> lock(parent->shared->request_mutex);
+                shared->request_proxy = parent->shared->request_proxy;
+                shared->browser_request_handler = parent->shared->browser_request_handler;
+            }
+            shared->loading.ArmNavigation();
+            auto popup = std::shared_ptr<JustCefWindow>(new JustCefWindow(identifier, shared_from_this(), shared));
+            if (RegisterWindowRecord(WindowRecord{.identifier = identifier, .window = popup, .browser = popup, .shared = shared}, parentId))
+                PostEvent(parent->browser, &JustCefBrowser::OnPopupCreated, popup);
+            break;
+        }
         case detail::OpcodeClientNotification::WindowOpened:
             Logger::Info("JustCefProcess", "Window opened: " + std::to_string(ReadRequired<std::int32_t>(reader, "identifier")));
             break;
@@ -2533,9 +2629,11 @@ private:
         }
 #else
         siginfo_t info{};
-        while (::waitid(P_PID, static_cast<id_t>(child_pid_), &info, WEXITED | WNOWAIT) != 0 && errno == EINTR)
+        int wait_result;
+        do
         {
-        }
+            wait_result = ::waitid(P_PID, static_cast<id_t>(child_pid_), &info, WEXITED | WNOWAIT);
+        } while (wait_result != 0 && errno == EINTR);
 
         {
             std::lock_guard<std::mutex> lock(child_mutex_);
@@ -2543,7 +2641,9 @@ private:
             pid_t reaped = -1;
             do
             {
-                reaped = ::waitpid(child_pid_, &status, 0);
+                // Only block once waitid has confirmed exit. Otherwise the child
+                // may still be running and KillChild needs this mutex to stop it.
+                reaped = ::waitpid(child_pid_, &status, wait_result == 0 ? 0 : WNOHANG);
             } while (reaped < 0 && errno == EINTR);
 
             if (reaped == child_pid_ && WIFEXITED(status))

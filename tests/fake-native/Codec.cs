@@ -34,6 +34,7 @@ public sealed class ControllerRequest
     public int? BrowserId;
     public bool Flag;
     public string? Text;
+    public string? Options;
     public List<string> DragFiles = new();
     public int X;
     public int Y;
@@ -215,6 +216,10 @@ public static class Codec
             case ControllerOp.SaveFile:
                 req.Text = r.Str();
                 ReadFilters(r, req);
+                break;
+            case ControllerOp.WindowBrowserCommand:
+                req.Text = r.Str();
+                req.Options = r.Str();
                 break;
             case ControllerOp.WindowExecuteDevToolsMethod:
                 req.Text = r.Str();
@@ -551,6 +556,9 @@ public static class Encode
 
     public static ReadOnlyMemory<byte> BridgeRpc(uint requestId, int browserId, string? method, ReadOnlyMemory<byte> json) =>
         Request(ClientOp.WindowBridgeRpc, requestId, b => b.I32(browserId).Str(method).Bytes(json.Span), 64 + json.Length);
+
+    public static ReadOnlyMemory<byte> BrowserDecision(uint requestId, int browserId, string kind, string json) =>
+        Request(ClientOp.WindowBrowserDecision, requestId, b => b.I32(browserId).Str(kind).Str(json));
 
     public static ReadOnlyMemory<byte> ViewCreated(uint requestId, int parentId, int viewId, string? src) =>
         Request(ClientOp.WindowViewCreated, requestId, b => b.I32(parentId).I32(viewId).Str(src), 64 + (src?.Length ?? 0) * 3);

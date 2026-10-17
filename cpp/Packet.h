@@ -83,7 +83,8 @@ enum class OpcodeController : uint8_t
     WindowSetDraggableRegions = 58,
     WindowSetCaptionButtonRegions = 59,
     GetRuntimeInfo = 60,
-    WindowSetNextDragFiles = 61
+    WindowSetNextDragFiles = 61,
+    WindowBrowserCommand = 62
 };
 
 // Notifications from controller
@@ -104,7 +105,8 @@ enum class OpcodeClient : uint8_t
     WindowProxyRequest = 3,
     WindowModifyRequest = 4,
     WindowBridgeRpc = 9,
-    WindowViewCreated = 11
+    WindowViewCreated = 11,
+    WindowBrowserDecision = 12
 };
 
 // Notifications from client
@@ -130,7 +132,9 @@ enum class OpcodeClientNotification : uint8_t
     WindowLoadingStateChanged = 17,
     StreamCredit = 18,
     StreamCancel = 19,
-    WidevineStatus = 20
+    WidevineStatus = 20,
+    WindowDownloadUpdated = 22,
+    WindowPopupCreated = 21
 };
 
 constexpr std::uint32_t kProtocolVersion = 2;

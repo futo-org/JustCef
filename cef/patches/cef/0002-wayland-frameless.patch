@@ -37,14 +37,13 @@ new file mode 100644
 index 0000000000000000000000000000000000000000..3e13ccb50006e98fe864fc52def5e8380eccc7d2
 --- /dev/null
 +++ b/libcef/browser/views/view_util_linux.cc
-@@ -0,0 +1,13 @@
+@@ -0,0 +1,12 @@
 +#include "cef/libcef/browser/views/view_util.h"
 +
 +#include "ui/linux/linux_ui_delegate.h"
 +
 +namespace view_util {
 +
-+// Returns true if running on the Wayland platform.
 +bool IsRunningOnWayland() {
 +  auto* delegate = ui::LinuxUiDelegate::GetInstance();
 +  return delegate && delegate->GetBackend() == ui::LinuxUiBackend::kWayland;

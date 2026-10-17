@@ -24,6 +24,8 @@ class JustCefProcessImpl;
 struct StartOptions
 {
     std::string arguments;
+    // Standard secure content schemes, served through request proxies; no CSP bypass or service-worker privileges.
+    std::vector<std::string> custom_schemes;
     std::optional<std::filesystem::path> native_executable_path;
     std::optional<std::filesystem::path> working_directory;
     std::optional<std::filesystem::path> launcher_path;

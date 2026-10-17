@@ -1,5 +1,6 @@
 #include "app_factory.h"
 #include "bridge.h"
+#include "custom_schemes.h"
 #include "justcef_view_renderer.h"
 #include "steam.h"
 
@@ -9,6 +10,7 @@
 class RenderApp : public CefApp, public CefRenderProcessHandler
 {
 public:
+    void OnRegisterCustomSchemes(CefRawPtr<CefSchemeRegistrar> registrar) override { RegisterCustomSchemes(registrar); }
     CefRefPtr<CefRenderProcessHandler> GetRenderProcessHandler() override { return this; }
 
     void OnBrowserCreated(CefRefPtr<CefBrowser> browser, CefRefPtr<CefDictionaryValue> extra_info) override
@@ -37,15 +39,6 @@ public:
         {
             views_enabled_browsers_.erase(browser->GetIdentifier());
         }
-
-        if (IsViewContent(extra_info))
-        {
-            view_content_browsers_.insert(browser->GetIdentifier());
-        }
-        else
-        {
-            view_content_browsers_.erase(browser->GetIdentifier());
-        }
     }
 
     void OnBrowserDestroyed(CefRefPtr<CefBrowser> browser) override
@@ -64,7 +57,6 @@ public:
 
         bridge_enabled_browsers_.erase(browser->GetIdentifier());
         views_enabled_browsers_.erase(browser->GetIdentifier());
-        view_content_browsers_.erase(browser->GetIdentifier());
         ClearBridgeState(browser);
         ClearViewState(browser);
     }
@@ -79,11 +71,6 @@ public:
         if (views_enabled_browsers_.find(browser->GetIdentifier()) != views_enabled_browsers_.end())
         {
             InstallViewElement(browser, frame, context);
-        }
-
-        if (view_content_browsers_.find(browser->GetIdentifier()) != view_content_browsers_.end())
-        {
-            InstallViewContentScript(browser, frame, context);
         }
 
         if (bridge_enabled_browsers_.find(browser->GetIdentifier()) == bridge_enabled_browsers_.end())
@@ -104,11 +91,6 @@ public:
         if (views_enabled_browsers_.find(browser->GetIdentifier()) != views_enabled_browsers_.end())
         {
             ReleaseViewContext(browser, frame, context);
-        }
-
-        if (view_content_browsers_.find(browser->GetIdentifier()) != view_content_browsers_.end())
-        {
-            ReleaseViewContentContext(browser, context);
         }
 
         if (bridge_enabled_browsers_.find(browser->GetIdentifier()) == bridge_enabled_browsers_.end())
@@ -180,7 +162,6 @@ public:
 private:
     std::unordered_set<int> bridge_enabled_browsers_;
     std::unordered_set<int> views_enabled_browsers_;
-    std::unordered_set<int> view_content_browsers_;
     std::unordered_map<int, int> browser_references_;
 
     IMPLEMENT_REFCOUNTING(RenderApp);

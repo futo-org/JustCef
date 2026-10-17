@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><title>Embedded browser test content</title>
+<style>
+  body { font:15px/1.5 system-ui; margin:20px; background:#f1f6fc; color:#17304c; }
+  button,a { padding:8px; margin:4px; } pre { white-space:pre-wrap; overflow-wrap:anywhere; background:#dde8f5; padding:12px; }
+  #clock { background:#136c54; color:white; padding:12px; font:22px monospace; position:sticky; top:0; }
+  video { width:220px; max-height:170px; background:#172b44; } .long { height:850px; background:linear-gradient(#e5f1ff,#accfeb); padding:12px; }
+</style>
+<h1>Ordinary website inside a JustCef view</h1>
+<p id="origin"></p><div id="clock"></div>
+<p><button id="microphone">Microphone</button><button id="camera">Camera</button><button id="both">Both</button><button id="stop">Stop devices</button><button id="notification">Notification permission</button><button id="location">Geolocation permission</button></p>
+<video id="preview" muted autoplay playsinline></video>
+<p><button id="open">window.open</button><a id="blank" target="_blank">Target-blank link / middle-click / right-click</a><button id="download">Download file</button><button id="fetch">Fetch app:// JSON</button></p>
+<p><button id="frame">Load an unrelated iframe while a request is pending</button></p>
+<pre id="log"></pre><div class="long">Long content for scrolling, full-page capture and multi-page PDF.<p>Print test: colors, text and page boundaries should be preserved.</p></div><h2>End of capture test page</h2>
+<script>
+const $ = id => document.getElementById(id);
+const log = (name, data) => $('log').textContent = `${new Date().toLocaleTimeString()} ${name}: ${JSON.stringify(data)}\n` + $('log').textContent;
+$('origin').textContent = location.href;
+setInterval(() => $('clock').textContent = new Date().toLocaleTimeString() + ' · tick ' + Math.round(performance.now()/100), 100);
+const streams = [];
+function stop() { for (const stream of streams.splice(0)) stream.getTracks().forEach(track=>track.stop()); $('preview').srcObject=null; }
+async function media(audio, video) {
+  try { const stream = await navigator.mediaDevices.getUserMedia({audio,video}); streams.push(stream); if(video)$('preview').srcObject=stream; log('media granted', stream.getTracks().map(t=>({kind:t.kind,label:t.label}))); }
+  catch(error) { log('media failed', {name:error.name,message:error.message}); }
+}
+$('microphone').onclick=()=>media(true,false); $('camera').onclick=()=>media(false,true); $('both').onclick=()=>media(true,true); $('stop').onclick=stop;
+$('notification').onclick=async()=>{try{log('notifications',await Notification.requestPermission());}catch(e){log('notifications',e.message);}};
+$('location').onclick=()=>navigator.geolocation.getCurrentPosition(p=>log('geolocation',{latitude:p.coords.latitude,longitude:p.coords.longitude}),e=>log('geolocation',{code:e.code,message:e.message}));
+$('blank').href=location.origin+'/popup';
+$('open').onclick=()=>{ const popup=window.open(location.origin+'/popup'); log('window.open',{returnedWindow:!!popup}); };
+$('download').onclick=()=>{ if(location.protocol==='app:')return log('download','Use the local HTTP page or the host Start slow download button.'); const a=document.createElement('a');a.href='/download.bin';a.click(); };
+$('fetch').onclick=async()=>{try{log('custom scheme fetch',await (await fetch('app://demo/fixture.json')).json());}catch(e){log('custom scheme fetch',e.message);}};
+$('frame').onclick=()=>{const frame=document.createElement('iframe');frame.src='about:blank';document.body.append(frame);log('iframe','created; a pending media request should remain pending');};
+log('page capabilities',{bridge:typeof globalThis.bridge,viewElement:typeof customElements.get('justcef-view'),opener:!!window.opener,secureContext:isSecureContext});
+</script></html>

@@ -41,12 +41,12 @@ def packet(typ, op, rid, body=b""):
     return struct.pack("<IIBB", 10 + len(body) - 4, rid, typ, op) + bytes(body)
 
 
-C = dict(Ping=0, Print=1, Echo=2, WindowCreate=3, LoadUrl=6, GetSize=50, GetZoom=56, Close=22, ExecuteDevTools=42, BridgeRpc=57, SetDraggableRegions=58, SetCaptionButtonRegions=59, GetRuntimeInfo=60, SetNextDragFiles=61,
+C = dict(Ping=0, Print=1, Echo=2, WindowCreate=3, LoadUrl=6, GetSize=50, GetZoom=56, Close=22, ExecuteDevTools=42, BridgeRpc=57, SetDraggableRegions=58, SetCaptionButtonRegions=59, GetRuntimeInfo=60, SetNextDragFiles=61, BrowserCommand=62,
          SetModify=34, AddUrlToModify=48, Debug=250)
 CN = dict(Exit=0, StreamData=1, StreamEnd=2, StreamError=3)
 N = {0: "Ready", 1: "Exit", 2: "WindowOpened", 3: "WindowClosed", 5: "WindowFocused", 6: "WindowUnfocused", 12: "Fullscreen", 13: "FrameLoadStart",
-     14: "FrameLoadEnd", 15: "FrameLoadError", 16: "DevToolsEvent", 17: "LoadingState", 18: "StreamCredit", 19: "StreamCancel", 20: "WidevineStatus", 250: "Debug"}
-R = dict(Ping=0, Print=1, Echo=2, Proxy=3, Modify=4, BridgeRpc=9, ViewCreated=11)
+     14: "FrameLoadEnd", 15: "FrameLoadError", 16: "DevToolsEvent", 17: "LoadingState", 18: "StreamCredit", 19: "StreamCancel", 20: "WidevineStatus", 21: "PopupCreated", 22: "DownloadUpdated", 250: "Debug"}
+R = dict(Ping=0, Print=1, Echo=2, Proxy=3, Modify=4, BridgeRpc=9, ViewCreated=11, BrowserDecision=12)
 
 
 class W:
@@ -117,6 +117,7 @@ class Ctl:
         self.order = []
         self.raw = {}
         self.handlers = {}
+        self.note_handlers = {}
         self.cancels = []
         self.credit = {}
         self.credit_cv = threading.Condition()
@@ -170,6 +171,7 @@ class Ctl:
                         r = Rd(body); st = r.u8()
                         f.set_result((st, r.rest() if st == OK else r.s()))
                 elif typ == NOTE:
+                    if op in self.note_handlers: self.note_handlers[op](Rd(body))
                     if op == 18:
                         r = Rd(body); sid = r.u32(); n = r.u32()
                         with self.credit_cv:

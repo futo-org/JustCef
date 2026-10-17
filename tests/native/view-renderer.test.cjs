@@ -3,252 +3,120 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-
 const source = fs.readFileSync(path.join(__dirname, '../../native/src/justcef_view_renderer.cc'), 'utf8');
-const bootstrap = [...source.split('constexpr char kViewContentScript')[0].matchAll(/R"JS\(([\s\S]*?)\)JS"/g)]
-  .map(match => match[1]).join('');
+const bootstrap = source.match(/kViewBootstrapScript\[\] = R"JS\(([\s\S]*?)\)JS"/)[1];
 
 function harness() {
-  let now = 0;
-  let nextTimer = 0;
-  const frames = new Map();
-  const timers = new Map();
-  const messages = [];
-  const classes = new Map();
-  const listeners = new Map();
-  const createdTags = [];
+  const messages = [], classes = new Map(), timers = new Map(), listeners = new Map();
+  let timer = 0;
   class Element {
-    constructor() {
-      this.attributes = new Map();
-      this.isConnected = true;
-      this.rect = { left: 20, top: 20, width: 100, height: 100, right: 120, bottom: 120 };
-      this.classList = { toggle() {} };
-    }
-    attachShadow() { return { append() {} }; }
-    addEventListener() {}
+    constructor() { this.attributes = new Map(); this.isConnected = true; this.style = {}; this.events = []; }
+    attachShadow() { return this.root = { children: [], append(el) { this.children.push(el); }, prepend(el) { this.children.unshift(el); } }; }
     getAttribute(name) { return this.attributes.get(name) ?? null; }
-    setAttribute(name, value) {
-      const old = this.getAttribute(name);
-      this.attributes.set(name, value);
-      this.attributeChangedCallback?.(name, old, value);
-    }
-    removeAttribute(name) {
-      const old = this.getAttribute(name);
-      this.attributes.delete(name);
-      this.attributeChangedCallback?.(name, old, null);
-    }
-    getBoundingClientRect() { return this.rect; }
-    checkVisibility() { return true; }
-    dispatchEvent() {}
+    setAttribute(name, value) { const old = this.getAttribute(name); this.attributes.set(name, value); if (classes.get('justcef-view')?.observedAttributes.includes(name)) this.attributeChangedCallback?.(name, old, value); }
+    removeAttribute(name) { const old = this.getAttribute(name); this.attributes.delete(name); this.attributeChangedCallback?.(name, old, null); }
+    addEventListener() {}
+    dispatchEvent(event) { this.events.push(event); this.onDispatch?.(event); return !this.cancel; }
+    remove() { this.removed = true; }
+    focus() {}
   }
-  const document = {
-    baseURI: 'https://app.test/', visibilityState: 'visible',
-    documentElement: { clientWidth: 800, clientHeight: 600 },
-    createElement: tag => { createdTags.push(tag); return new Element(); }, addEventListener: (name, fn) => listeners.set(name, fn),
-    querySelectorAll: () => [], elementsFromPoint: () => [],
-  };
   const context = {
-    Element, HTMLElement: Element, HTMLSlotElement: class {}, ShadowRoot: class {},
-    CSSStyleSheet: class { replaceSync() {} },
-    ResizeObserver: class { observe() {} unobserve() {} },
-    MutationObserver: class { observe() {} disconnect() {} },
-    Node: { DOCUMENT_POSITION_FOLLOWING: 4 },
-    CustomEvent: class {}, document, URL,
+    HTMLElement: Element, CSSStyleSheet: class { replaceSync() {} }, URL,
+    document: { addEventListener() {}, baseURI: 'https://app.test/', createElement: tag => { const el = new Element(); el.tag = tag; return el; } },
+    getComputedStyle: () => ({ backgroundColor: 'rgb(1,2,3)' }),
+    CustomEvent: class { constructor(type, options) { this.type = type; Object.assign(this, options); } },
     customElements: { get: name => classes.get(name), define: (name, cls) => classes.set(name, cls) },
-    innerWidth: 800, innerHeight: 600, devicePixelRatio: 1,
-    performance: { now: () => now },
-    getComputedStyle: () => ({ position: 'relative', backgroundColor: '', pointerEvents: 'auto' }),
     addEventListener: (name, fn) => listeners.set(name, fn),
-    matchMedia: () => ({ addEventListener() {}, removeEventListener() {} }),
-    requestAnimationFrame: fn => { frames.set(++nextTimer, fn); return nextTimer; },
-    cancelAnimationFrame: id => frames.delete(id),
-    setInterval: () => ++nextTimer, clearInterval() {},
-    setTimeout: (fn, delay) => { timers.set(++nextTimer, { fn, at: now + delay }); return nextTimer; },
-    clearTimeout: id => timers.delete(id),
+    setTimeout: fn => { timers.set(++timer, fn); return timer; }, clearTimeout: id => timers.delete(id),
   };
-  context.window = context;
-  const native = Object.fromEntries(['create', 'update', 'navigate', 'command', 'destroy', 'host']
-    .map(name => [name, (...args) => messages.push({ name, args })]));
+  const native = Object.fromEntries(['create', 'navigate', 'command', 'destroy'].map(name => [name, (...args) => messages.push({ name, args })]));
   const dispatch = vm.runInNewContext(bootstrap, context)(native);
   const view = new (classes.get('justcef-view'))();
-  view.attributes.set('src', '/view');
-  view.connectedCallback();
-  const id = messages.find(m => m.name === 'create').args[0];
-  function advance(ms) {
-    for (let elapsed = 0; elapsed < ms; elapsed += 16) {
-      now += 16;
-      for (const [id, timer] of [...timers]) {
-        if (timer.at <= now) { timers.delete(id); timer.fn(); }
-      }
-      const pending = [...frames.values()];
-      frames.clear();
-      pending.forEach(fn => fn());
-    }
-  }
-  function event(name, detail) { dispatch('event', id, name, JSON.stringify(detail)); }
-  return { view, document, messages, advance, event, createdTags,
-    resize: (width, height) => {
-      context.innerWidth = document.documentElement.clientWidth = width;
-      context.innerHeight = document.documentElement.clientHeight = height;
-      listeners.get('resize')();
-    },
-    scroll: () => listeners.get('scroll')({ target: document }),
-    pageEvent: name => listeners.get(name)({ persisted: true }) };
+  view.attributes.set('src', '/view'); view.connectedCallback();
+  const id = () => messages.filter(m => m.name === 'create').at(-1).args[0];
+  const event = (name, detail, target = id()) => dispatch('event', target, name, JSON.stringify(detail));
+  const attach = () => event('viewcreated', { viewId: 42, guestContentId: 'token' });
+  return { view, messages, event, attach, id, listeners, timers, flush() { for (const fn of [...timers.values()]) fn(); timers.clear(); } };
 }
 
-test('clipped rounded corners do not hide the entire native view', () => {
-  const h = harness();
-  const background = {};
-  h.document.elementsFromPoint = (x, y) =>
-    (x === 21 || x === 119) && (y === 21 || y === 119) ? [background] : [h.view];
-  h.view.setAttribute('occlusion', 'hide');
-  h.advance(32);
-  const update = h.messages.filter(m => m.name === 'update').at(-1);
-  assert.equal(update.args[13], true, 'clipped corners are outside the visible element');
+test('creates an independent browser and attaches a compositor plugin', () => {
+  const h = harness(); h.attach();
+  assert.equal(h.view.viewId, 42);
+  assert.equal(h.view.root.children[0].type, 'application/x-chromium-surface-embed');
+  assert.equal(h.view.root.children[0].getAttribute('data-content-id'), 'token');
+  assert.equal(h.view.root.children.some(el => ['canvas', 'img', 'textarea'].includes(el.tag)), false);
 });
-
-test('an overlay covering the native view still hides it and removal restores it', () => {
-  const h = harness();
-  const overlay = {};
-  h.document.elementsFromPoint = () => [overlay, h.view];
-  h.advance(32);
-  assert.equal(h.messages.filter(m => m.name === 'update').at(-1).args[13], false);
-  h.document.elementsFromPoint = () => [h.view];
-  h.advance(32);
-  assert.equal(h.messages.filter(m => m.name === 'update').at(-1).args[13], true);
+test('ordinary navigation retains the browser and plugin', () => {
+  const h = harness(); h.attach(); const plugin = h.view.root.children[0];
+  h.view.setAttribute('src', '/next');
+  assert.equal(h.messages.at(-1).name, 'navigate'); assert.equal(h.messages.at(-1).args[1], 'https://app.test/next');
+  assert.equal(h.view.root.children[0], plugin); assert.equal(h.view.viewId, 42);
 });
-
-test('explicit motion freeze hides immediately and resumes after geometry settles', () => {
-  const h = harness();
-  h.event('viewcreated', { viewId: 10 });
-  h.view.setAttribute('transition', 'freeze');
-  h.view.rect = { left: 40, top: 20, width: 100, height: 100, right: 140, bottom: 120 };
-  h.advance(32);
-  const frozen = h.messages.filter(m => m.name === 'update').at(-1);
-  assert.equal(frozen.args[17], true);
-  assert.equal(frozen.args[13], false);
-  assert.equal(h.messages.filter(m => m.name === 'command').length, 0);
-  h.advance(400);
-  const last = h.messages.filter(m => m.name === 'update').at(-1);
-  assert.equal(last.args[17], false, 'must leave frozen mode');
-  assert.equal(last.args[13], true, 'must restore the native view');
+test('DOM moves preserve browser lifetime', () => {
+  const h = harness(); h.attach(); h.view.isConnected = false; h.view.disconnectedCallback();
+  h.view.isConnected = true; h.view.connectedCallback(); h.flush();
+  assert.equal(h.messages.filter(m => m.name === 'create').length, 1);
+  assert.equal(h.messages.filter(m => m.name === 'destroy').length, 0);
 });
-
-test('default parent scrolling updates immediately without hiding or requesting snapshots', () => {
-  const h = harness();
-  h.event('viewcreated', { viewId: 10 });
-  for (let i = 1; i <= 20; ++i) {
-    h.view.rect = { left: 20, top: 20 - i, width: 100, height: 100, right: 120, bottom: 120 - i };
-    h.scroll();
-    const update = h.messages.filter(m => m.name === 'update').at(-1);
-    assert.equal(update.args[3], 20 - i, 'position is sent during the scroll callback');
-    assert.equal(update.args[13], true, 'native view stays visible');
-    assert.equal(update.args[17], false, 'scroll does not freeze');
-    h.advance(16);
-  }
-  assert.equal(h.messages.filter(m => m.name === 'command' && m.args[1] === 'snapshot').length, 0);
-  const count = h.messages.filter(m => m.name === 'update').length;
-  h.advance(600);
-  assert.equal(h.messages.filter(m => m.name === 'update').length, count, 'settled geometry sends no extra updates');
-});
-
-test('rejected navigation preserves a live view and its commands', () => {
-  const h = harness();
-  h.event('viewcreated', { viewId: 10 });
-  h.view.setAttribute('src', 'file:///denied');
-  h.event('error', { reason: 'denied' });
-  assert.equal(h.view.viewId, 10);
-  h.view.reload();
-  assert.equal(h.messages.at(-1).name, 'command');
-  assert.equal(h.messages.at(-1).args[1], 'reload');
-  h.view.setAttribute('src', '/valid');
-  assert.equal(h.messages.at(-1).name, 'navigate');
-});
-
-test('removing src destroys the browser and permits recreation', () => {
-  const h = harness();
-  h.event('viewcreated', { viewId: 10 });
-  h.view.removeAttribute('src');
+test('removed views release browser and ignore messages for the old element ID', () => {
+  const h = harness(); h.attach(); const old = h.id(); const plugin = h.view.root.children[0];
+  h.view.isConnected = false; h.view.disconnectedCallback(); h.flush();
+  assert.equal(plugin.removed, true); assert.equal(h.view.viewId, null);
+  h.event('viewcreated', { viewId: 99, guestContentId: 'stale' }, old);
   assert.equal(h.view.viewId, null);
-  assert.equal(h.messages.at(-1).name, 'destroy');
-  h.view.setAttribute('src', '/new');
-  assert.equal(h.messages.filter(m => m.name === 'create').length, 2);
+  h.view.isConnected = true; h.view.connectedCallback(); assert.notEqual(h.id(), old);
+});
+test('unhandled permission decisions deny; handled decisions are left to the app', () => {
+  const h = harness(); h.attach(); h.event('permissionrequest', { requestId: 8 });
+  assert.deepEqual(JSON.parse(h.messages.at(-1).args[2]), { requestId: 8, allow: false });
+  const count = h.messages.length; h.view.cancel = true; h.event('permissionrequest', { requestId: 9 });
+  assert.equal(h.messages.length, count);
+});
+test('suspension hides presentation without replacing the live browser', () => {
+  const h = harness(); h.view.suspend(); h.attach(); const plugin = h.view.root.children[0];
+  assert.equal(plugin.style.visibility, 'hidden'); h.view.resume(); assert.equal(plugin.style.visibility, '');
+  assert.equal(h.messages.filter(m => m.name === 'create').length, 1);
+});
+test('controller rejection allows retry with a new source and ID', () => {
+  const h = harness(), old = h.id(); h.event('error', { reason: 'create-failed' });
+  h.view.setAttribute('src', '/retry'); assert.notEqual(h.id(), old); h.attach(); assert.equal(h.view.viewId, 42);
+});
+test('back-forward cache restores fresh browser IDs', () => {
+  const h = harness(); h.attach(); const old = h.id();
+  h.listeners.get('pagehide')({ persisted: true }); assert.equal(h.view.viewId, null);
+  h.listeners.get('pageshow')({ persisted: true }); assert.notEqual(h.id(), old);
+});
+test('removing src releases its surface', () => {
+  const h = harness(); h.attach(); const plugin = h.view.root.children[0]; h.view.removeAttribute('src');
+  assert.equal(h.view.viewId, null); assert.equal(plugin.removed, true);
 });
 
-test('creation errors release pending native state and can be retried', () => {
-  const h = harness();
-  h.event('error', { reason: 'limit' });
-  assert.equal(h.messages.at(-1).name, 'destroy');
-  h.view.setAttribute('src', '/retry');
-  assert.equal(h.messages.filter(m => m.name === 'create').length, 2);
+test('a decision handler recreating the view cannot send a denial to the replacement', () => {
+  const h = harness(); h.attach(); const old = h.id();
+  h.view.onDispatch = event => {
+    if (event.type !== 'permissionrequest') return;
+    h.view.removeAttribute('src'); h.view.setAttribute('src', '/replacement'); h.attach();
+  };
+  h.event('permissionrequest', { requestId: 8 }, old);
+  assert.notEqual(h.id(), old);
+  assert.equal(h.messages.some(m => m.name === 'command' && m.args[1] === 'respond'), false);
 });
-
-test('late creation replies cannot resurrect a removed browser', () => {
-  const h = harness();
-  const oldId = h.messages.find(m => m.name === 'create').args[0];
-  h.view.removeAttribute('src');
-  h.view.setAttribute('src', '/replacement');
-  const newId = h.messages.filter(m => m.name === 'create').at(-1).args[0];
-  assert.notEqual(oldId, newId);
-  h.event('viewcreated', { viewId: 99 });
-  assert.equal(h.view.viewId, null, 'old creation reply must be ignored');
-  h.event('error', { reason: 'create-failed' });
-  h.view.reload();
-  assert.deepEqual(h.messages.at(-1), { name: 'command', args: [newId, 'reload'] });
+test('a delayed fullscreen rejection cannot exit a replacement browser', async () => {
+  const h = harness(); h.attach(); let reject;
+  h.view.requestFullscreen = () => new Promise((_, fail) => { reject = fail; });
+  h.event('fullscreenchange', { fullscreen: true });
+  h.view.removeAttribute('src'); h.view.setAttribute('src', '/replacement'); h.attach();
+  reject(new Error('old request')); await Promise.resolve();
+  assert.equal(h.messages.some(m => m.name === 'command' && m.args[1] === 'exitFullscreen'), false);
 });
-
-test('back-forward cache releases native surfaces and recreates on restore', () => {
-  const h = harness();
-  h.event('viewcreated', { viewId: 10 });
-  h.pageEvent('pagehide');
-  assert.equal(h.view.viewId, null);
-  assert.equal(h.messages.at(-1).name, 'destroy');
-  h.pageEvent('pageshow');
-  assert.equal(h.messages.filter(m => m.name === 'create').length, 2);
-});
-
-
-test('default movement and resizing keep the native view live without a canvas', () => {
-  const h = harness();
-  h.event('viewcreated', { viewId: 10 });
-  h.view.rect = { left: 40, top: 30, width: 120, height: 110, right: 160, bottom: 140 };
-  h.resize(900, 700);
-  h.advance(32);
-  const last = h.messages.filter(m => m.name === 'update').at(-1);
-  assert.equal(last.args[3], 30);
-  assert.equal(last.args[4], 120);
-  assert.equal(last.args[13], true);
-  assert.equal(last.args[17], false);
-  assert.equal(h.createdTags.includes('canvas'), false);
-  assert.equal(h.messages.filter(m => m.name === 'command').length, 0);
-});
-
-test('explicit resize freeze restores the native view after resizing settles', () => {
-  const h = harness();
-  h.event('viewcreated', { viewId: 10 });
-  h.view.setAttribute('transition', 'freeze');
-  h.resize(900, 700);
-  h.advance(32);
-  const hidden = h.messages.filter(m => m.name === 'update').at(-1);
-  assert.equal(hidden.args[13], false);
-  assert.equal(hidden.args[17], true);
-  h.advance(400);
-  const restored = h.messages.filter(m => m.name === 'update').at(-1);
-  assert.equal(restored.args[13], true);
-  assert.equal(restored.args[17], false);
-  assert.equal(h.messages.filter(m => m.name === 'command').length, 0);
-});
-
-test('suspend hides immediately and resume restores current geometry without captures', () => {
-  const h = harness();
-  h.event('viewcreated', { viewId: 10 });
-  h.view.suspend();
-  assert.equal(h.messages.filter(m => m.name === 'update').at(-1).args[13], false);
-  h.view.rect = { left: 40, top: 30, width: 120, height: 110, right: 160, bottom: 140 };
-  h.advance(32);
-  h.view.resume();
-  const last = h.messages.filter(m => m.name === 'update').at(-1);
-  assert.equal(last.args[3], 30);
-  assert.equal(last.args[13], true);
-  assert.equal(h.messages.filter(m => m.name === 'command').length, 0);
+test('a superseded fullscreen request cannot exit the current fullscreen session', async () => {
+  const h = harness(); h.attach(); const rejects = [];
+  h.view.requestFullscreen = () => new Promise((_, fail) => rejects.push(fail));
+  h.event('fullscreenchange', { fullscreen: true });
+  h.event('fullscreenchange', { fullscreen: false });
+  h.event('fullscreenchange', { fullscreen: true });
+  rejects[0](new Error('superseded')); await Promise.resolve();
+  assert.equal(h.messages.some(m => m.name === 'command' && m.args[1] === 'exitFullscreen'), false);
+  rejects[1](new Error('current')); await Promise.resolve();
+  assert.equal(h.messages.at(-1).args[1], 'exitFullscreen');
 });

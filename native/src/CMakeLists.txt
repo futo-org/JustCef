@@ -125,6 +125,11 @@ set(DOTCEF_SRCS
   app_browser.cc
   bridge.cc
   bridge.h
+  browser_features.cc
+  browser_features.h
+  screenshot_capture.cc
+  screenshot_capture.h
+  custom_schemes.h
   client.cc
   client.h
   devtoolsclient.cc

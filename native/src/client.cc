@@ -1,4 +1,9 @@
 #include "client.h"
+#include "browser_features.h"
+#include "custom_schemes.h"
+#include "include/cef_command_ids.h"
+#include "include/internal/cef_types_wrappers.h"
+#include "justcef_view_client.h"
 
 #include "bridge.h"
 #include "include/cef_command_line.h"
@@ -271,6 +276,20 @@ Client::Client(const IPCWindowCreate& settings, bool manageNativeWindow) : setti
     _modifyRequestBody = settings.modifyRequestBody;
 }
 
+void Client::CopyPopupRouting(Client& popup)
+{
+    popup.SetProxyRequests(_proxyRequests.load());
+    {
+        std::lock_guard<std::mutex> lock(_proxyRequestsSetMutex);
+        popup._proxyRequestsSet = _proxyRequestsSet;
+    }
+    {
+        std::lock_guard<std::mutex> lock(_proxyDomainsMutex);
+        popup._exactProxyDomains = _exactProxyDomains;
+        popup._leadingDotProxyDomains = _leadingDotProxyDomains;
+    }
+}
+
 void Client::SetProxyRequests(bool proxyRequests)
 {
     settings.proxyRequests = proxyRequests;
@@ -321,7 +340,31 @@ bool Client::OnBeforePopup(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> fr
                            CefLifeSpanHandler::WindowOpenDisposition target_disposition, bool user_gesture, const CefPopupFeatures& popupFeatures, CefWindowInfo& windowInfo,
                            CefRefPtr<CefClient>& client, CefBrowserSettings& browserSettings, CefRefPtr<CefDictionaryValue>& extra_info, bool* no_javascript_access)
 {
+    if (!allowNewWindows)
+        return true;
+    if (interceptNewWindows)
+    {
+        auto detail = CefDictionaryValue::Create();
+        detail->SetString("url", target_url);
+        detail->SetString("targetFrameName", target_frame_name);
+        detail->SetInt("disposition", target_disposition);
+        detail->SetBool("userGesture", user_gesture);
+        auto popup = MakeViewPopupSettings(settings);
+        popup.url = target_url;
+        _features->Ask(browser, "newWindow", detail,
+                       [popup, parent = browser->GetIdentifier(), source = CefRefPtr<Client>(this)](CefRefPtr<CefDictionaryValue> answer)
+                       {
+                           if (answer->GetBool("allow"))
+                               CreateBrowserWindow(popup, parent, true, source);
+                       });
+        return true;
+    }
     extra_info = CreateBridgeExtraInfo(false, extra_info);
+    auto popupClient = new Client(MakeViewPopupSettings(settings));
+    CopyPopupRouting(*popupClient);
+    popupClient->popupParentId = browser->GetIdentifier();
+    popupClient->interceptNewWindows = interceptNewWindows;
+    client = popupClient;
     return false;
 }
 
@@ -406,6 +449,8 @@ void Client::OnAfterCreated(CefRefPtr<CefBrowser> browser)
     if (settings.iconPath)
         OverrideIcon(browser, *settings.iconPath);
 
+    if (popupParentId)
+        IPC::Singleton.NotifyPopupCreated(popupParentId, browser->GetIdentifier());
     IPC::Singleton.NotifyWindowOpened(browser);
 }
 
@@ -430,6 +475,7 @@ bool Client::DoClose(CefRefPtr<CefBrowser> browser)
 void Client::OnBeforeClose(CefRefPtr<CefBrowser> browser)
 {
     LOG(INFO) << "OnBeforeClose called " << browser->GetIdentifier();
+    _features->Cancel(browser->GetIdentifier(), true);
 
     CEF_REQUIRE_UI_THREAD();
     shared::CancelPendingFileDialogs(browser->GetIdentifier());
@@ -486,8 +532,15 @@ void Client::OnLoadEnd(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame,
 
 void Client::OnLoadStart(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, TransitionType transition_type)
 {
+    _features->Cancel(browser->GetIdentifier(), false, frame && !frame->IsMain() ? frame->GetIdentifier().ToString() : std::string());
     if (frame && frame->IsMain())
+    {
+        auto callbacks = std::move(_devToolsMethodCallbacks);
+        _devToolsMethodCallbacks.clear();
+        for (auto& [id, callback] : callbacks)
+            callback(false, "{\"error\":\"Document navigated\"}");
         ClearCssDraggableRegions(browser);
+    }
     IPC::Singleton.NotifyWindowFrameLoadStart(browser, frame);
 }
 
@@ -592,7 +645,7 @@ bool Client::EnsureDevToolsRegistration(CefRefPtr<CefBrowser> browser)
 }
 
 bool Client::ExecuteDevToolsMethodAsync(CefRefPtr<CefBrowser> browser, const std::string& method, CefRefPtr<CefDictionaryValue> params,
-                                        std::function<void(bool success, std::string result)> callback)
+                                        std::function<void(bool success, std::string result)> callback, int* requestId)
 {
     CEF_REQUIRE_UI_THREAD();
 
@@ -600,6 +653,8 @@ bool Client::ExecuteDevToolsMethodAsync(CefRefPtr<CefBrowser> browser, const std
         return false;
 
     int messageId = ++_messageIdGenerator;
+    if (requestId)
+        *requestId = messageId;
     _devToolsMethodCallbacks[messageId] = std::move(callback);
     if (browser->GetHost()->ExecuteDevToolsMethod(messageId, method, params) == 0)
     {
@@ -607,7 +662,28 @@ bool Client::ExecuteDevToolsMethodAsync(CefRefPtr<CefBrowser> browser, const std
         return false;
     }
 
+    CefPostDelayedTask(TID_UI, base::BindOnce(&Client::ExpireDevToolsMethod, CefRefPtr<Client>(this), messageId), 60000);
     return true;
+}
+
+void Client::CancelDevToolsMethod(int id)
+{
+    auto it = _devToolsMethodCallbacks.find(id);
+    if (it == _devToolsMethodCallbacks.end())
+        return;
+    auto callback = std::move(it->second);
+    _devToolsMethodCallbacks.erase(it);
+    callback(false, "{\"error\":\"Browser operation canceled\"}");
+}
+
+void Client::ExpireDevToolsMethod(int id)
+{
+    auto it = _devToolsMethodCallbacks.find(id);
+    if (it == _devToolsMethodCallbacks.end())
+        return;
+    auto callback = std::move(it->second);
+    _devToolsMethodCallbacks.erase(it);
+    callback(false, "{\"error\":\"Browser operation timed out\"}");
 }
 
 void Client::OnDevToolsMethodResult(CefRefPtr<CefBrowser> browser, int message_id, bool success, const void* result, size_t result_size)
@@ -1067,7 +1143,7 @@ private:
 
 CefRefPtr<CefResourceHandler> Client::GetResourceHandler(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefRefPtr<CefRequest> request)
 {
-    if (_proxyRequests)
+    if (_proxyRequests || IsCustomSchemeURL(request->GetURL().ToString()))
         return new ProxyResourceHandler(browser->GetIdentifier(), request, std::chrono::milliseconds(settings.proxyOpenTimeoutMs));
 
     {
@@ -1494,8 +1570,8 @@ bool Client::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser, CefRefPtr<C
         LOG(INFO) << "Steam show OSK.";
 
         int x = message->GetArgumentList()->GetInt(1), y = message->GetArgumentList()->GetInt(2);
-        justcef_view::TranslateViewOskRect(browser, x, y);
-        const int w = message->GetArgumentList()->GetInt(3), h = message->GetArgumentList()->GetInt(4);
+        int w = message->GetArgumentList()->GetInt(3), h = message->GetArgumentList()->GetInt(4);
+        justcef_view::TranslateViewOskRect(browser, x, y, w, h);
         const auto mode = static_cast<EFloatingGamepadTextInputMode>(message->GetArgumentList()->GetInt(5));
         if (Steam::Instance().ShouldShowOsk())
         {
@@ -1585,8 +1661,13 @@ void Client::OnRenderProcessTerminated(CefRefPtr<CefBrowser> browser, Terminatio
 {
     LOG(ERROR) << "Render process terminated (identifier = " << browser->GetIdentifier() << ", status = " << status << ", error_code = " << error_code << ").";
 
+    _features->Cancel(browser->GetIdentifier(), true);
     if (IsPrimaryBrowser(browser))
     {
+        auto callbacks = std::move(_devToolsMethodCallbacks);
+        _devToolsMethodCallbacks.clear();
+        for (auto& [id, callback] : callbacks)
+            callback(false, "{}");
         ClearCssDraggableRegions(browser);
         FailAllBridgeRpcCalls("Bridge RPC failed because the render process terminated.");
         CancelHostCalls();
@@ -1595,31 +1676,10 @@ void Client::OnRenderProcessTerminated(CefRefPtr<CefBrowser> browser, Terminatio
     justcef_view::OnHostBrowserGone(browser);
 }
 
-bool Client::OnJSDialog(CefRefPtr<CefBrowser> browser, const CefString& origin_url, JSDialogType dialog_type, const CefString& message_text,
-                        const CefString& default_prompt_text, CefRefPtr<CefJSDialogCallback> callback, bool& suppress_message)
-{
-    justcef_view::OnHostDialogStateChanged(browser, true);
-    return false;
-}
-
-bool Client::OnBeforeUnloadDialog(CefRefPtr<CefBrowser> browser, const CefString& message_text, bool is_reload, CefRefPtr<CefJSDialogCallback> callback)
-{
-    justcef_view::OnHostDialogStateChanged(browser, true);
-    return false;
-}
-
-void Client::OnResetDialogState(CefRefPtr<CefBrowser> browser)
-{
-    justcef_view::OnHostDialogStateChanged(browser, false);
-}
-
-void Client::OnDialogClosed(CefRefPtr<CefBrowser> browser)
-{
-    justcef_view::OnHostDialogStateChanged(browser, false);
-}
-
 void Client::OnFrameDetached(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame)
 {
+    if (frame)
+        _features->Cancel(browser->GetIdentifier(), false, frame->GetIdentifier().ToString());
     if (frame && frame->IsMain())
         justcef_view::OnHostFrameGone(browser, frame);
 }
@@ -1762,4 +1822,80 @@ CefRefPtr<CefRenderHandler> Client::GetRenderHandler()
     if (cl->HasSwitch("headless"))
         return this;
     return nullptr;
+}
+
+bool Client::OnCertificateError(CefRefPtr<CefBrowser> browser, cef_errorcode_t error, const CefString& url, CefRefPtr<CefSSLInfo> info, CefRefPtr<CefCallback> callback)
+{
+    if (!callback)
+        return false;
+    auto detail = CefDictionaryValue::Create();
+    detail->SetString("url", url);
+    detail->SetInt("error", error);
+    detail->SetInt("certificateStatus", info ? info->GetCertStatus() : 0);
+    auto certificate = info ? info->GetX509Certificate() : nullptr;
+    if (certificate)
+    {
+        detail->SetString("subject", certificate->GetSubject()->GetDisplayName());
+        detail->SetString("issuer", certificate->GetIssuer()->GetDisplayName());
+    }
+    _features->Ask(browser, "certificate", detail,
+                   [callback](CefRefPtr<CefDictionaryValue> answer)
+                   {
+                       if (answer->GetBool("allow"))
+                           callback->Continue();
+                       else
+                           callback->Cancel();
+                   });
+    return true;
+}
+
+bool Client::OnOpenURLFromTab(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, const CefString& url, WindowOpenDisposition disposition, bool userGesture)
+{
+    switch (disposition)
+    {
+    case CEF_WOD_NEW_FOREGROUND_TAB:
+    case CEF_WOD_NEW_BACKGROUND_TAB:
+    case CEF_WOD_NEW_POPUP:
+    case CEF_WOD_NEW_WINDOW:
+    {
+        if (!allowNewWindows)
+            return true;
+        auto popup = MakeViewPopupSettings(settings);
+        popup.url = url;
+        if (interceptNewWindows)
+        {
+            auto detail = CefDictionaryValue::Create();
+            detail->SetString("url", url);
+            detail->SetInt("disposition", disposition);
+            detail->SetBool("userGesture", userGesture);
+            _features->Ask(browser, "newWindow", detail,
+                           [popup, parent = browser->GetIdentifier(), source = CefRefPtr<Client>(this)](CefRefPtr<CefDictionaryValue> answer)
+                           {
+                               if (answer->GetBool("allow"))
+                                   CreateBrowserWindow(popup, parent, true, source);
+                           });
+        }
+        else
+            CreateBrowserWindow(popup, browser->GetIdentifier(), false, this);
+        return true;
+    }
+    case CEF_WOD_SAVE_TO_DISK:
+        browser->GetHost()->StartDownload(url);
+        return true;
+    default:
+        // Route the source frame explicitly instead of allowing window-level navigation.
+        if (frame)
+            frame->LoadURL(url);
+        return true;
+    }
+}
+
+bool Client::OnContextMenuCommand(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefRefPtr<CefContextMenuParams> params, int command, EventFlags flags)
+{
+    if (command == IDC_CONTENT_CONTEXT_OPENLINKNEWTAB || command == IDC_CONTENT_CONTEXT_OPENLINKNEWWINDOW)
+    {
+        OnOpenURLFromTab(browser, frame, params->GetLinkUrl(), CEF_WOD_NEW_WINDOW, true);
+        return true;
+    }
+    return false;
 }
