@@ -10,15 +10,15 @@ function harness() {
   const messages = [], classes = new Map(), timers = new Map(), listeners = new Map();
   let timer = 0;
   class Element {
-    constructor() { this.attributes = new Map(); this.isConnected = true; this.style = {}; this.events = []; }
-    attachShadow() { return this.root = { children: [], append(el) { this.children.push(el); }, prepend(el) { this.children.unshift(el); } }; }
+    constructor() { this.attributes = new Map(); this.isConnected = true; this.style = {}; this.events = []; this.focusCalls = []; }
+    attachShadow() { return this.root = { children: [], append(el) { this.children.push(el); }, prepend(el) { this.children.unshift(el); el.ownerRoot = this; } }; }
     getAttribute(name) { return this.attributes.get(name) ?? null; }
     setAttribute(name, value) { const old = this.getAttribute(name); this.attributes.set(name, value); if (classes.get('justcef-view')?.observedAttributes.includes(name)) this.attributeChangedCallback?.(name, old, value); }
     removeAttribute(name) { const old = this.getAttribute(name); this.attributes.delete(name); this.attributeChangedCallback?.(name, old, null); }
     addEventListener() {}
     dispatchEvent(event) { this.events.push(event); this.onDispatch?.(event); return !this.cancel; }
     remove() { this.removed = true; }
-    focus() {}
+    focus(options) { this.focusCalls.push(options); if (this.ownerRoot) this.ownerRoot.activeElement = this; }
   }
   const context = {
     HTMLElement: Element, CSSStyleSheet: class { replaceSync() {} }, URL,
@@ -36,7 +36,8 @@ function harness() {
   const id = () => messages.filter(m => m.name === 'create').at(-1).args[0];
   const event = (name, detail, target = id()) => dispatch('event', target, name, JSON.stringify(detail));
   const attach = () => event('viewcreated', { viewId: 42, guestContentId: 'token' });
-  return { view, messages, event, attach, id, listeners, timers, flush() { for (const fn of [...timers.values()]) fn(); timers.clear(); } };
+  const focus = (target = id(), requestId = 0) => dispatch('focus', target, requestId);
+  return { view, messages, event, focus, attach, id, listeners, timers, flush() { for (const fn of [...timers.values()]) fn(); timers.clear(); } };
 }
 
 test('creates an independent browser and attaches a compositor plugin', () => {
@@ -119,4 +120,59 @@ test('a superseded fullscreen request cannot exit the current fullscreen session
   assert.equal(h.messages.some(m => m.name === 'command' && m.args[1] === 'exitFullscreen'), false);
   rejects[1](new Error('current')); await Promise.resolve();
   assert.equal(h.messages.at(-1).args[1], 'exitFullscreen');
+});
+
+test('focus targets the compositor plugin and preserves focus options', () => {
+  const h = harness(); h.attach(); const plugin = h.view.root.children[0];
+  const options = { preventScroll: true, focusVisible: true };
+  h.view.focus(options);
+  assert.equal(plugin.focusCalls.length, 1);
+  assert.equal(plugin.focusCalls[0], options);
+  assert.equal(h.view.focusCalls.length, 0);
+  assert.equal(h.messages.some(m => m.name === 'command' && m.args[1] === 'focus'), false);
+});
+
+test('controller focus targets the plugin without echoing a native focus command', () => {
+  const h = harness(); h.attach(); const plugin = h.view.root.children[0];
+  const before = h.messages.length;
+  h.focus();
+  assert.equal(plugin.focusCalls.length, 1);
+  assert.equal(plugin.focusCalls[0].preventScroll, true);
+  assert.equal(h.messages.length, before);
+});
+
+test('controller focus acknowledges the request after the plugin is focused', () => {
+  const h = harness(); h.attach();
+  h.focus(h.id(), 123);
+  assert.equal(h.view.root.activeElement, h.view.root.children[0]);
+  assert.deepEqual(JSON.parse(h.messages.at(-1).args[2]), { requestId: 123, focused: true });
+  assert.equal(h.messages.at(-1).args[1], 'focusComplete');
+});
+
+test('controller focus reports failure when the plugin cannot receive focus', () => {
+  const h = harness(); h.attach();
+  h.view.root.children[0].focus = () => {};
+  h.focus(h.id(), 124);
+  assert.deepEqual(JSON.parse(h.messages.at(-1).args[2]), { requestId: 124, focused: false });
+});
+
+test('controller focus rejects a disconnected view before deferred destruction', () => {
+  const h = harness(); h.attach();
+  h.view.isConnected = false;
+  h.view.disconnectedCallback();
+  h.focus(h.id(), 125);
+  assert.equal(h.view.root.children[0].focusCalls.length, 0);
+  assert.deepEqual(JSON.parse(h.messages.at(-1).args[2]), { requestId: 125, focused: false });
+});
+
+test('stale focus requests cannot focus a removed or replacement plugin', () => {
+  const h = harness(); h.attach(); const oldId = h.id(), oldPlugin = h.view.root.children[0];
+  h.view.removeAttribute('src'); h.focus(oldId);
+  assert.equal(oldPlugin.focusCalls.length, 0);
+  h.view.setAttribute('src', '/replacement'); h.attach();
+  const replacement = h.view.root.children[0];
+  h.focus(oldId);
+  assert.equal(replacement.focusCalls.length, 0);
+  h.focus();
+  assert.equal(replacement.focusCalls.length, 1);
 });

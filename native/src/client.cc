@@ -570,7 +570,15 @@ void Client::OnGotFocus(CefRefPtr<CefBrowser> browser)
 void Client::OnBeforeContextMenu(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefRefPtr<CefContextMenuParams> params, CefRefPtr<CefMenuModel> model)
 {
     if (!settings.contextMenuEnable)
+    {
         model->Clear();
+        return;
+    }
+    if (!params->GetLinkUrl().empty() && model->GetIndexOf(IDC_CONTENT_CONTEXT_OPENLINKNEWWINDOW) < 0)
+    {
+        model->InsertItemAt(0, IDC_CONTENT_CONTEXT_OPENLINKNEWWINDOW, "Open link in new window");
+        model->InsertSeparatorAt(1);
+    }
 }
 
 bool Client::OnKeyEvent(CefRefPtr<CefBrowser> browser, const CefKeyEvent& event, CefEventHandle os_event)
@@ -1849,7 +1857,7 @@ bool Client::OnCertificateError(CefRefPtr<CefBrowser> browser, cef_errorcode_t e
     return true;
 }
 
-bool Client::OnOpenURLFromTab(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, const CefString& url, WindowOpenDisposition disposition, bool userGesture)
+bool Client::OnOpenURLFromTab(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, const CefString& url, CefRequestHandler::WindowOpenDisposition disposition, bool userGesture)
 {
     switch (disposition)
     {

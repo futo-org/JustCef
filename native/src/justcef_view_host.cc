@@ -28,6 +28,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <map>
 #include <memory>
 #include <vector>
 
@@ -40,12 +41,10 @@ struct GuestApi
 {
     using GetId = int (*)(int, int, char*, size_t);
     using IsAttached = int (*)(int);
-    using Focus = void (*)(int);
     using Detach = void (*)(int);
     using TransformRect = int (*)(int, int*, int*, int*, int*);
     GetId getId = nullptr;
     IsAttached isAttached = nullptr;
-    Focus focus = nullptr;
     Detach detach = nullptr;
     TransformRect transformRect = nullptr;
 };
@@ -70,7 +69,6 @@ const GuestApi& GetGuestApi()
             {
                 result.getId = reinterpret_cast<GuestApi::GetId>(dlsym(library, "justcef_guest_surface_id"));
                 result.isAttached = reinterpret_cast<GuestApi::IsAttached>(dlsym(library, "justcef_guest_is_attached"));
-                result.focus = reinterpret_cast<GuestApi::Focus>(dlsym(library, "justcef_guest_focus"));
                 result.transformRect = reinterpret_cast<GuestApi::TransformRect>(dlsym(library, "justcef_guest_transform_rect"));
                 result.detach = reinterpret_cast<GuestApi::Detach>(dlsym(library, "justcef_guest_detach"));
 #if !defined(OS_WIN)
@@ -167,10 +165,12 @@ struct ViewEntry
     bool detached = false;
     bool fullscreen = false;
     bool focused = false;
+    std::map<int, std::function<void(bool)>> pendingFocus;
 };
 
 std::vector<std::shared_ptr<ViewEntry>> g_views;
 int32_t g_nextKey = 0;
+int g_nextFocusRequest = 0;
 
 Client* ClientFor(CefRefPtr<CefBrowser> browser)
 {
@@ -214,8 +214,16 @@ std::shared_ptr<ViewEntry> FindByBrowser(CefRefPtr<CefBrowser> browser)
     return nullptr;
 }
 
+void FailPendingFocus(const std::shared_ptr<ViewEntry>& entry)
+{
+    auto pendingFocus = std::move(entry->pendingFocus);
+    entry->pendingFocus.clear();
+    for (auto& request : pendingFocus) request.second(false);
+}
+
 void RemoveEntry(const std::shared_ptr<ViewEntry>& entry)
 {
+    FailPendingFocus(entry);
     g_views.erase(std::remove(g_views.begin(), g_views.end(), entry), g_views.end());
 }
 
@@ -268,6 +276,17 @@ CefRefPtr<CefDictionaryValue> ErrorDetail(const std::string& reason)
     return detail;
 }
 
+void CompleteFocus(int32_t key, int requestId, bool focused)
+{
+    auto entry = FindByKey(key);
+    if (!entry) return;
+    auto it = entry->pendingFocus.find(requestId);
+    if (it == entry->pendingFocus.end()) return;
+    auto completion = std::move(it->second);
+    entry->pendingFocus.erase(it);
+    completion(focused);
+}
+
 void DetachEntry(int32_t key)
 {
     std::shared_ptr<ViewEntry> entry = FindByKey(key);
@@ -275,6 +294,7 @@ void DetachEntry(int32_t key)
         return;
 
     entry->detached = true;
+    FailPendingFocus(entry);
     std::unique_ptr<ViewSurface> surface = std::move(entry->surface);
     CefRefPtr<CefBrowserView> browserView = std::move(entry->browserView);
     entry->window = nullptr;
@@ -439,7 +459,7 @@ void CreateView(CefRefPtr<CefBrowser> host, CefRefPtr<CefFrame> frame, const std
 
     CefRefPtr<CefBrowserView> hostView = CefBrowserView::GetForBrowser(host);
     CefRefPtr<CefWindow> window = hostView ? hostView->GetWindow() : nullptr;
-    if (!GetGuestApi().getId || !GetGuestApi().detach || !GetGuestApi().isAttached || !GetGuestApi().focus || !GetGuestApi().transformRect)
+    if (!GetGuestApi().getId || !GetGuestApi().detach || !GetGuestApi().isAttached || !GetGuestApi().transformRect)
     {
         SendEventToFrame(frame, token, elementId, "error", ErrorDetail("guest-extension-unavailable"));
         return;
@@ -581,6 +601,12 @@ bool HandleHostProcessMessage(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame>
     if (name == kViewCommandMessageName)
     {
         const std::string command = args->GetSize() > 2 ? args->GetString(2).ToString() : "";
+        if (command == "focusComplete" && args->GetSize() > 3 && args->GetType(3) == VTYPE_DICTIONARY)
+        {
+            auto result = args->GetDictionary(3);
+            CompleteFocus(entry->key, result->GetInt("requestId"), result->GetBool("focused"));
+            return true;
+        }
         if (command == "focus")
         {
             FocusView(entry->browser);
@@ -697,15 +723,30 @@ bool IsEmbeddedBrowser(CefRefPtr<CefBrowser> browser)
     return FindByBrowser(browser) != nullptr;
 }
 
-bool FocusView(CefRefPtr<CefBrowser> browser)
+bool FocusView(CefRefPtr<CefBrowser> browser, std::function<void(bool)> completion)
 {
     auto entry = FindByBrowser(browser);
     if (!entry) return false;
-    if (entry->allowed && !entry->detached && !entry->destroyRequested)
+    auto frame = TargetFrame(entry);
+    if (!entry->allowed || entry->detached || entry->destroyRequested || !frame || !frame->IsValid())
     {
-        if (entry->window && entry->window->IsValid()) entry->window->RequestFocus();
-        GetGuestApi().focus(entry->viewId);
+        if (completion) completion(false);
+        return true;
     }
+    if (entry->window && entry->window->IsValid()) entry->window->RequestFocus();
+    int requestId = 0;
+    if (completion)
+    {
+        requestId = ++g_nextFocusRequest;
+        entry->pendingFocus.emplace(requestId, std::move(completion));
+        CefPostDelayedTask(TID_UI, base::BindOnce(&CompleteFocus, entry->key, requestId, false), 5000);
+    }
+    auto message = CefProcessMessage::Create(kViewFocusMessageName);
+    auto args = message->GetArgumentList();
+    args->SetString(0, entry->docToken);
+    args->SetInt(1, entry->elementId);
+    args->SetInt(2, requestId);
+    frame->SendProcessMessage(PID_RENDERER, message);
     return true;
 }
 

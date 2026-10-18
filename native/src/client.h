@@ -34,7 +34,7 @@ public:
     CefRefPtr<BrowserFeatures> Features() { return _features; }
     CefRefPtr<CefPermissionHandler> GetPermissionHandler() override { return _features; }
     CefRefPtr<CefDownloadHandler> GetDownloadHandler() override { return _features; }
-    bool OnOpenURLFromTab(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>, const CefString&, WindowOpenDisposition, bool) override;
+    bool OnOpenURLFromTab(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>, const CefString&, CefRequestHandler::WindowOpenDisposition, bool) override;
     bool OnContextMenuCommand(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>, CefRefPtr<CefContextMenuParams>, int, EventFlags) override;
     bool OnCertificateError(CefRefPtr<CefBrowser>, cef_errorcode_t, const CefString&, CefRefPtr<CefSSLInfo>, CefRefPtr<CefCallback>) override;
     // CefClient methods:

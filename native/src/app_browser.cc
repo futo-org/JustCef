@@ -145,6 +145,8 @@ public:
                 command_line->AppendSwitch("enable-print-preview");
 #endif
 #if defined(OS_LINUX)
+            if (!command_line->HasSwitch("disable-print-preview"))
+                command_line->AppendSwitch("enable-print-preview");
             if (ShouldEnableWaylandIme(command_line))
             {
                 LOG(INFO) << "Input method detected on Wayland, enabling Wayland IME (text-input-v3).";

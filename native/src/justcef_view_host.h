@@ -8,6 +8,7 @@
 #include "include/views/cef_browser_view.h"
 #include "include/views/cef_window.h"
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -24,7 +25,7 @@ void OnHostFrameGone(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame);
 void OnHostBrowserGone(CefRefPtr<CefBrowser> browser);
 void OnHostGotFocus(CefRefPtr<CefBrowser> browser);
 bool IsFocusInView(CefRefPtr<CefBrowser> hostBrowser);
-bool FocusView(CefRefPtr<CefBrowser> browser);
+bool FocusView(CefRefPtr<CefBrowser> browser, std::function<void(bool)> completion = {});
 bool IsEmbeddedBrowser(CefRefPtr<CefBrowser> browser);
 void PropagateHostZoom(CefRefPtr<CefBrowser> browser, double zoomLevel);
 

@@ -7,6 +7,7 @@ import traceback
 import tempfile
 import subprocess
 import unicodedata
+from unittest import SkipTest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from jcipc import *
@@ -1002,6 +1003,7 @@ def test_capture_preserves_view_input():
             check(bool(views), 'view created')
             view = views[0][1]
             ctl.wait_note('LoadingState',lambda r:r.i32()==view and not r.b1())
+            wait_until(lambda:devtools_eval(ctl,view,'[innerWidth,innerHeight]') == [500,340], 'capture fixture surface reached its CSS size')
             initial = devtools_eval(ctl,view,'[innerWidth,innerHeight]')
             for index, image_format in enumerate(('png','jpeg','webp','png'), 1):
                 params = {'format':image_format, 'captureBeyondViewport':index==4}
@@ -1059,10 +1061,11 @@ def test_capture_preserves_view_input():
             ctl.close()
 
 
-def test_macos_print_preview_remains_responsive():
-    if sys.platform != 'darwin':
-        return
-    ctl = Ctl(['--custom-schemes=app', '--use-alloy-style'])
+def test_macos_print_preview_remains_responsive(force=False, runtime_style=None):
+    if sys.platform != 'darwin' and not force:
+        from unittest import SkipTest
+        raise SkipTest('macOS print regression; Linux has a separate check')
+    ctl = Ctl(['--custom-schemes=app'] + (runtime_style if runtime_style is not None else ['--use-alloy-style']))
     try:
         ctl.wait_note('Ready')
         views=[]
@@ -1191,8 +1194,8 @@ def test_composed_capture_alignment_and_nested_content():
             ctl.wait_note('Ready')
             views = []
             nested = '<style>body{margin:0;background:#20c080}</style><iframe style="position:absolute;left:9px;top:7px;width:30px;height:25px;border:0" srcdoc="&lt;style&gt;body{margin:0;background:#dc267f}&lt;/style&gt;&lt;body id=deep&gt;"></iframe>'
-            content = '<!doctype html><style>body{margin:0;background:#e04030;height:900px}iframe{position:absolute;left:23px;top:29px;width:80px;height:70px;border:0}</style><iframe srcdoc="' + html.escape(nested, quote=True) + '"></iframe>'
-            host_page = b'''<!doctype html><style>body{margin:0;background:#132436}justcef-view{display:block;background:white}.outer{position:relative;margin-left:31.25px;width:340px;height:220px;overflow:hidden}.inner{position:relative;left:-13.5px;top:17.25px;width:400px;height:190px;overflow:hidden}#first{overflow:hidden;position:relative;left:20.25px;top:11.5px;width:350.5px;height:150.5px}</style><div style="height:1100px"></div><div class="outer"><div class="inner"><justcef-view id="first" src="app://content/one"><justcef-view id="nested" style="position:absolute;left:180.25px;top:40.25px;width:90.5px;height:80.5px;overflow:hidden" src="app://content/nested"><justcef-view id="deepest" style="position:absolute;left:50.25px;top:35.25px;width:80.5px;height:60.5px" src="app://content/deepest"></justcef-view></justcef-view></justcef-view></div></div><div style="height:120px"></div><div id="shadow"></div><div style="height:250px"></div><script>const root=document.querySelector('#shadow').attachShadow({mode:'closed'});root.innerHTML='<div style="position:relative;margin-left:91.25px;width:260px;height:130px;overflow:hidden"><justcef-view style="display:block;position:relative;left:-9.5px;top:-7.25px;width:280.75px;height:160.25px;background:white" src="app://content/two"></justcef-view></div>';window.testShadowView=root.querySelector('justcef-view');</script>'''
+            content = '<!doctype html><style>html{scrollbar-width:none}body{margin:0;background:#e04030;height:900px}iframe{position:absolute;left:23px;top:29px;width:80px;height:70px;border:0}</style><iframe srcdoc="' + html.escape(nested, quote=True) + '"></iframe>'
+            host_page = b'''<!doctype html><style>html{scrollbar-width:none}body{margin:0;background:#132436}justcef-view{display:block;background:white}.outer{position:relative;margin-left:31.25px;width:340px;height:220px;overflow:hidden}.inner{position:relative;left:-13.5px;top:17.25px;width:400px;height:190px;overflow:hidden}#first{overflow:hidden;position:relative;left:20.25px;top:11.5px;width:350.5px;height:150.5px}</style><div style="height:1100px"></div><div class="outer"><div class="inner"><justcef-view id="first" src="app://content/one"><justcef-view id="nested" style="position:absolute;left:180.25px;top:40.25px;width:90.5px;height:80.5px;overflow:hidden" src="app://content/nested"><justcef-view id="deepest" style="position:absolute;left:50.25px;top:35.25px;width:80.5px;height:60.5px" src="app://content/deepest"></justcef-view></justcef-view></justcef-view></div></div><div style="height:120px"></div><div id="shadow"></div><div style="height:250px"></div><script>const root=document.querySelector('#shadow').attachShadow({mode:'closed'});root.innerHTML='<div style="position:relative;margin-left:91.25px;width:260px;height:130px;overflow:hidden"><justcef-view style="display:block;position:relative;left:-9.5px;top:-7.25px;width:280.75px;height:160.25px;background:white" src="app://content/two"></justcef-view></div>';window.testShadowView=root.querySelector('justcef-view');</script>'''
             def serve(r):
                 url = read_request(r)[2]
                 body = host_page if 'host' in url else (b'<style>body{margin:0;background:#8030c0}</style>' if 'nested' in url else (b'<style>body{margin:0;background:#e0c030}</style>' if 'deepest' in url else content.encode()))
@@ -1269,7 +1272,435 @@ def test_composed_capture_alignment_and_nested_content():
         finally:
             ctl.close()
 
-TESTS = [test_composed_capture_alignment_and_nested_content, test_hidden_view_full_page_capture_preserves_state, test_capture_preserves_view_input, test_macos_print_preview_remains_responsive, test_live_popup_with_restrictive_csp, test_http_popups_inherit_proxy_routing, test_permission_navigation_is_frame_scoped, test_permission_records_survive_restart, test_certificate_decisions, test_view_popup_routing_and_policy, test_download_lifecycle, test_capture_pdf_and_permission_records, test_custom_schemes_and_view_boundary, test_view_media_permission_decisions, test_protocol_vectors, test_ordering_and_basics, test_bridge_calls_that_call_native, test_large_bridge_payloads, test_async_modify, test_streams_and_cancel,
+def wait_until(predicate, description, timeout=15):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return
+        time.sleep(.05)
+    raise AssertionError('Timed out: ' + description)
+
+
+def test_download_controls_and_pending_navigation():
+    import http.server
+    body = bytes(range(256)) * (256 * 32)
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *args): pass
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/octet-stream')
+            self.send_header('Content-Disposition', 'attachment; filename="slow.bin"')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            try:
+                for offset in range(0, len(body), 16384):
+                    self.wfile.write(body[offset:offset+16384]); self.wfile.flush()
+                    time.sleep(.03)
+            except (BrokenPipeError, ConnectionResetError): pass
+    server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    ctl = Ctl()
+    release, asked = threading.Event(), threading.Event()
+    try:
+        ctl.wait_note('Ready')
+        wid = ctl.create('about:blank', bridge=False)
+        with tempfile.TemporaryDirectory(prefix='justcef-controls-') as directory:
+            updates, decisions = [], []
+            path = os.path.join(directory, 'slow.bin')
+            def decide(r):
+                browser, kind, detail = r.i32(), r.s(), json.loads(r.s())
+                decisions.append((browser, kind, detail)); asked.set()
+                release.wait(15)
+                return OK, W().s(json.dumps({'allow':True,'path':path})).b
+            ctl.handlers[R['BrowserDecision']] = decide
+            ctl.note_handlers[22] = lambda r: updates.append((r.i32(), json.loads(r.s())))
+            browser_command(ctl,wid,'download',{'url':'http://127.0.0.1:%d/slow'%server.server_port})
+            check(asked.wait(10), 'download approval requested')
+            check(decisions[0][0:2] == (wid,'download'), 'download request source and kind')
+            check(decisions[0][2]['suggestedName'] == 'slow.bin', 'download filename metadata')
+            before = len(ctl.cancels)
+            check(ctl.result(ctl.call(C['LoadUrl'],W().i32(wid).s('about:blank#navigation').b))[0] == OK,'navigate pending download')
+            time.sleep(.2)
+            check(not any(op == R['BrowserDecision'] for op,_ in ctl.cancels[before:]), 'download approval survives navigation')
+            release.set()
+            wait_until(lambda:any(item.get('receivedBytes',0)>0 for _,item in updates),'download starts')
+            download = decisions[0][2]['id']
+            browser_command(ctl,wid,'downloadControl',{'id':download,'action':'pause'})
+            wait_until(lambda:any(item.get('paused') for _,item in updates),'download pauses')
+            browser_command(ctl,wid,'downloadControl',{'id':download,'action':'resume'})
+            wait_until(lambda:any(item.get('complete') for _,item in updates),'download resumes and completes')
+            check(open(path,'rb').read() == body, 'resumed download exact bytes')
+            check(all(browser == wid for browser,_ in updates),'download updates use source browser')
+            check(ctl.result(ctl.call(C['BrowserCommand'],W().i32(wid).s('downloadControl').s(json.dumps({'id':download,'action':'pause'})).b))[0] == NOTFOUND,'completed download no longer controllable')
+            os.remove(path); updates.clear(); decisions.clear(); asked.clear()
+            browser_command(ctl,wid,'download',{'url':'http://127.0.0.1:%d/cancel'%server.server_port})
+            check(asked.wait(10),'second download approval')
+            wait_until(lambda:any(item.get('receivedBytes',0)>0 for _,item in updates),'second download starts')
+            browser_command(ctl,wid,'downloadControl',{'id':decisions[0][2]['id'],'action':'cancel'})
+            wait_until(lambda:any(item.get('canceled') for _,item in updates),'explicit cancellation update')
+            check(not os.path.exists(path),'canceled download has no completed destination')
+        shutdown(ctl)
+    finally:
+        release.set(); ctl.close(); server.shutdown(); server.server_close()
+
+
+def test_media_remembered_allow_block_and_origin_scope():
+    ctl = Ctl(['--use-fake-device-for-media-stream'])
+    try:
+        ctl.wait_note('Ready')
+        ctl.handlers[R['Proxy']] = lambda r: proxy_response(200,{'Content-Type':'text/html'},b'<!doctype html><title>media</title>')
+        decisions = []
+        answer = {'allow':False,'remember':True}
+        def decide(r):
+            browser,kind,detail = r.i32(),r.s(),json.loads(r.s())
+            decisions.append((browser,kind,detail))
+            return OK,W().s(json.dumps(answer)).b
+        ctl.handlers[R['BrowserDecision']] = decide
+        wid = ctl.create('https://media.test/page',proxy=True,bridge=False)
+        ctl.wait_note('LoadingState',lambda r:r.i32()==wid and not r.b1())
+        request = "navigator.mediaDevices.getUserMedia(%s).then(s=>{const kinds=s.getTracks().map(t=>t.kind);s.getTracks().forEach(t=>t.stop());return kinds.sort()}).catch(e=>e.name)"
+        check(devtools_eval(ctl,wid,request%'{audio:true,video:true}') == 'NotAllowedError','deny microphone and camera')
+        check(len(decisions)==1 and decisions[0][0]==wid and decisions[0][2]['canRemember'],'media decision has source and persistence capability')
+        check(browser_command(ctl,wid,'permission',{'origin':'https://media.test'}) == {'microphone':2,'camera':2},'remembered deny stored')
+        check(devtools_eval(ctl,wid,request%'{audio:true}') == 'NotAllowedError' and len(decisions)==1,'remembered block denies without reprompt')
+        browser_command(ctl,wid,'permission',{'origin':'https://media.test','permissions':3,'value':0})
+        answer['allow']=True
+        check(devtools_eval(ctl,wid,request%'{audio:true,video:true}') == ['audio','video'],'grant camera and microphone')
+        count=len(decisions)
+        check(devtools_eval(ctl,wid,request%'{audio:true,video:true}') == ['audio','video'] and len(decisions)==count,'remembered allow grants without reprompt')
+        browser_command(ctl,wid,'permission',{'origin':'https://scoped.test','topLevelOrigin':'https://top-a.test','permissions':1,'value':1})
+        check(browser_command(ctl,wid,'permission',{'origin':'https://scoped.test','topLevelOrigin':'https://top-a.test'})['microphone']==1,'top-level scoped permission stored')
+        check(browser_command(ctl,wid,'permission',{'origin':'https://scoped.test','topLevelOrigin':'https://top-b.test'})['microphone']==1,'Chromium microphone records are requesting-origin scoped, not partitioned by embedding origin')
+        shutdown(ctl)
+    finally:
+        ctl.close()
+
+
+def test_permission_prompt_and_decision_expiry():
+    ctl = Ctl(['--use-fake-device-for-media-stream'])
+    try:
+        ctl.wait_note('Ready')
+        ctl.handlers[R['Proxy']] = lambda r: proxy_response(200,{'Content-Type':'text/html'},b'<!doctype html><title>decisions</title>')
+        decisions = []
+        def decide(r):
+            browser,kind,detail = r.i32(),r.s(),json.loads(r.s())
+            decisions.append((browser,kind,detail))
+            return OK,W().s('{}').b
+        ctl.handlers[R['BrowserDecision']]=decide
+        wid=ctl.create('https://expiry.test/',proxy=True,bridge=False)
+        ctl.wait_note('LoadingState',lambda r:r.i32()==wid and not r.b1())
+        notification = cdp(ctl,wid,'Runtime.evaluate',{'expression':'Notification.requestPermission()','awaitPromise':True,'returnByValue':True,'userGesture':True})
+        check(notification['result']['value']=='denied','generic notification prompt denies by default')
+        check(any(kind=='permission' and detail['type']=='prompt' for _,kind,detail in decisions),'generic permission prompt routed')
+        ctl.handlers[R['ViewCreated']] = lambda r:(OK,W().b1(True).b)
+        host=ctl.create('https://host-expiry.test/',proxy=True,bridge=False,views=True)
+        ctl.wait_note('LoadingState',lambda r:r.i32()==host and not r.b1())
+        devtools_eval(ctl,host,"window.pendingDecision=null;window.view=document.createElement('justcef-view');view.style.cssText='display:block;width:300px;height:200px';view.addEventListener('permissionrequest',e=>{e.preventDefault();pendingDecision=e.detail.requestId});view.setAttribute('src','https://guest-expiry.test/');document.body.append(view);true")
+        wait_until(lambda:devtools_eval(ctl,host,'view.viewId') is not None,'expiry view created')
+        vid=devtools_eval(ctl,host,'view.viewId')
+        check(ctl.result(ctl.call(33,W().i32(vid).b1(True).b))[0]==OK,'guest proxy enabled')
+        ctl.result(ctl.call(C['LoadUrl'],W().i32(vid).s('https://guest-expiry.test/ready').b))
+        ctl.wait_note('LoadingState',lambda r:r.i32()==vid and not r.b1())
+        started=time.monotonic()
+        devtools_eval(ctl,vid,"window.outcome='pending';navigator.mediaDevices.getUserMedia({audio:true}).then(s=>{s.getTracks().forEach(t=>t.stop());outcome='allowed'}).catch(e=>outcome=e.name);true")
+        wait_until(lambda:devtools_eval(ctl,host,'pendingDecision') is not None,'host received permission request')
+        wait_until(lambda:devtools_eval(ctl,vid,'outcome')!='pending','native decision expiry',timeout=70)
+        check(devtools_eval(ctl,vid,'outcome')=='NotAllowedError','expired request denied')
+        check(time.monotonic()-started>=55,'native decision did not expire prematurely')
+        devtools_eval(ctl,host,'view.respond(pendingDecision,{allow:true});true')
+        check(devtools_eval(ctl,vid,'outcome')=='NotAllowedError','late response cannot revive expired grant')
+        shutdown(ctl)
+    finally:
+        ctl.close()
+
+
+def test_custom_scheme_security_and_multiple_registration():
+    ctl=Ctl(['--custom-schemes=app,asset'])
+    try:
+        ctl.wait_note('Ready')
+        def proxy(r):
+            browser,method,url,headers,elements=read_request(r)
+            if url.endswith('/cors'):
+                return proxy_response(200,{'Content-Type':'text/plain','Access-Control-Allow-Origin':'app://host'},b'cors-ok')
+            if url.endswith('/blocked'):
+                return proxy_response(200,{'Content-Type':'text/plain'},b'private')
+            if url.endswith('/csp'):
+                return proxy_response(200,{'Content-Type':'text/html','Content-Security-Policy':"script-src 'none'; connect-src 'none'"},b'<script>globalThis.inlineRan=true</script>')
+            return proxy_response(200,{'Content-Type':'text/html'},b'<!doctype html><title>secure scheme</title>')
+        ctl.handlers[R['Proxy']]=proxy
+        wid=ctl.create('app://host/index',bridge=False)
+        ctl.wait_note('LoadingState',lambda r:r.i32()==wid and not r.b1())
+        check(devtools_eval(ctl,wid,'[location.origin,isSecureContext]')==['app://host',True],'custom scheme is standard and secure')
+        check(devtools_eval(ctl,wid,"fetch('asset://resource/cors').then(r=>r.text())")=='cors-ok','second registered scheme and allowed cross-origin fetch')
+        check(devtools_eval(ctl,wid,"fetch('asset://resource/blocked').then(()=>false).catch(()=>true)") is True,'custom scheme does not bypass CORS')
+        ctl.result(ctl.call(C['LoadUrl'],W().i32(wid).s('app://host/csp').b))
+        ctl.wait_note('LoadingState',lambda r:r.i32()==wid and not r.b1())
+        check(devtools_eval(ctl,wid,"typeof inlineRan==='undefined' && typeof bridge==='undefined'"),'CSP blocks inline script and bridge stays disabled')
+        check(devtools_eval(ctl,wid,"fetch('app://host/cors').then(()=>false).catch(()=>true)") is True,'custom scheme respects connect-src CSP')
+        shutdown(ctl)
+    finally:
+        ctl.close()
+
+
+def test_browser_command_validation_and_capture_queue():
+    import base64
+    from concurrent.futures import ThreadPoolExecutor
+    ctl,wid,_=open_app()
+    try:
+        cases=[(W().i32(wid).s('permission').s('[]').b,8),
+               (W().i32(wid).s('permission').s('{').b,8),
+               (W().i32(wid).s('permission').s('{}').u8(0).b,8),
+               (W().i32(2147483647).s('print').s('{}').b,3)]
+        for name,options,status in [('unknown',{},5),('permission',{},8),('download',{},8),
+                                    ('permission',{'origin':'https://x.test','permissions':0,'value':1},8),
+                                    ('permission',{'origin':'app://x','permissions':3,'value':1},5),
+                                    ('captureScreenshot',{'format':'gif'},8),('captureScreenshot',{'quality':101},8)]:
+            cases.append((W().i32(wid).s(name).s(json.dumps(options)).b,status))
+        for body,expected in cases:
+            check(ctl.result(ctl.call(C['BrowserCommand'],body))[0]==expected,'browser command validation')
+        with ThreadPoolExecutor(max_workers=6) as workers:
+            captures=list(workers.map(lambda _:browser_command(ctl,wid,'captureScreenshot',{'format':'png','fullPage':True}),range(6)))
+        check(all(base64.b64decode(result['data']).startswith(b'\x89PNG') for result in captures),'six concurrent queued captures complete')
+        first=ctl.call(C['BrowserCommand'],W().i32(wid).s('captureScreenshot').s('{"fullPage":true}').b)
+        with ctl.plock:
+            canceled_id=ctl.next_id+1
+        canceled=ctl.call(C['BrowserCommand'],W().i32(wid).s('captureScreenshot').s('{"fullPage":true}').b)
+        ctl.send(CANCEL,C['BrowserCommand'],canceled_id)
+        check(ctl.result(first)[0]==OK,'capture preceding cancellation completes')
+        check(base64.b64decode(browser_command(ctl,wid,'captureScreenshot')['data']).startswith(b'\x89PNG'),'capture queue recovers after cancellation')
+        shutdown(ctl)
+    finally:
+        ctl.close()
+
+
+def test_surface_focus_switches_host_and_multiple_guests():
+    for style in ([], ['--use-alloy-style']):
+        ctl=Ctl(style+['--custom-schemes=app'])
+        try:
+            ctl.wait_note('Ready')
+            def serve(r):
+                url=read_request(r)[2]
+                body=(b'<!doctype html><style>body{margin:0}justcef-view{display:block;width:320px;height:120px}</style><input id=host>'
+                      if 'host' in url else b'<!doctype html><input id=guest>')
+                return proxy_response(200,{'Content-Type':'text/html'},body)
+            loaded={}
+            ctl.note_handlers[17]=lambda r:loaded.__setitem__(r.i32(),not r.b1())
+            ctl.handlers[R['Proxy']]=serve
+            ctl.handlers[R['ViewCreated']]=lambda r:(OK,W().b1(True).b)
+            host=ctl.create('app://host/focus',views=True,bridge=False)
+            ctl.wait_note('LoadingState',lambda r:r.i32()==host and not r.b1())
+            ids=devtools_eval(ctl,host,"""Promise.all([0,1].map(i=>new Promise(resolve=>{
+              const v=document.createElement('justcef-view');v.id='view'+i;v.tabIndex=0;
+              v.addEventListener('guestattached',()=>resolve(v.viewId),{once:true});
+              v.setAttribute('src','app://guest/'+i);document.body.append(v);
+            })))""")
+            for browser in ids:
+                wait_until(lambda:loaded.get(browser,False),'focus guest document loaded')
+                devtools_eval(ctl,browser,"document.querySelector('#guest').focus();true")
+            values=['','']
+            for route,index in [('javascript',0),('controller',1),('tab',0),('controller',0),('javascript',1)]:
+                devtools_eval(ctl,host,"document.querySelector('#host').value='';true")
+                for kind in ('mousePressed','mouseReleased'):
+                    cdp(ctl,host,'Input.dispatchMouseEvent',dict(type=kind,x=10,y=10,button='left',clickCount=1))
+                sentinel='host-'+route+str(index)
+                cdp(ctl,host,'Input.insertText',{'text':sentinel})
+                check(devtools_eval(ctl,host,"document.querySelector('#host').value")==sentinel,'host receives input before guest focus')
+                if route=='controller':
+                    check(ctl.result(ctl.call(25,W().i32(ids[index]).b))[0]==OK,'controller guest focus accepted')
+                elif route=='tab':
+                    cdp(ctl,host,'Input.dispatchKeyEvent',dict(type='keyDown',key='Tab',code='Tab',windowsVirtualKeyCode=9))
+                    cdp(ctl,host,'Input.dispatchKeyEvent',dict(type='keyUp',key='Tab',code='Tab',windowsVirtualKeyCode=9))
+                else:
+                    devtools_eval(ctl,host,"document.querySelector('#view%d').focus({preventScroll:true});true"%index)
+                if route!='controller':
+                    wait_until(lambda:devtools_eval(ctl,host,"document.activeElement===document.querySelector('#view%d')"%index),route+' updates host DOM focus')
+                    wait_until(lambda:devtools_eval(ctl,ids[index],"document.hasFocus() && document.activeElement?.id==='guest'"),route+' focuses correct guest input')
+                token='['+route+str(index)+']'
+                values[index]+=token
+                cdp(ctl,host,'Input.insertText',{'text':token})
+                wait_until(lambda:devtools_eval(ctl,ids[index],"document.querySelector('#guest').value")==values[index],route+' delivers text to correct guest')
+                check(devtools_eval(ctl,host,"document.querySelector('#host').value")==sentinel,'guest text did not leak into host')
+                check(devtools_eval(ctl,ids[1-index],"document.querySelector('#guest').value")==values[1-index],'guest text did not leak into sibling')
+            devtools_eval(ctl,host,"document.querySelector('#view0').style.display='none';true")
+            check(ctl.result(ctl.call(25,W().i32(ids[0]).b))[0]==ERROR,'hidden guest focus reports failure')
+            devtools_eval(ctl,host,"document.querySelector('#view0').style.display='block';true")
+            check(ctl.result(ctl.call(25,W().i32(ids[0]).b))[0]==OK,'focus recovers after hidden guest rejection')
+            check(ctl.result(ctl.call(25,b''))[0]==8,'focus validates missing browser ID')
+            old=ids[0]
+            devtools_eval(ctl,host,"document.querySelector('#view0').remove();true")
+            ctl.wait_note('WindowClosed',lambda r:r.i32()==old)
+            check(ctl.result(ctl.call(25,W().i32(old).b))[0]==NOTFOUND,'closed guest cannot receive controller focus')
+            shutdown(ctl)
+        finally:ctl.close()
+
+
+def test_surface_history_focus_suspend_and_reconnect():
+    for style in ([],['--use-alloy-style']):
+        ctl=Ctl(style+['--custom-schemes=app'])
+        try:
+            ctl.wait_note('Ready')
+            ctl.handlers[R['Proxy']]=lambda r:proxy_response(200,{'Content-Type':'text/html'},b'<!doctype html><style>body{margin:0;background:#e04030}</style><input id=edit>')
+            ctl.handlers[R['ViewCreated']]=lambda r:(OK,W().b1(True).b)
+            host=ctl.create('app://host/page',views=True,bridge=False)
+            ctl.wait_note('LoadingState',lambda r:r.i32()==host and not r.b1())
+            devtools_eval(ctl,host,"window.view=document.createElement('justcef-view');view.style.cssText='display:block;width:300px;height:200px';view.setAttribute('src','app://guest/one');document.body.append(view);true")
+            wait_until(lambda:devtools_eval(ctl,host,'view.viewId') is not None,'surface browser created')
+            vid=devtools_eval(ctl,host,'view.viewId')
+            ctl.wait_note('LoadingState',lambda r:r.i32()==vid and not r.b1())
+            devtools_eval(ctl,host,"view.setAttribute('src','app://guest/two');true")
+            ctl.wait_note('LoadingState',lambda r:r.i32()==vid and not r.b1())
+            check(devtools_eval(ctl,vid,'location.pathname')=='/two','surface navigation')
+            devtools_eval(ctl,host,'view.goBack();true')
+            ctl.wait_note('LoadingState',lambda r:r.i32()==vid and not r.b1())
+            check(devtools_eval(ctl,vid,'location.pathname')=='/one','surface history back')
+            devtools_eval(ctl,host,'view.goForward();true')
+            ctl.wait_note('LoadingState',lambda r:r.i32()==vid and not r.b1())
+            check(devtools_eval(ctl,vid,'location.pathname')=='/two','surface history forward')
+            devtools_eval(ctl,vid,'globalThis.reloadMarker=42;true')
+            devtools_eval(ctl,host,'view.reload();true')
+            ctl.wait_note('LoadingState',lambda r:r.i32()==vid and not r.b1())
+            check(devtools_eval(ctl,vid,'typeof reloadMarker')=='undefined','surface reload creates fresh document')
+            for kind in ('mousePressed','mouseReleased'):
+                cdp(ctl,host,'Input.dispatchMouseEvent',dict(type=kind,x=10,y=10,button='left',clickCount=1))
+            devtools_eval(ctl,vid,"document.querySelector('input').focus();true")
+            devtools_eval(ctl,host,'view.focus();true')
+            wait_until(lambda:devtools_eval(ctl,vid,"document.hasFocus() && document.activeElement?.id === 'edit'"), 'surface focus command completed')
+            cdp(ctl,host,'Input.insertText',{'text':'surface keyboard'})
+            try:
+                wait_until(lambda:devtools_eval(ctl,vid,"document.querySelector('input').value")=='surface keyboard','focused surface receives host input')
+            except AssertionError as error:
+                state="({focused:document.hasFocus(),active:document.activeElement?.id,value:document.querySelector('input')?.value})"
+                raise AssertionError('%s; style=%r host=%r guest=%r' % (error,style,devtools_eval(ctl,host,state),devtools_eval(ctl,vid,state))) from None
+            devtools_eval(ctl,host,'view.suspend();true')
+            devtools_eval(ctl,vid,'globalThis.lifetimeMarker=73;true')
+            devtools_eval(ctl,host,'view.resume();view.remove();document.body.append(view);true')
+            time.sleep(.2)
+            check(devtools_eval(ctl,host,'view.viewId')==vid and devtools_eval(ctl,vid,'lifetimeMarker')==73,'suspend/resume and synchronous DOM move preserve live browser')
+            devtools_eval(ctl,host,'view.remove();true')
+            ctl.wait_note('WindowClosed',lambda r:r.i32()==vid)
+            devtools_eval(ctl,host,'document.body.append(view);true')
+            wait_until(lambda:devtools_eval(ctl,host,'view.viewId') is not None,'reattached surface recreated')
+            check(devtools_eval(ctl,host,'view.viewId')!=vid,'asynchronous detach gets fresh browser')
+            shutdown(ctl)
+        finally:
+            ctl.close()
+
+
+def test_wayland_frameless_decoration_negotiation():
+    from unittest import SkipTest
+    if not sys.platform.startswith('linux'):
+        raise SkipTest('Linux Wayland protocol check')
+    probe=Ctl()
+    try:
+        probe.wait_note('Ready')
+        status,payload=probe.result(probe.call(C['GetRuntimeInfo']))
+        backend=payload[1] if status==OK else 0
+        shutdown(probe)
+    finally:probe.close()
+    if backend!=2:
+        raise SkipTest('Requires the Wayland backend')
+    import re
+    previous=os.environ.get('WAYLAND_DEBUG')
+    os.environ['WAYLAND_DEBUG']='1'
+    try:
+        for style in ([],['--use-alloy-style']):
+            ctl=Ctl(style)
+            try:
+                ctl.wait_note('Ready')
+                wid=ctl.create('about:blank',frameless=True,bridge=False)
+                ctl.wait_note('LoadingState',lambda r:r.i32()==wid and not r.b1())
+                ctl.log.flush()
+                trace=open(ctl.log_path).read()
+                modes=re.findall(r'zxdg_toplevel_decoration_v1[@#]\d+\.set_mode\((\d+)\)',trace)
+                check(bool(modes),'compositor exposes and negotiates xdg-decoration')
+                check(set(modes)=={'1'},'frameless window requests client-side decorations only: '+str(modes))
+                shutdown(ctl)
+            finally:ctl.close()
+    finally:
+        if previous is None:os.environ.pop('WAYLAND_DEBUG',None)
+        else:os.environ['WAYLAND_DEBUG']=previous
+
+
+def test_native_print_preview_on_linux():
+    from unittest import SkipTest
+    if not sys.platform.startswith('linux'):
+        raise SkipTest('Linux native print UI check')
+    for style in ([], ["--use-alloy-style"]):
+        test_macos_print_preview_remains_responsive(force=True, runtime_style=style)
+
+
+def test_permission_cancel_on_navigation_and_close():
+    ctl,wid,_=open_app(native_args=['--use-fake-device-for-media-stream','--unsafely-treat-insecure-origin-as-secure=http://app.test'])
+    release,started=threading.Event(),threading.Event()
+    try:
+        def decide(r):
+            r.i32();r.s();r.s();started.set();release.wait(15)
+            return OK,W().s('{"allow":true}').b
+        ctl.handlers[R['BrowserDecision']]=decide
+        expression="navigator.mediaDevices.getUserMedia({audio:true}).then(s=>s.getTracks().forEach(t=>t.stop())).catch(()=>{});true"
+        for close in (False,True):
+            started.clear();release.clear();before=len(ctl.cancels)
+            devtools_eval(ctl,wid,expression)
+            check(started.wait(5),'permission decision pending before navigation/close')
+            if close:
+                check(ctl.result(ctl.call(C['Close'],W().i32(wid).b1(True).b))[0]==OK,'close requesting browser')
+                ctl.wait_note('WindowClosed',lambda r:r.i32()==wid)
+            else:
+                check(ctl.result(ctl.call(C['LoadUrl'],W().i32(wid).s('http://app.test/navigated').b))[0]==OK,'navigate requesting document')
+                ctl.wait_note('LoadingState',lambda r:r.i32()==wid and not r.b1())
+            wait_until(lambda:any(op==R['BrowserDecision'] for op,_ in ctl.cancels[before:]),'permission continuation canceled on navigation/close')
+            release.set()
+            if not close:
+                check(devtools_eval(ctl,wid,'1+1')==2,'late permission response cannot break next document')
+        shutdown(ctl)
+    finally:
+        release.set();ctl.close()
+
+
+def test_about_blank_surface_dynamic_iframe():
+    ctl=Ctl(['--custom-schemes=app'])
+    try:
+        ctl.wait_note('Ready')
+        ctl.handlers[R['Proxy']]=lambda r:proxy_response(200,{'Content-Type':'text/html'},b'<!doctype html>host')
+        ctl.handlers[R['ViewCreated']]=lambda r:(OK,W().b1(True).b)
+        host=ctl.create('app://host/blank-frame',views=True,bridge=False)
+        ctl.wait_note('LoadingState',lambda r:r.i32()==host and not r.b1())
+        devtools_eval(ctl,host,"window.view=document.createElement('justcef-view');view.style.cssText='width:400px;height:250px';view.setAttribute('src','about:blank');document.body.append(view);true")
+        wait_until(lambda:devtools_eval(ctl,host,'view.viewId') is not None,'about:blank surface created')
+        view=devtools_eval(ctl,host,'view.viewId')
+        ctl.wait_note('LoadingState',lambda r:r.i32()==view and not r.b1())
+        devtools_eval(ctl,view,"document.body.innerHTML='<iframe srcdoc=\"<p>nested</p>\"></iframe>';true")
+        time.sleep(.2)
+        check(devtools_eval(ctl,host,'1+1')==2,'host remains responsive after guest iframe creation')
+        failures=[]
+        for _ in range(5):
+            params=json.dumps(dict(expression="document.querySelector('iframe').contentDocument.body.innerText",returnByValue=True)).encode()
+            try:
+                status,payload=ctl.result(ctl.call(C['ExecuteDevTools'],W().i32(view).s('Runtime.evaluate').b1(True).by(params).b),timeout=8)
+            except TimeoutError:
+                check(devtools_eval(ctl,host,'1+1')==2,'host still responds while guest evaluation is stalled')
+                raise AssertionError('about:blank guest evaluation timed out after dynamic srcdoc iframe; host still responds') from None
+            if status==OK:
+                reader=Rd(payload)
+                ok,data=reader.b1(),reader.by()
+                if ok:
+                    result=json.loads(data)
+                    if result.get('result',{}).get('value','').strip()=='nested':break
+                failures.append((ok,data.decode(errors='replace')))
+            else:failures.append((status,payload))
+            time.sleep(.1)
+        else:raise AssertionError('about:blank guest stopped evaluating after adding srcdoc iframe: %r'%failures)
+        shutdown(ctl)
+    finally:ctl.close()
+
+
+RECENT_FEATURE_TESTS = [test_surface_focus_switches_host_and_multiple_guests, test_about_blank_surface_dynamic_iframe, test_wayland_frameless_decoration_negotiation, test_native_print_preview_on_linux, test_permission_cancel_on_navigation_and_close, test_download_controls_and_pending_navigation,
+    test_media_remembered_allow_block_and_origin_scope, test_permission_prompt_and_decision_expiry,
+    test_custom_scheme_security_and_multiple_registration, test_browser_command_validation_and_capture_queue,
+    test_surface_history_focus_suspend_and_reconnect]
+
+
+TESTS = RECENT_FEATURE_TESTS + [test_composed_capture_alignment_and_nested_content, test_hidden_view_full_page_capture_preserves_state, test_capture_preserves_view_input, test_macos_print_preview_remains_responsive, test_live_popup_with_restrictive_csp, test_http_popups_inherit_proxy_routing, test_permission_navigation_is_frame_scoped, test_permission_records_survive_restart, test_certificate_decisions, test_view_popup_routing_and_policy, test_download_lifecycle, test_capture_pdf_and_permission_records, test_custom_schemes_and_view_boundary, test_view_media_permission_decisions, test_protocol_vectors, test_ordering_and_basics, test_bridge_calls_that_call_native, test_large_bridge_payloads, test_async_modify, test_streams_and_cancel,
          test_backpressure_and_threads, test_shutdown_with_pending_work, test_runtime_info, test_file_paths, test_native_file_drag, test_concurrent_startup, test_frameless_drag_regions, test_caption_button_regions, test_views_handshake, test_views_rounded_clipping, test_views_lifecycle]
 
 if __name__ == "__main__":
@@ -1287,6 +1718,8 @@ if __name__ == "__main__":
             try:
                 test()
                 result["error"] = None
+            except SkipTest as error:
+                result["skip"] = str(error)
             except Exception:
                 result["error"] = traceback.format_exc()
 
@@ -1298,9 +1731,11 @@ if __name__ == "__main__":
         logs = list(LOGS)
         close_all()
         worker.join(5)
-        status = "PASS" if result.get("error") is None else "FAIL"
+        status = "SKIP" if result.get("skip") else ("PASS" if result.get("error") is None else "FAIL")
         failures += status == "FAIL"
         print("%s %s (%.1fs)" % (status, test.__name__, time.time() - started))
+        if result.get("skip"):
+            print(result["skip"])
         if result.get("error"):
             print(result["error"])
             for path in logs:

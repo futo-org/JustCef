@@ -308,7 +308,7 @@ ipc::StatusCode HandleWindowSetDevelopmentToolsEnabled(PacketReader& reader, Pac
 ipc::StatusCode HandleWindowSetDevelopmentToolsVisible(PacketReader& reader, PacketWriter& writer);
 ipc::StatusCode HandleWindowClose(PacketReader& reader, PacketWriter& writer);
 ipc::StatusCode HandleWindowLoadUrl(PacketReader& reader, PacketWriter& writer);
-ipc::StatusCode HandleWindowRequestFocus(PacketReader& reader, PacketWriter& writer);
+void HandleWindowRequestFocus(PacketReader& reader, ipc::Reply reply);
 ipc::StatusCode HandleWindowSetModifyRequests(PacketReader& reader, PacketWriter& writer);
 void HandleWindowOpenFilePicker(PacketReader& reader, ipc::Reply reply);
 void HandleWindowOpenDirectoryPicker(PacketReader& reader, ipc::Reply reply);

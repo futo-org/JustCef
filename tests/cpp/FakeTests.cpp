@@ -2044,3 +2044,81 @@ TEST_CASE("fake download updates retain wire order across a multi-threaded execu
     harness.process->Dispose();
     pool.join();
 }
+
+TEST_CASE("fake browser capture permission and download bindings preserve options")
+{
+    Watchdog watchdog(60s, "browser feature binding options");
+    asio::io_context io;
+    Harness harness;
+    harness.Start(io.get_executor());
+    const bool done = RunFor(io, [&]() -> asio::awaitable<void>
+    {
+        co_await harness.process->WaitForReadyAsync();
+        auto window = co_await harness.process->CreateWindowAsync(WindowCreateOptions{});
+        const auto image = co_await window->CaptureScreenshotAsync({.full_page = true, .format = "webp", .quality = 37});
+        CHECK(image == std::vector<std::uint8_t>{1, 2, 3, 4});
+        PdfOptions pdf_options;
+        pdf_options.landscape = true;
+        pdf_options.prefer_css_page_size = true;
+        pdf_options.scale = 1.5;
+        pdf_options.page_ranges = "2-3";
+        const auto pdf = co_await window->PrintToPdfAsync(pdf_options);
+        CHECK(std::string(pdf.begin(), pdf.end()) == "%PDF-");
+        co_await window->SetMediaPermissionsAsync("https://request.test", 2, 2, "https://top.test");
+        const auto settings = co_await window->GetMediaPermissionsAsync("https://request.test");
+        CHECK(settings.microphone == 1);
+        CHECK(settings.camera == 2);
+        co_await window->StartDownloadAsync("https://files.test/spaced%20file.bin");
+        for (const std::string action : {"pause", "resume", "cancel"})
+            co_await window->ControlDownloadAsync(42, action);
+        const auto last_control = co_await harness.fake.WaitAsync([](const Json& event) {
+            return event.value("event", "") == "browserCommand" && event.value("name", "") == "downloadControl" &&
+                   event.at("options").value("action", "") == "cancel";
+        }, 5s);
+        REQUIRE(last_control.has_value());
+        const auto commands = harness.fake.Events("browserCommand");
+        std::vector<std::string> controls;
+        bool capture = false, permission = false, download = false;
+        for (const auto& command : commands)
+        {
+            CHECK(command.at("browserId") == window->Identifier());
+            const auto& options = command.at("options");
+            if (command.at("name") == "captureScreenshot")
+            {
+                capture = true;
+                CHECK(options.at("fullPage") == true);
+                CHECK(options.at("format") == "webp");
+                CHECK(options.at("quality") == 37);
+            }
+            if (command.at("name") == "permission" && options.contains("value"))
+            {
+                permission = true;
+                CHECK(options.at("permissions") == 2);
+                CHECK(options.at("value") == 2);
+                CHECK(options.at("topLevelOrigin") == "https://top.test");
+            }
+            if (command.at("name") == "download")
+            {
+                download = true;
+                CHECK(options.at("url") == "https://files.test/spaced%20file.bin");
+            }
+            if (command.at("name") == "downloadControl")
+            {
+                CHECK(options.at("id") == 42);
+                controls.push_back(options.at("action").get<std::string>());
+            }
+        }
+        CHECK(capture);
+        CHECK(permission);
+        CHECK(download);
+        CHECK(controls == std::vector<std::string>{"pause", "resume", "cancel"});
+        const auto pdf_commands = harness.fake.Events("pdfCommand");
+        REQUIRE(pdf_commands.size() == 1);
+        CHECK(pdf_commands[0].at("options").at("preferCSSPageSize") == true);
+        CHECK(pdf_commands[0].at("options").at("landscape") == true);
+        CHECK(pdf_commands[0].at("options").at("pageRanges") == "2-3");
+        CHECK(pdf_commands[0].at("options").at("scale") == 1.5);
+        CHECK(harness.fake.ViolationCount() == 0);
+    }(), 30s);
+    CHECK(done);
+}

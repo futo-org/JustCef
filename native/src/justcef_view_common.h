@@ -17,6 +17,7 @@ constexpr char kViewCommandMessageName[] = "JustCef.View.Command";
 constexpr char kViewDestroyMessageName[] = "JustCef.View.Destroy";
 constexpr char kViewContextReleasedMessageName[] = "JustCef.View.ContextReleased";
 constexpr char kViewEventMessageName[] = "JustCef.View.Event";
+constexpr char kViewFocusMessageName[] = "JustCef.View.Focus";
 
 constexpr int kViewMaxPerDocument = 8;
 

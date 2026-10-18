@@ -464,10 +464,17 @@ public sealed class Host
                 return Result.Ok(b => b.Str(""));
             case ControllerOp.WindowBrowserCommand:
                 Emit(new JsonObject { ["event"] = "browserCommand", ["browserId"] = browser.Id, ["name"] = req.Text, ["options"] = JsonNode.Parse(req.Options ?? "{}") });
-                return Result.Ok(b => b.Str("{}"));
+                return Result.Ok(b => b.Str(req.Text switch {
+                    "captureScreenshot" => "{\"data\":\"AQIDBA==\"}",
+                    "permission" => "{\"microphone\":1,\"camera\":2}",
+                    _ => "{}"
+                }));
             case ControllerOp.WindowExecuteDevToolsMethod:
             {
-                var json = payloadSize is int n ? JsonStringBytes(n) : "{}"u8.ToArray();
+                if (req.Text == "Page.printToPDF")
+                    Emit(new JsonObject { ["event"] = "pdfCommand", ["browserId"] = browser.Id, ["options"] = JsonNode.Parse(req.Data.Span) });
+                var json = payloadSize is int n ? JsonStringBytes(n) :
+                    req.Text == "Page.printToPDF" ? "{\"data\":\"JVBERi0=\"}"u8.ToArray() : "{}"u8.ToArray();
                 return Result.Ok(b => b.Bool(true).Bytes(json), json.Length + 8);
             }
             case ControllerOp.WindowBridgeRpc:

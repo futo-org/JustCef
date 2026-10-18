@@ -85,8 +85,8 @@ def main():
         print('view', browser, url, flush=True)
         return OK, W().b1(True).b
     ctl.handlers[R['ViewCreated']] = on_view
-    def wait(predicate, message):
-        deadline = time.time()+8
+    def wait(predicate, message, timeout=8):
+        deadline = time.time()+timeout
         while time.time() < deadline:
             try:
                 if predicate(): return
@@ -255,9 +255,9 @@ def main():
                 (output/'youtube-overlay.png').write_bytes(base64.b64decode(screenshot))
                 print('YOUTUBE OVERLAY PASS',flush=True)
             evaluate(host,"navigate('guest-prototype-content.html?recovery');window.guestCrashed=false;view.addEventListener('crash',()=>guestCrashed=true,{once:true});true")
-            wait(lambda:evaluate(child,"!!document.querySelector('#click')"),'recovery fixture did not load')
+            wait(lambda:evaluate(child,"location.search === '?recovery' && document.readyState === 'complete' && !!document.querySelector('#click')"),'recovery fixture did not load')
             ctl.call(C['ExecuteDevTools'],W().i32(child).s('Page.crash').b1(True).by(b'{}').b)
-            wait(lambda:evaluate(host,'guestCrashed'),'guest crash did not reach host')
+            wait(lambda:evaluate(host,'guestCrashed'),'guest crash did not reach host',timeout=30)
             evaluate(host,'view.reload();true')
             wait(lambda:evaluate(child,"!!document.querySelector('#click')"),'guest did not reload after crash')
             click(*point('#click'))

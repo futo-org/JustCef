@@ -41,6 +41,11 @@ constexpr char kViewBootstrapScript[] = R"JS((function (native) {
       const el = this;
       const state = {
         id: 0, created: false, viewId: null, frame: null, destroyTimer: 0, suspended: false, fullscreen: false, fullscreenRequest: 0,
+        focus() {
+          if (!el.isConnected) return false;
+          this.frame?.focus({ preventScroll: true });
+          return !!this.frame && root.activeElement === this.frame;
+        },
         create() {
           if (this.created || !el.isConnected || !el.getAttribute('src')) return;
           let url;
@@ -108,15 +113,18 @@ constexpr char kViewBootstrapScript[] = R"JS((function (native) {
         }
       };
       internals.set(this, state);
-      this.addEventListener('focus', () => { if (state.created) native.command(state.id, 'focus'); });
+      this.addEventListener('focus', () => {
+        if (state.frame && root.activeElement !== state.frame) state.frame.focus({ preventScroll: true });
+      });
     }
     get viewId() { return internals.get(this).viewId; }
     reload() { this._command('reload'); }
     goBack() { this._command('goBack'); }
     goForward() { this._command('goForward'); }
     focus(options) {
-      HTMLElement.prototype.focus.call(this, options);
-      this._command('focus');
+      const state = internals.get(this);
+      if (state.frame) state.frame.focus(options);
+      else HTMLElement.prototype.focus.call(this, options);
     }
     suspend() {
       const state = internals.get(this);
@@ -177,7 +185,13 @@ constexpr char kViewBootstrapScript[] = R"JS((function (native) {
   if (!customElements.get('justcef-view')) customElements.define('justcef-view', JustCefViewElement);
   return function dispatch(kind, id, name, detail) {
     const el = elements.get(id);
-    if (el && kind === 'event' && internals.get(el).created) internals.get(el).event(name, detail);
+    const state = el && internals.get(el);
+    if (!state?.created) return;
+    if (kind === 'focus') {
+      const focused = state.focus();
+      if (name) native.command(id, 'focusComplete', JSON.stringify({ requestId: name, focused }));
+    }
+    else if (kind === 'event') state.event(name, detail);
   };
 }))JS";
 
@@ -441,11 +455,17 @@ bool HandleViewProcessMessage(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame>
         return false;
 
     CefRefPtr<CefListValue> args = message->GetArgumentList();
-    if (!args || args->GetSize() < 3 || args->GetType(0) != VTYPE_STRING || args->GetType(1) != VTYPE_INT)
+    if (!args || args->GetSize() < 2 || args->GetType(0) != VTYPE_STRING || args->GetType(1) != VTYPE_INT)
         return true;
 
     const std::string token = args->GetString(0);
     const int32_t elementId = args->GetInt(1);
+
+    if (name == kViewFocusMessageName)
+    {
+        Dispatch(browser, token, "focus", elementId, CefV8Value::CreateInt(args->GetSize() > 2 ? args->GetInt(2) : 0), nullptr);
+        return true;
+    }
 
     if (name == kViewEventMessageName && args->GetSize() >= 4)
     {

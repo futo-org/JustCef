@@ -469,8 +469,8 @@ bool IPC::HandleRequest(ipc::Reply& reply, OpcodeController opcode, PacketReader
         status = HandleWindowGetZoom(reader, writer);
         return true;
     case OpcodeController::WindowRequestFocus:
-        status = HandleWindowRequestFocus(reader, writer);
-        return true;
+        HandleWindowRequestFocus(reader, std::move(reply));
+        return false;
     case OpcodeController::WindowSetModifyRequests:
         status = HandleWindowSetModifyRequests(reader, writer);
         return true;
@@ -2100,22 +2100,28 @@ ipc::StatusCode HandleWindowGetZoom(PacketReader& reader, PacketWriter& writer)
     return ipc::StatusCode::Ok;
 }
 
-ipc::StatusCode HandleWindowRequestFocus(PacketReader& reader, PacketWriter& writer)
+void HandleWindowRequestFocus(PacketReader& reader, ipc::Reply reply)
 {
     std::optional<int32_t> identifier = reader.read<int32_t>();
     if (!identifier)
     {
         LOG(ERROR) << "HandleWindowRequestFocus called without CefBrowser. Ignored.";
-        return ipc::StatusCode::InvalidRequest;
+        reply.Fail(ipc::StatusCode::InvalidRequest);
+        return;
     }
     CefRefPtr<CefBrowser> browser = ClientManager::GetInstance()->AcquirePointer(*identifier);
     if (!browser)
     {
         LOG(ERROR) << "HandleWindowRequestFocus called while CefBrowser is already closed. Ignored.";
-        return ipc::StatusCode::NotFound;
+        reply.Fail(ipc::StatusCode::NotFound);
+        return;
     }
-    if (justcef_view::FocusView(browser))
-        return ipc::StatusCode::Ok;
+    auto response = std::make_shared<ipc::Reply>(std::move(reply));
+    if (justcef_view::FocusView(browser, [response](bool focused) {
+        if (focused) response->Ok();
+        else response->Fail(ipc::StatusCode::Error, "Embedded view could not receive focus.");
+    }))
+        return;
     CefRefPtr<CefBrowserView> browser_view = CefBrowserView::GetForBrowser(browser);
     if (browser_view)
     {
@@ -2127,7 +2133,7 @@ ipc::StatusCode HandleWindowRequestFocus(PacketReader& reader, PacketWriter& wri
     {
         shared::PlatformWindowRequestFocus(browser);
     }
-    return ipc::StatusCode::Ok;
+    response->Ok();
 }
 
 ipc::StatusCode HandleWindowSetModifyRequests(PacketReader& reader, PacketWriter& writer)
