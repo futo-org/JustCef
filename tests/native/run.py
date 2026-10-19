@@ -1658,6 +1658,10 @@ def test_permission_cancel_on_navigation_and_close():
 
 
 def test_about_blank_surface_dynamic_iframe():
+    with open(os.path.join(PAGES, '..', '..', 'cef', 'cef.version'), encoding='utf-8') as version_file:
+        cef_major = int(version_file.read().strip().split('.')[0])
+    if cef_major < 156:
+        raise SkipTest('Requires CEF M156 opaque-origin fix: https://github.com/chromiumembedded/cef/issues/4298')
     ctl=Ctl(['--custom-schemes=app'])
     try:
         ctl.wait_note('Ready')
